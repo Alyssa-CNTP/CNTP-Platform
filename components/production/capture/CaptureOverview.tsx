@@ -67,6 +67,9 @@ export interface BlenderRatioGroup {
 
 function buildDebagLotGroups(prods: Production[]): { groups: DebagLotGroup[]; bucketInKg: number; bucketOutKg: number; machineKg: number } {
   const map = new Map<string, DebagLotGroup>()
+  // Spans every production, so a copy sitting in batch 6 is recognised against
+  // the original in batch 1 — the copies live in OTHER batches, not this one.
+  const seenSievingBag = new Set<string>()
   let bucketInKg = 0
   let bucketOutKg = 0
   let machineKg = 0
@@ -143,10 +146,29 @@ function buildDebagLotGroups(prods: Production[]): { groups: DebagLotGroup[]; bu
         if (i === 0) { if (p.shift === 'afternoon') bucketOutKg += num(r.kg); else bucketInKg += num(r.kg) }
         else         machineKg += num(r.kg)
       })
+      // A changeover (and a page reload) copied a session's debagging rows into
+      // its other batches, and this Overview sums EVERY batch — so the same
+      // physical bag was counted once per copy: GS-0314 read 32 bags / 11 200 kg
+      // for one bag, and the panel totalled 95 900 kg against ~6 t debagged.
+      //
+      // A farm bag is a physical object debagged ONCE, so (lot, bag label) is its
+      // identity and a repeat is a copy. Confirmed against the floor's paper
+      // sheet for 31-08-2026: 41 bags, 41 distinct pairs.
+      //
+      // A row with a BLANK bag label is never deduplicated — two different bags
+      // both captured without one would collapse into a single bag and
+      // UNDER-count, which is worse than showing the copy. Those fall back to a
+      // positional placeholder, which is unique per row anyway.
       ;(d.debag ?? []).forEach((r: any, i: number) => {
         if (num(r.nett) === 0) return
         const lot = (r.lot || p.lot || '—').trim()
-        const row: DebagRow = { bagNo: r.bag_no || `Bulk bag ${i + 1}`, kg: num(r.nett), variant: p.variant, loggedAt: r.logged_at }
+        const label = String(r.bag_no ?? '').trim()
+        if (label) {
+          const identity = `${lot}|${label}`
+          if (seenSievingBag.has(identity)) return
+          seenSievingBag.add(identity)
+        }
+        const row: DebagRow = { bagNo: label || `Bulk bag ${i + 1}`, kg: num(r.nett), variant: p.variant, loggedAt: r.logged_at }
         const g = map.get(lot)
         if (g) { g.rows.push(row); g.totalKg += num(r.nett) }
         else map.set(lot, { lot, rows: [row], totalKg: num(r.nett) })
