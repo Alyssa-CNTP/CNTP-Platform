@@ -8,10 +8,11 @@
 import { useEffect, useState } from 'react'
 import { ChevronDown, ScanLine, ShoppingCart, Pencil, XCircle } from 'lucide-react'
 import { useMaintenanceContext } from '@/app/(app)/maintenance/layout'
+import { useAuth } from '@/lib/auth/context'
 import { StatusBadge } from './StatusBadge'
 import { Timer } from './Timer'
 import { VoiceCapture } from './VoiceCapture'
-import { QC_CHECKS, URGENCY_META, AREAS } from '@/lib/maintenance/constants'
+import { QC_CHECKS, URGENCY_META, AREAS, PAUSE_REASONS } from '@/lib/maintenance/constants'
 import { fmtDT, fmtT, diffM, diffDays, normQc, priorityOf, PRIORITY_META } from '@/lib/maintenance/helpers'
 import type { JobCard, QcAnswer, Urgency } from '@/lib/maintenance/types'
 import { URGENCIES } from '@/lib/maintenance/types'
@@ -33,6 +34,7 @@ export interface JobCardRoles {
 
 export function JobCardItem({ j, roles, compact = true }: { j: JobCard; roles: JobCardRoles; compact?: boolean }) {
   const { ui, actions, derived, data, actor } = useMaintenanceContext()
+  const { userId } = useAuth()
   const { drafts, setDrafts, alloc, setAlloc, spForm, setSpForm } = ui
   const { cardLogs, cardSpares } = derived
   const { qcFor } = actions
@@ -50,6 +52,10 @@ export function JobCardItem({ j, roles, compact = true }: { j: JobCard; roles: J
   const [editing, setEditing] = useState(false)
   const [cancelling, setCancelling] = useState(false)
   const [cancelReason, setCancelReason] = useState('')
+  // Technician pause panel — reason picked from PAUSE_REASONS ('Other' needs a note).
+  const [pausing, setPausing] = useState(false)
+  const [pauseReason, setPauseReason] = useState('')
+  const [pauseNote, setPauseNote] = useState('')
 
   useEffect(() => {
     if (!roles.canManage || j.status !== 'raised' || !expanded) return
@@ -85,7 +91,13 @@ export function JobCardItem({ j, roles, compact = true }: { j: JobCard; roles: J
   const canManage = roles.canManage
   const isTech = roles.isTech || canManage
   const isQc = roles.isQc || canManage
-  const isRaiser = roles.isRaiser || canManage
+  // The clarify step belongs to whoever actually raised THIS card — not a blanket
+  // permission. Technicians never see it even if they raised the card; they get a
+  // completion notification instead. The manager can always act as a fallback.
+  // (The old originator "satisfactory" step was removed — QC then the maintenance
+  // manager are the two checkpoints.)
+  const isCardRaiser = !!userId && !!j.raised_by_user_id && j.raised_by_user_id === userId
+  const isRaiser = canManage || (isCardRaiser && !roles.isTech)
 
   // What does this card need next, for this user?
   const act: { label: string; primary: boolean } =
@@ -94,13 +106,12 @@ export function JobCardItem({ j, roles, compact = true }: { j: JobCard; roles: J
     : j.status === 'assigned' && isTech ? { label: acceptedNotStarted ? 'Start job' : (isBd ? 'Attend & accept' : 'Accept'), primary: true }
     : j.status === 'in_progress' && isTech ? { label: 'Log work', primary: true }
     : j.status === 'qc_check' && isQc ? { label: 'QC check', primary: true }
-    : j.status === 'verify' && isRaiser ? { label: 'Verify', primary: true }
-    : j.status === 'mgr_verify' && canManage ? { label: 'Sign off', primary: true }
+    : (j.status === 'mgr_verify' || j.status === 'verify') && canManage ? { label: 'Sign off', primary: true }
     : { label: expanded ? 'Hide' : 'Open', primary: false }
 
   const ageDays = diffDays(j.raised_at, j.completed_at ?? j.verified_at ?? new Date().toISOString())
   const collapsedHint = [
-    j.assigned_to ? `${j.external ? 'External' : 'Tech'}: ${j.assigned_to}` : (j.status === 'raised' ? 'Unassigned' : null),
+    j.assigned_to ? `${j.external ? 'External' : 'Tech'}: ${j.assigned_to}${j.assigned_to_2 ? ` + ${j.assigned_to_2}` : ''}` : (j.status === 'raised' ? 'Unassigned' : null),
     j.status !== 'complete' && ageDays > 0 ? `${ageDays}d open` : null,
     lgs.length ? `${lgs.length} update${lgs.length > 1 ? 's' : ''}` : null,
   ].filter(Boolean).join('  ·  ')
@@ -110,6 +121,24 @@ export function JobCardItem({ j, roles, compact = true }: { j: JobCard; roles: J
 
   const isCancelled = j.status === 'cancelled'
   const isTerminal = isCancelled || j.status === 'complete'
+
+  // Auto-linked history: cards closed on the SAME machine in the 14 days before
+  // this one was raised. Matched on machine (the specific asset) rather than area,
+  // so it flags a genuinely recurring fault rather than any work in the vicinity.
+  // Derived live — nothing to store, and it stays correct as history grows.
+  const relatedCards = (() => {
+    if (!j.machine) return []
+    const raised = new Date(j.raised_at).getTime()
+    const windowStart = raised - 14 * 24 * 60 * 60 * 1000
+    return data.jcs
+      .filter(x => x.id !== j.id && x.machine === j.machine && x.status === 'complete')
+      .filter(x => {
+        const closed = new Date(x.completed_at ?? x.verified_at ?? x.raised_at).getTime()
+        return closed >= windowStart && closed <= raised
+      })
+      .sort((a, b) => (b.completed_at ?? '').localeCompare(a.completed_at ?? ''))
+      .slice(0, 3)
+  })()
 
   return (
     <div className={`rounded-xl border border-surface-rule border-l-4 ${accentClass} ${isCancelled ? 'bg-surface-dim opacity-75' : tint} shadow-sm p-4 mb-3`}>
@@ -225,6 +254,33 @@ export function JobCardItem({ j, roles, compact = true }: { j: JobCard; roles: J
             </div>
           )}
 
+          {/* ── Recurring problem? Previous job cards closed on the SAME machine in
+              the 14 days before this one was raised. Linked automatically (no
+              manual step) so the technician can see what was found last time,
+              what was done, and whether the repair actually held. ── */}
+          {relatedCards.length > 0 && (
+            <div className="rounded-xl border border-warn/30 bg-warn/5 p-3.5 mt-3">
+              <div className="text-[12px] font-semibold text-warn mb-1">
+                Possible recurring problem — {relatedCards.length} similar job card{relatedCards.length > 1 ? 's' : ''} closed on {j.machine} in the 2 weeks before this one
+              </div>
+              <div className="text-[11px] text-text-muted mb-2">Check what was done previously before starting — if the same fault is back, the earlier repair may not have held.</div>
+              <div className="space-y-1.5">
+                {relatedCards.map(r => (
+                  <div key={r.id} className="rounded-lg border border-surface-rule bg-surface-card p-2">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <a href={`/maintenance/job-cards/${r.id}`} className="text-accent font-semibold text-[12px]">{r.card_no}</a>
+                      <span className={`badge ${r.workflow === 'breakdown' ? 'badge-err' : 'badge-info'}`}>{r.workflow === 'breakdown' ? 'BD' : 'PL'}</span>
+                      <span className="text-[10px] text-text-faint">closed {fmtDT(r.completed_at ?? r.verified_at)}{r.assigned_to ? ` · ${r.assigned_to}` : ''}</span>
+                    </div>
+                    <div className="text-[11px] text-text mt-1">{r.description}</div>
+                    {r.root_cause && <div className="text-[11px] text-text-muted"><span className="font-medium text-text">Root cause:</span> {r.root_cause}</div>}
+                    {r.work_done && <div className="text-[11px] text-text-muted"><span className="font-medium text-text">Done:</span> {r.work_done}</div>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Photo attached at creation — always visible to manager & technician, click to enlarge */}
           {j.photo_url && (
             <div className="mt-2.5">
@@ -323,6 +379,17 @@ export function JobCardItem({ j, roles, compact = true }: { j: JobCard; roles: J
                     {offDuty.map(s => <option key={s.id ?? s.name} value={s.name}>{s.name}</option>)}
                   </select>
                   {offDutyPicked && <div className="text-[11px] text-warn mt-1">Assigning {a.tech} — not on the duty roster right now.</div>}
+
+                  {/* Optional SECOND technician — for a task that needs two people.
+                      Both are notified and both see the card in their own list. */}
+                  <div className="mt-2">
+                    <label className={LB}>Second technician (optional — for a two-person job)</label>
+                    <select className={`${INP} w-full`} value={a.tech2 ?? ''}
+                      onChange={e => { const s = staff.find(x => x.name === e.target.value); setAlloc(p => ({ ...p, [j.id]: { ...p[j.id], tech2: e.target.value, tech2Id: s?.id ?? null } })) }}>
+                      <option value="">No second technician</option>
+                      {staff.filter(s => s.name !== a.tech).map(s => <option key={s.id ?? s.name} value={s.name}>{s.name}</option>)}
+                    </select>
+                  </div>
                 </>
               )}
 
@@ -363,6 +430,10 @@ export function JobCardItem({ j, roles, compact = true }: { j: JobCard; roles: J
               <textarea className={`${INP} min-h-[50px]`} value={drafts['ld' + j.id] ?? j.long_desc} onChange={e => setDrafts(p => ({ ...p, ['ld' + j.id]: e.target.value }))} />
               <button className={`${PRIMARY} mt-2.5`} onClick={() => actions.resubmit(j)}>Resubmit job card</button>
             </div>
+          )}
+          {/* clarify stage — non-originator view */}
+          {j.status === 'clarify' && !isRaiser && (
+            <div className={PANEL}><div className="text-[12px] text-text-muted">Awaiting clarification from the originator ({j.raised_by}).</div></div>
           )}
 
           {/* assigned → technician ACCEPTS, then STARTS (two distinct steps). The
@@ -463,6 +534,31 @@ export function JobCardItem({ j, roles, compact = true }: { j: JobCard; roles: J
                 )}
               </div>
 
+              {/* Food-grade lubricant declaration — food-safety record for the
+                  work done. Left blank until answered so it can't default to a
+                  false "no lubricant used". */}
+              <div className="rounded-xl border border-surface-rule bg-surface-raised/60 p-3">
+                <label className={LB}>Food-grade (FG) lubricant used?</label>
+                <div className="flex gap-1.5 flex-wrap">
+                  {([['yes', 'Yes — FG lubricant'], ['no', 'No lubricant used'], ['na', 'N/A']] as const).map(([v, label]) => {
+                    const cur = j.fg_lubricant === true ? 'yes' : j.fg_lubricant === false ? 'no' : (j.fg_lubricant_note === 'N/A' ? 'na' : '')
+                    return (
+                      <button key={v} className={TOG(cur === v)}
+                        onClick={() => actions.upJC(j.id, v === 'yes'
+                          ? { fg_lubricant: true, fg_lubricant_note: '' }
+                          : v === 'no' ? { fg_lubricant: false, fg_lubricant_note: '' }
+                          : { fg_lubricant: null, fg_lubricant_note: 'N/A' })}>{label}</button>
+                    )
+                  })}
+                </div>
+                {j.fg_lubricant === true && (
+                  <input className={`${INP} mt-2 text-[12px]`} placeholder="Which FG lubricant / batch? (optional)"
+                    value={drafts['fg' + j.id] ?? (j.fg_lubricant_note ?? '')}
+                    onChange={e => setDrafts(p => ({ ...p, ['fg' + j.id]: e.target.value }))}
+                    onBlur={e => actions.upJC(j.id, { fg_lubricant_note: e.target.value })} />
+                )}
+              </div>
+
               {(() => {
                 const canFinish = ((drafts['wd' + j.id] ?? j.work_done ?? '').trim().length > 0) && ((drafts['rc' + j.id] ?? j.root_cause ?? '').trim().length > 0)
                 return (
@@ -473,6 +569,37 @@ export function JobCardItem({ j, roles, compact = true }: { j: JobCard; roles: J
                       {j.qc_required ? `Complete — send to QC${qcFor(j.area) ? ' (' + qcFor(j.area) + ')' : ''}` : 'Complete — send for verification'}
                     </button>
                     {!canFinish && <div className="text-[11px] text-warn mt-1">Record both Work Done and Root Cause before finishing.</div>}
+
+                    {/* Pause with a reason from the standard list — the manager is
+                        notified, and "waiting for parts" is flagged to them. */}
+                    {!pausing ? (
+                      <button className="mt-2 w-full border border-warn/40 text-warn bg-warn/5 rounded-lg px-4 py-2.5 text-[12px] font-semibold min-h-[44px] hover:bg-warn/10 transition"
+                        onClick={() => setPausing(true)}>Pause this job…</button>
+                    ) : (
+                      <div className="mt-2 rounded-xl border border-warn/30 bg-warn/5 p-3">
+                        <label className={LB}>Why are you pausing?</label>
+                        <select className={INP} value={pauseReason} onChange={e => setPauseReason(e.target.value)}>
+                          <option value="">Select a reason…</option>
+                          {PAUSE_REASONS.map(r => <option key={r} value={r}>{r}</option>)}
+                        </select>
+                        {pauseReason === 'Other' && (
+                          <input className={`${INP} mt-2`} placeholder="Describe the reason (required)…"
+                            value={pauseNote} onChange={e => setPauseNote(e.target.value)} />
+                        )}
+                        <div className="flex gap-1.5 mt-2 flex-wrap">
+                          <button
+                            disabled={!pauseReason || (pauseReason === 'Other' && !pauseNote.trim())}
+                            className={`rounded-lg px-4 py-2.5 text-[12px] font-semibold min-h-[44px] transition ${(!pauseReason || (pauseReason === 'Other' && !pauseNote.trim())) ? 'bg-surface-dim text-text-faint cursor-not-allowed' : 'bg-warn text-white hover:brightness-110'}`}
+                            onClick={async () => {
+                              const full = pauseReason === 'Other' ? pauseNote.trim() : (pauseReason + (pauseNote.trim() ? ` — ${pauseNote.trim()}` : ''))
+                              await actions.pauseJob(j, full)
+                              setPausing(false); setPauseReason(''); setPauseNote('')
+                            }}>Pause job</button>
+                          <button className="border border-surface-rule bg-surface-card text-text-muted rounded-lg px-4 py-2.5 text-[12px] font-semibold min-h-[44px] hover:border-text/25 transition"
+                            onClick={() => { setPausing(false); setPauseReason(''); setPauseNote('') }}>Cancel</button>
+                        </div>
+                      </div>
+                    )}
                   </>
                 )
               })()}
@@ -507,35 +634,43 @@ export function JobCardItem({ j, roles, compact = true }: { j: JobCard; roles: J
             </div>
           )}
 
-          {/* verify → originator signs off, then it goes to the manager */}
-          {j.status === 'verify' && isRaiser && (
+          {/* Read-only QC sign-off for the technician on their OWN card — the
+              pass/fail breakdown once QC has actually run, so they can see what
+              was checked (and why it bounced back, if it did) without an
+              editable screen. Persists across verify / mgr_verify / complete. */}
+          {roles.isTech && !canManage && !!j.qc_name && (j.assigned_user_id === userId || j.assigned_to === actor) && (
             <div className={PANEL}>
-              <div className="text-[12px] font-semibold text-text mb-2">Verification by originator ({j.raised_by})</div>
-              <div className="text-[12px] text-text-muted mb-0.5"><span className="text-text font-medium">Work:</span> {j.work_done || '—'}</div>
-              <div className="text-[12px] text-text-muted mb-0.5"><span className="text-text font-medium">Root Cause:</span> {j.root_cause || '—'}</div>
-              {j.tools_used && <div className="text-[12px] text-text-muted mb-0.5"><span className="text-text font-medium">Tools:</span> {j.tools_used}</div>}
-              <div className="text-[12px] text-text-muted mb-0.5"><span className="text-text font-medium">Duration:</span> {netMin} min</div>
-              {j.qc_required && <div className="text-[12px] text-text-muted mb-2"><span className="text-text font-medium">QC by:</span> {j.qc_name} at {fmtT(j.qc_done_at)}</div>}
-              <div className="flex gap-2 flex-wrap mt-1">
-                <button className={PRIMARY} onClick={() => actions.verifyCard(j, true)}>Satisfactory — send to manager</button>
-                <button className="border border-err/40 text-err bg-err/5 rounded-lg px-4 py-2.5 min-h-[44px] text-sm font-semibold hover:bg-err/10 transition" onClick={() => actions.verifyCard(j, false)}>Not satisfactory — return to tech</button>
+              <div className="text-[12px] font-semibold text-text mb-1">QC sign-off</div>
+              <div className="text-[12px] text-text-muted mb-2">
+                <span className="text-text font-medium">QC Officer:</span> {j.qc_name}{j.qc_done_at ? ` · ${fmtT(j.qc_done_at)}` : ''}
               </div>
+              {QC_CHECKS.map((q, i) => {
+                const v = normQc((j.qc_checks ?? [])[i] ?? 'na')
+                return (
+                  <div key={i} className="flex items-center gap-1.5 mb-1">
+                    <span className={`w-11 text-center py-1 rounded-md text-[10px] font-semibold ${v === 'yes' ? 'bg-err/10 text-err border border-err/30' : v === 'no' ? 'bg-ok/10 text-ok border border-ok/30' : 'bg-surface-dim text-text border border-surface-rule'}`}>{v.toUpperCase()}</span>
+                    <span className="text-[12px] text-text-muted">{q}</span>
+                  </div>
+                )
+              })}
             </div>
           )}
-          {/* verify stage — non-originator view */}
-          {j.status === 'verify' && !isRaiser && (
-            <div className={PANEL}><div className="text-[12px] text-text-muted">Awaiting verification by the originator ({j.raised_by}).</div></div>
+
+          {/* Legacy 'verify' cards (the retired originator step) are handled by the
+              manager panel below — nothing sits with the originator any more. */}
+          {j.status === 'verify' && !canManage && (
+            <div className={PANEL}><div className="text-[12px] text-text-muted">Awaiting the maintenance manager's final sign-off.</div></div>
           )}
 
           {/* mgr_verify → maintenance manager gives the final sign-off (every card) */}
-          {j.status === 'mgr_verify' && canManage && (
+          {(j.status === 'mgr_verify' || j.status === 'verify') && canManage && (
             <div className={PANEL}>
               <div className="text-[12px] font-semibold text-text mb-2">Final sign-off — maintenance manager</div>
               <div className="text-[12px] text-text-muted mb-0.5"><span className="text-text font-medium">Work:</span> {j.work_done || '—'}</div>
               <div className="text-[12px] text-text-muted mb-0.5"><span className="text-text font-medium">Root Cause:</span> {j.root_cause || '—'}</div>
               <div className="text-[12px] text-text-muted mb-0.5"><span className="text-text font-medium">Duration:</span> {netMin} min</div>
               {j.qc_required && <div className="text-[12px] text-text-muted mb-0.5"><span className="text-text font-medium">QC by:</span> {j.qc_name} at {fmtT(j.qc_done_at)}</div>}
-              <div className="text-[12px] text-text-muted mb-2"><span className="text-text font-medium">Originator verified:</span> {j.raised_by}</div>
+              <div className="text-[12px] text-text-muted mb-2"><span className="text-text font-medium">Raised by:</span> {j.raised_by}</div>
               <div className="flex gap-2 flex-wrap mt-1">
                 <button className={PRIMARY} onClick={() => actions.verifyCard(j, true)}>✓ Sign off &amp; close</button>
                 <button className="border border-err/40 text-err bg-err/5 rounded-lg px-4 py-2.5 min-h-[44px] text-sm font-semibold hover:bg-err/10 transition" onClick={() => actions.verifyCard(j, false)}>Not satisfactory — return to tech</button>
@@ -549,7 +684,8 @@ export function JobCardItem({ j, roles, compact = true }: { j: JobCard; roles: J
 
           {j.status === 'complete' && (
             <div className="mt-2.5 text-[12px] text-text-muted flex gap-x-3 gap-y-1 flex-wrap">
-              <span><span className="text-text font-medium">{j.external ? 'External' : 'Tech'}:</span> {j.assigned_to ?? '—'}</span>
+              <span><span className="text-text font-medium">{j.external ? 'External' : 'Tech'}:</span> {j.assigned_to ?? '—'}{j.assigned_to_2 ? ` + ${j.assigned_to_2}` : ''}</span>
+              <span><span className="text-text font-medium">FG lubricant:</span> {j.fg_lubricant === true ? <span className="text-ok">Yes{j.fg_lubricant_note ? ` (${j.fg_lubricant_note})` : ''}</span> : j.fg_lubricant === false ? 'No lubricant used' : (j.fg_lubricant_note === 'N/A' ? 'N/A' : <span className="text-text-faint">not recorded</span>)}</span>
               <span><span className="text-text font-medium">Duration:</span> {netMin} min</span>
               {j.qc_required && <span><span className="text-text font-medium">QC:</span> {j.qc_name || '—'} {fmtT(j.qc_done_at)}</span>}
               <span><span className="text-text font-medium">Verified:</span> {j.verified_ok ? <span className="text-ok">OK</span> : <span className="text-err">Redo</span>}</span>

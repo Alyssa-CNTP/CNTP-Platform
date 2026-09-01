@@ -15,7 +15,7 @@ import {
   Boxes, PackageOpen,
   Sparkles, Flag, Network, Cpu, Ticket, Flower2,
   CalendarCheck, CalendarRange, Activity, ClipboardCheck,
-  FileSpreadsheet, GraduationCap, Printer,
+  FileSpreadsheet, GraduationCap, Printer, Wrench,
 } from 'lucide-react'
 import type { PermissionKey } from '@/lib/auth/permissions'
 
@@ -78,6 +78,7 @@ export const NAV: NavItem[] = [
   // ── Maintenance — full module is Maintenance + Management; Production sees only Job Cards ──
   { href: '/maintenance',               label: 'Dashboard',                  icon: LayoutDashboard, group: 'Maintenance', departments: ['Maintenance','Management'], permission: 'can_access_maintenance', orPermission: true },
   { href: '/maintenance/job-cards',     label: 'Job Cards',                  icon: ClipboardList,   group: 'Maintenance', departments: ['Maintenance','Management','Production'], permission: 'can_access_maintenance', orPermission: true },
+  { href: '/maintenance/my-jobs',        label: 'My Job Cards',               icon: Wrench,          group: 'Maintenance', departments: ['Maintenance','Management'], permission: 'can_access_maintenance', orPermission: true },
   { href: '/quality/maintenance-qc',    label: 'QC Sign-off',                icon: ClipboardCheck,  group: 'Maintenance', departments: ['Maintenance','Quality','Management'], permission: 'can_access_maintenance', orPermission: true },
   { href: '/maintenance/scheduled',     label: 'Scheduled',                  icon: CalendarCheck,   group: 'Maintenance', departments: ['Maintenance','Management'], permission: 'can_access_maintenance', orPermission: true },
   { href: '/maintenance/planner',       label: 'Planner & Roster',           icon: CalendarRange,   group: 'Maintenance', departments: ['Maintenance','Management'], permission: 'can_access_maintenance', orPermission: true },

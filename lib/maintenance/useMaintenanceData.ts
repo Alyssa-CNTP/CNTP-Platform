@@ -29,7 +29,7 @@ function fallbackStaff(): Staff[] {
 }
 
 export function useMaintenanceData() {
-  const { displayName } = useAuth()
+  const { displayName, userId } = useAuth()
   const db = getDb()
 
   const [loading, setLoading] = useState(true)
@@ -75,7 +75,7 @@ export function useMaintenanceData() {
   const [saving, setSaving] = useState(false)
   const [drafts, setDrafts] = useState<Record<string, string>>({})
   const [nj, setNj] = useState({ workflow: 'planned' as 'breakdown' | 'planned', area: '', machine: '', type: [] as string[], desc: '', longDesc: '', raisedBy: '', photo: null as string | null, aiSug: '' })
-  const [alloc, setAlloc] = useState<Record<number, { tech?: string; techId?: string | null; external?: boolean; company?: string; qc?: boolean; urgency?: import('./types').Urgency }>>({})
+  const [alloc, setAlloc] = useState<Record<number, { tech?: string; techId?: string | null; tech2?: string; tech2Id?: string | null; external?: boolean; company?: string; qc?: boolean; urgency?: import('./types').Urgency }>>({})
   const [spForm, setSpForm] = useState<Record<number, { partId?: string; desc?: string; qty?: string; from?: string; critical?: boolean }>>({})
   const [slotForm, setSlotForm] = useState({ cardId: '', tech: TECHS[0], techId: null as string | null, date: '', time: '08:00', hours: '2', note: '' })
   const [rosterForm, setRosterForm] = useState({ tech: TECHS[0], techId: null as string | null, start: '', end: '' })
@@ -243,6 +243,14 @@ export function useMaintenanceData() {
       const part = stock.find(s => s.id === req.part_id)
       if (part) await updatePart(req.part_id, { qty_new: part.qty_new + req.qty })
     }
+    // Parts are in — tell the technician who asked for them that they can collect
+    // and resume. Best-effort; never blocks the status change.
+    if (status === 'received') {
+      fetch('/api/maintenance/notify/parts-issued', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ requestId: id }),
+      }).catch(() => {})
+    }
   }
   const cancelRequest = (id: number) => setRequestStatus(id, 'cancelled')
 
@@ -334,6 +342,8 @@ export function useMaintenanceData() {
       body: JSON.stringify({
         assigned_to: a.external ? '' : a.tech!,
         assigned_user_id: a.external ? null : (a.techId ?? null),
+        assigned_to_2: a.external ? null : (a.tech2 || null),
+        assigned_user_id_2: a.external ? null : (a.tech2Id ?? null),
         external: !!a.external, external_company: a.external ? a.company! : '',
         qc_required: a.qc !== false, urgency: a.urgency ?? null,
         actor: actor || 'Maintenance Manager',
@@ -403,6 +413,11 @@ export function useMaintenanceData() {
     if (j.paused) return
     await upJC(j.id, { paused: true, paused_at: new Date().toISOString(), paused_reason: reason })
     await addLog(j.id, 'event', 'in_progress', j.assigned_to ?? actor, `Timer paused — ${reason}.`)
+    // Tell the maintenance manager the job has stopped (and flag a parts hold).
+    fetch('/api/maintenance/notify/pause', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cardId: j.id, cardNo: j.card_no, area: j.area, reason, tech: j.assigned_to ?? actor }),
+    }).catch(() => {})
   }
 
   // Resume a paused job (breakdown interrupt or spares/problem hold). Banks the
@@ -431,14 +446,16 @@ export function useMaintenanceData() {
     const wd = (drafts['wd' + j.id] ?? j.work_done ?? '').trim()
     const rc = (drafts['rc' + j.id] ?? j.root_cause ?? '').trim()
     if (!wd || !rc) { setPopup('Before finishing, please record both the Work Done and the Root Cause.'); return }
-    const next: Status = j.qc_required ? 'qc_check' : 'verify'
+    // No originator step any more — QC (when required) then the maintenance
+    // manager's final sign-off are the two checkpoints.
+    const next: Status = j.qc_required ? 'qc_check' : 'mgr_verify'
     await upJC(j.id, {
       status: next, completed_at: new Date().toISOString(),
       work_done: drafts['wd' + j.id] ?? j.work_done, root_cause: drafts['rc' + j.id] ?? j.root_cause,
       tools_used: drafts['tl' + j.id] ?? j.tools_used,
     })
     await addLog(j.id, 'event', next, j.assigned_to ?? actor,
-      j.qc_required ? `Work complete — sent to QC (${qcFor(j.area) || 'QC on duty'})` : 'Work complete — QC not required, sent to originator for verification.')
+      j.qc_required ? `Work complete — sent to QC (${qcFor(j.area) || 'QC on duty'})` : 'Work complete — QC not required, sent to the maintenance manager for final sign-off.')
     // Notify the Quality dashboard to run the post-maintenance QC check. The
     // server resolves the station QC (area→QC map) or all Quality users.
     if (j.qc_required) {
@@ -466,6 +483,15 @@ export function useMaintenanceData() {
     return data.name
   }
 
+  // Tell the manager + technician(s) where the card went after a QC check.
+  // Best-effort: a notification failure must never block the QC result.
+  const notifyQcDone = (cardId: number, passed: boolean, qcName: string, note: string) => {
+    fetch('/api/maintenance/notify/qc-done', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cardId, passed, qcName, note }),
+    }).catch(() => {})
+  }
+
   // QC submits — any YES sends the card back to the technician
   const qcSubmit = async (j: JobCard) => {
     const answers: QcAnswer[] = QC_CHECKS.map((_, i) => normQc((j.qc_checks ?? [])[i] ?? 'na'))
@@ -477,10 +503,12 @@ export function useMaintenanceData() {
       await upJC(j.id, { status: 'in_progress', qc_checks: answers, qc_name: qcName, reopen_count: (j.reopen_count ?? 0) + 1, completed_at: null })
       await addLog(j.id, 'comment', 'qc_check', qcName, note)
       await addLog(j.id, 'event', 'in_progress', qcName, `QC FAILED (${answers.filter(a => a === 'yes').length} × YES) — card returned to technician ${j.assigned_to}. Maintenance manager informed. Reopen #${(j.reopen_count ?? 0) + 1}.`)
+      notifyQcDone(j.id, false, qcName, note)
       setDrafts(p => ({ ...p, ['qf' + j.id]: '' }))
     } else {
-      await upJC(j.id, { status: 'verify', qc_checks: answers, qc_name: qcName, qc_done_at: new Date().toISOString() })
-      await addLog(j.id, 'event', 'verify', qcName, 'QC passed — sent to originator for verification.')
+      await upJC(j.id, { status: 'mgr_verify', qc_checks: answers, qc_name: qcName, qc_done_at: new Date().toISOString() })
+      await addLog(j.id, 'event', 'mgr_verify', qcName, 'QC passed — sent to the maintenance manager for final sign-off.')
+      notifyQcDone(j.id, true, qcName, '')
     }
   }
 
@@ -538,9 +566,19 @@ export function useMaintenanceData() {
     setCompletions(p => p.map(c => (c.template_id === tpl.id && c.period_key === period ? data : c)))
   }
 
-  // Manager allocates a checklist (template + current period) to a technician.
+  // Manager allocates a checklist (template + current period) to a technician —
+  // fires an in-app + email notification to that technician (best-effort; never
+  // blocks the allocation itself). Covers both the manual picker and auto-allocate.
   const allocateChecklist = async (tpl: Template, techName: string) => {
+    const period = tpl.frequency === 'weekly' ? weekKey : moKey
     await saveComp(tpl, { assigned_to: techName || null, assigned_by: actor || displayName || '', assigned_at: new Date().toISOString() })
+    const techUserId = staff.find(s => s.name === techName)?.id
+    if (techName && techUserId) {
+      fetch('/api/maintenance/checklists/notify-assignment', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ techUserId, area: tpl.area, frequency: tpl.frequency, period }),
+      }).catch(() => {})
+    }
   }
 
   // Technician submits a completed checklist to the maintenance manager to verify;
@@ -608,7 +646,8 @@ export function useMaintenanceData() {
       workflow: 'planned', area, maint_types: ['Repair'],
       description: `Checklist fault: ${task}`,
       long_desc: notes ? `Checklist note: ${notes}` : '',
-      raised_by: actor || displayName || 'Checklist', ai_suggestion: aiSuggest(task + ' ' + notes),
+      raised_by: actor || displayName || 'Checklist', raised_by_user_id: userId,
+      ai_suggestion: aiSuggest(task + ' ' + notes),
     }).select().single()
     if (err) { setPopup('Could not raise job card: ' + err.message); return }
     setJcs(p => [data, ...p])

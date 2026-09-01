@@ -2,6 +2,33 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-31 — Gustav (Maintenance: originator verification step retired; QC-done notifications; production DB brought in line)
+
+**Files changed:** `lib/maintenance/useMaintenanceData.ts`, `components/maintenance/JobCardItem.tsx`, `components/maintenance/MaintenanceAlerts.tsx`, `app/api/maintenance/job-cards/[id]/verify/route.ts`, `app/api/maintenance/notify/qc-done/route.ts` (new), `supabase/migrations/20260831_010_retire_originator_verify_step.sql` (new, applied to staging AND production)
+
+- **Removed the originator "Satisfactory" step.** The chain is now **qc_check → mgr_verify → complete**, or straight to **mgr_verify** when QC is not required. QC and the maintenance manager remain as the two checkpoints (the double confirmation is kept) — nothing goes back to the person who raised the card.
+- **Freed two production job cards that were stuck.** `JC-26/280` (Pasteurizer) and `JC-26/281` (Diamond Blender) had passed QC on 27 Aug and were sitting at the retired originator step with no way forward; both moved to the manager's sign-off queue, with an audit log entry on each.
+- **Production's status CHECK constraint was missing `mgr_verify` entirely** — the earlier staging migration had never been applied there, so the manager sign-off stage would have been rejected outright on production. Constraint rebuilt on both databases (with `verify` retained so historical rows stay valid).
+- **QC-done notifications:** when QC finishes a check, the maintenance manager and the assigned technician(s) are both notified and told where the card now sits — passed → with the manager for sign-off; failed → back with the technician, including the QC's comment. A live toast also fires for the technician when their card clears QC.
+- Legacy cards still at `verify` are handled by the manager's sign-off panel, so nothing can be stranded mid-chain.
+
+---
+
+## 2026-08-31 — Gustav (Maintenance: QC access fix, pause reasons, parts & pause notifications, technician job-card screen, two-person jobs, FG lubricant)
+
+**Files changed:** `app/(app)/layout.tsx`, `components/layout/Sidebar.tsx`, `components/maintenance/JobCardItem.tsx`, `components/maintenance/MaintenanceAlerts.tsx`, `lib/maintenance/useMaintenanceData.ts`, `lib/maintenance/constants.ts`, `lib/maintenance/types.ts`, `app/(app)/maintenance/job-cards/page.tsx`, `app/(app)/maintenance/my-jobs/page.tsx` (new), `app/api/maintenance/job-cards/[id]/assign/route.ts`, `app/api/maintenance/notify/pause/route.ts` (new), `app/api/maintenance/notify/parts-issued/route.ts` (new), `supabase/migrations/20260809_010_jobcard_second_tech_and_fg_lubricant.sql` (new, applied to staging)
+
+- **FIXED: QC could not open a QC check, and originators could not verify.** The `/maintenance` route guard only admitted the Maintenance and Management departments. The Sidebar showed Quality a "QC Sign-off" link and Production a "Job Cards" link, but the moment either clicked through to `/maintenance/job-cards/<id>` the guard bounced them straight back to `/home`. That is why QC "couldn't open the check", and why a Production originator could never click **Satisfactory** — leaving cards stuck after QC with only "return to technician" available. Added a more specific `/maintenance/job-cards` rule admitting **Production and Quality** (longest-prefix wins, so the rest of `/maintenance` stays restricted to Maintenance/Management).
+- **Manager is notified when a job card is paused**, with the reason; a pause for parts/tools is flagged **PARTS NEEDED** in the notification title so a parts hold is obvious without opening the card.
+- **Technician is notified when the parts they requested are issued** (spare request marked *received*) — telling them they can collect and resume, deep-linked to the job card.
+- **Technicians can now pause a job with a reason** from a standard list — waiting for parts or tools; assisting / needing another technician; a more urgent job or breakdown; or Other (comment required). Previously a pause only happened indirectly via the spares request with free-text reasons, so pause time was not reportable.
+- **New "My Job Cards" screen** (`/maintenance/my-jobs`) with tabs for **Allocated / In progress / Completed** plus an **All history** tab, and shared filters for area, machine, issue/fault type, date range and free-text search across fault, root cause and what was done.
+- **Recurring-problem auto-link:** a job card now automatically shows any cards closed on the **same machine in the 14 days before it was raised**, with the previous root cause and what was done — so a technician can tell at a glance whether the last repair held. Derived live, nothing stored.
+- **Two-person jobs:** the manager can allocate an optional **second technician**. Both are notified (each told who they're working with), both see the card in their own lists, and both names show on the card.
+- **Food-grade (FG) lubricant declaration** in the completion section — Yes / No / N/A with an optional lubricant/batch note, shown on the closed-card summary as a food-safety record.
+
+---
+
 ## 2026-08-28 — Alyssa (Sieving capture: fix explicit Save/Submit racing autosave and dropping input/output rows)
 
 **Files changed:** `app/(app)/production/capture/[section]/page.tsx`
@@ -1563,6 +1590,28 @@ Second real course in the LMS (after Sieving Tower), for production supervisors 
 - **Charts weren't interactable.** `PivotChart` (Floor/Quality/Machine) and `SolarChart` now put a native `<title>` tooltip on every point/bar — the date-mode line charts previously only marked the single last point per line, so hovering anywhere else on the line showed nothing.
 - **PO reference codes were unreadable without memorizing them.** There's no real Acumatica production-order sync in this codebase (`prod_sessions.production_orders` is an operator-typed label, not a synced order), so `dashboard-supply` now derives a **Product** column from what was actually bagged under that PO reference (`prod_bagging.product_type`) — the honest signal actually available. Added a matching `SupplyChart` trend chart (daily output for the top 8 PO references by volume), since the Supply & demand tab previously had no chart at all.
 - **Quality → production connection now surfaces who/when.** `dashboard-rows` adds `checkOperator`/`checkSupervisor`/`lastCheckedAt`/`lastCheckActor` (machine checks, from `check_records`/`check_events`) and `qcName`/`qcCheckedAt` (quality runs, from `qms.sd_runs`/`granule_runs`/`granule_samples`/`quality_records`). New **"Quality checks — who & when"** detail table on the Quality tab lists every QC-tracked line-shift with its reading, pass/fail result, and who recorded it, out-of-spec rows highlighted. The Needs Action panel's flag text for QC fails and machine check failures now includes the same who/when detail instead of just the metric.
+
+---
+
+## 2026-08-09 — Gustav (Maintenance: mobile layout fixes for the checklists and shift summary)
+
+**Files changed:** `app/(app)/maintenance/scheduled/page.tsx`, `app/(app)/maintenance/job-cards/page.tsx`
+
+- **Weekly / monthly checklist cards were unreadable on a phone.** The card header put the text and the controls (allocate dropdown + print + status badge) in one row with the controls fixed at `w-44` and `shrink-0`, which starved the text column down to a few characters — so `QM-FM-033/0 · 8 tasks` wrapped to one token per line and the "Last completed…" line ran underneath the dropdown. The header now **stacks on mobile** (text full-width on top, controls on their own row below) and sits side-by-side from `sm:` up. The allocate dropdown flexes to the available width on mobile instead of forcing 176px, the doc-ref line truncates with an ellipsis instead of wrapping, and the status badge no longer splits across two lines.
+- **Shift summary buttons were clipped** — "Evening 16:00–01:00" ran off the right edge. The controls now wrap, and on mobile the two buttons show just **Day** / **Evening** (splitting the row evenly) with the time ranges appearing from `sm:` up.
+- Checklist task rows now wrap, so the notes field drops to its own line instead of being crushed when the "→ Job card" fault button appears.
+- Annual / calibration search box is full-width on mobile instead of a fixed 220px.
+
+---
+
+## 2026-08-07 — Gustav (Maintenance: removed the IT "view as" switcher; oversight roles see every screen)
+
+**Files changed:** `lib/maintenance/roles.ts`, `app/(app)/maintenance/job-cards/page.tsx`, `app/(app)/maintenance/scheduled/page.tsx`, `app/(app)/maintenance/page.tsx`
+
+- **Removed the "IT — VIEW AS" tab strip.** IT / full admin no longer have to switch between Maintenance Manager / Technician / QC / Raiser to preview each profile — they now see **every panel at once**: the manager board, the QC queue, and their own raised job cards.
+- **Added a `seesAll` oversight flag** to `deriveMaintRole()` covering IT, full admin, Management, the maintenance manager and (new) the **production manager**. This is a **view-only** concern — what a user may *do* inside a job card is still governed by `canManage` / `isTech` / `isQc`, so the allocate → QC → originator → **maintenance manager sign-off** chain is unchanged and no one else can sign off a card.
+- **Production manager can now view all the maintenance screens.** Previously they could open the maintenance module but only ever saw the limited "Raiser" dashboard, and on the Scheduled tab saw **no checklists at all** (the list was filtered to `manager or assigned-to-me`). They now see the full job-card board, the QC queue and every weekly/monthly checklist — read-only, with no allocate/verify/sign-off buttons.
+- Scoped deliberately to the **production_manager role**, not the whole Production department, so operators don't inherit manager-level visibility.
 
 ---
 
