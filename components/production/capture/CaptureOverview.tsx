@@ -308,14 +308,9 @@ export function CaptureOverview({
   // their fields any more. See ARCHITECTURE.md §4.
   const kind = sectionKindFor(sectionId)
 
-  const [copied, setCopied] = useState(false)
   const [expandedProducts,  setExpandedProducts]  = useState<Set<string>>(new Set())
   const [expandedLots,      setExpandedLots]      = useState<Set<string>>(new Set())
   const [expandedDebagLots, setExpandedDebagLots] = useState<Set<string>>(new Set())
-  const [filterProduct, setFilterProduct] = useState('')
-  const [filterVariant, setFilterVariant] = useState('')
-  const [filterGrade,   setFilterGrade]   = useState('')
-  const [showFilters,   setShowFilters]   = useState(false)
 
   const { groups: debagGroups, bucketInKg, bucketOutKg, machineKg } = useMemo(() => buildDebagLotGroups(productions, kind), [productions, kind])
   const rawProductGroups = useMemo(() => buildProductGroups(productions, kind), [productions, kind])
@@ -363,101 +358,14 @@ export function CaptureOverview({
   const hasData       = debagGroups.length > 0 || productGroups.length > 0
   const poStr         = formatPO(productionOrders)
 
-  const filteredProducts = productGroups.filter(g => {
-    if (filterProduct && !g.product.toLowerCase().includes(filterProduct.toLowerCase())) return false
-    if (filterVariant && !g.lots.some(l => l.variant === filterVariant)) return false
-    if (filterGrade   && !g.lots.some(l => l.grade   === filterGrade))   return false
-    return true
-  })
-  const activeFilters  = [filterProduct, filterVariant, filterGrade].filter(Boolean).length
-  const uniqueVariants = Array.from(new Set(productGroups.flatMap(g => g.lots.map(l => l.variant)).filter(Boolean)))
-  const uniqueGrades   = Array.from(new Set(productGroups.flatMap(g => g.lots.map(l => l.grade)).filter(Boolean)))
-
   const toggleProduct  = (k: string) => setExpandedProducts(s => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); return n })
   const toggleLot      = (k: string) => setExpandedLots(s => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); return n })
   const toggleDebagLot = (k: string) => setExpandedDebagLots(s => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); return n })
-  const clearFilters   = () => { setFilterProduct(''); setFilterVariant(''); setFilterGrade('') }
 
-  function handleCopy() {
-    const lines = [`CNTP — ${sectionName}`, `${date} · ${shift} shift`]
-    if (poStr) lines.push(`Production Order: ${poStr}`)
-    lines.push('', 'DEBAGGING', 'Lot\tBag No\tVariant\tWeight (kg)')
-    debagGroups.forEach(g => {
-      g.rows.forEach(r => lines.push(`${g.lot}\t${r.bagNo}\t${r.variant}\t${r.kg.toFixed(1)}`))
-      if (g.rows.length > 1) lines.push(`Subtotal ${g.lot}\t\t\t${g.totalKg.toFixed(1)}`)
-    })
-    if (bucketInKg > 0 || machineKg > 0) {
-      lines.push(`Total debagging (excl. spillage)\t\t\t${debagOnlyKg.toFixed(1)}`)
-      if (bucketInKg > 0) lines.push(`Bucket elevator (from yesterday)\t\t\t${bucketInKg.toFixed(1)}`)
-      if (machineKg > 0) lines.push(`Machine spillage\t\t\t${machineKg.toFixed(1)}`)
-    }
-    lines.push(`Total incl. spillage\t\t\t${totalIncl.toFixed(1)}`)
-    lines.push('', 'BAGGING', 'Product\tLot\tVariant\tGrade\tBags\tWeight (kg)')
-    productGroups.forEach(g => {
-      g.lots.forEach(l => lines.push(`${g.product}\t${l.lot}\t${l.variant}\t${l.grade}\t${l.count}\t${l.kg.toFixed(1)}`))
-      if (g.lots.length > 1) lines.push(`Total ${g.product}\t\t\t\t${g.totalCount}\t${g.totalKg.toFixed(1)}`)
-    })
-    if (bucketOutKg > 0) lines.push(`Bucket elevator (left for tomorrow)\t\t\t\t\t${bucketOutKg.toFixed(1)}`)
-    lines.push('', `Total out\t\t\t\t${totalBags}\t${totalOut.toFixed(1)}`)
-    navigator.clipboard.writeText(lines.join('\n')).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000) })
-  }
+
 
   return (
     <div className="rounded-2xl border border-stone-200 overflow-hidden bg-white shadow-sm">
-
-      {/* Header */}
-      <div className="flex items-center justify-between px-5 py-3 bg-stone-50 border-b border-stone-200">
-        <div className="flex items-center gap-3 min-w-0">
-          <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: sectionColor }} />
-          <div className="min-w-0">
-            <p className="font-semibold text-[13px] text-stone-800 truncate">{sectionName} — what you captured</p>
-            <p className="font-mono text-[10px] text-stone-400">{date} · <span className="capitalize">{shift}</span> shift</p>
-          </div>
-        </div>
-        <div className="flex gap-2 shrink-0">
-          <button onClick={() => setShowFilters(f => !f)}
-            className={`relative flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-[11px] font-medium transition-colors
-              ${showFilters || activeFilters > 0 ? 'border-brand text-brand bg-brand/5' : 'border-stone-200 text-stone-500 hover:border-brand hover:text-brand'}`}>
-            <Filter size={12} /> Filter
-            {activeFilters > 0 && (
-              <span className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-brand text-white text-[9px] font-bold flex items-center justify-center">{activeFilters}</span>
-            )}
-          </button>
-          <button onClick={handleCopy}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-stone-200 text-[11px] font-medium text-stone-500 hover:border-brand hover:text-brand transition-colors">
-            {copied ? <CheckCircle2 size={12} className="text-ok" /> : <Copy size={12} />}{copied ? 'Copied' : 'Copy'}
-          </button>
-          <button onClick={() => window.print()}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-stone-200 text-[11px] font-medium text-stone-500 hover:border-brand hover:text-brand transition-colors">
-            <Printer size={12} /> Print
-          </button>
-        </div>
-      </div>
-
-      {/* Filter panel */}
-      {showFilters && (
-        <div className="px-5 py-3 bg-stone-50 border-b border-stone-100">
-          <div className="flex items-center gap-2 flex-wrap">
-            <input value={filterProduct} onChange={e => setFilterProduct(e.target.value)} placeholder="Filter product…"
-              className="px-3 py-1.5 rounded-lg border border-stone-200 bg-white text-[12px] outline-none focus:border-brand w-40" />
-            <select value={filterVariant} onChange={e => setFilterVariant(e.target.value)}
-              className="px-2.5 py-1.5 rounded-lg border border-stone-200 bg-white text-[12px] outline-none focus:border-brand cursor-pointer">
-              <option value="">All variants</option>
-              {uniqueVariants.map(v => <option key={v} value={v}>{v}</option>)}
-            </select>
-            <select value={filterGrade} onChange={e => setFilterGrade(e.target.value)}
-              className="px-2.5 py-1.5 rounded-lg border border-stone-200 bg-white text-[12px] outline-none focus:border-brand cursor-pointer">
-              <option value="">All grades</option>
-              {uniqueGrades.map(g => <option key={g} value={g}>{g}</option>)}
-            </select>
-            {activeFilters > 0 && (
-              <button onClick={clearFilters} className="flex items-center gap-1 text-[11px] text-stone-400 hover:text-err px-2 py-1.5 rounded-lg">
-                <X size={12} /> Clear
-              </button>
-            )}
-          </div>
-        </div>
-      )}
 
       <div className="p-4 space-y-4">
 
@@ -562,14 +470,9 @@ export function CaptureOverview({
                   </span>
                 </div>
 
-                {activeFilters > 0 && filteredProducts.length !== productGroups.length && (
-                  <div className="px-3 py-1.5 bg-brand/5 border-b border-brand/10 text-[11px] text-brand">
-                    Showing {filteredProducts.length} of {productGroups.length} products
-                  </div>
-                )}
 
                 <div className="divide-y divide-stone-200">
-                  {filteredProducts.map(pg => {
+                  {productGroups.map(pg => {
                     const isProdOpen = expandedProducts.has(pg.product)
                     return (
                       <div key={pg.product}>

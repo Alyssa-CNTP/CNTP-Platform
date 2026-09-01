@@ -58,7 +58,6 @@ import { getMySignatureStatus, type MySignatureStatus } from '@/lib/production/e
 import type { Operator, ShiftAssignment } from '@/lib/supabase/database.types'
 import { MessageSquare } from 'lucide-react'
 import { productionShiftNow, SHIFT_LABEL } from '@/lib/production/shifts'
-import { ShiftBagLog } from '@/components/production/capture/ShiftBagLog'
 import { n } from '@/lib/core/num'
 
 type Tab = 'production' | 'checks' | 'cleaning' | 'overview' | 'signoff' | 'messages'
@@ -273,7 +272,6 @@ function CaptureScreen() {
   // shift put in and taken out", which a record on a different grade is still
   // part of, while a mass balance is only ever allowed to combine records
   // running the same thing (hence the filtered set above).
-  const [shiftOtherProductions, setShiftOtherProductions] = useState<Production[]>([])
   const [runId, setRunId]         = useState<string | null>(null)   // this session's production run
   const [continueRun, setContinueRun] = useState<{ id: string; production_order: string | null; variant: string | null; grade: string | null } | null>(null)
   const [endOfRun, setEndOfRun]   = useState(false)       // supervisor: close the run on approval
@@ -403,7 +401,6 @@ function CaptureScreen() {
       )
       const siblingProds = siblingRows.flatMap(r => (r.draft_data?.productions ?? []) as Production[])
       setSiblingProductions(siblingProds.filter(p => activeMatchKeys.has(productionMatchKey(p, sectionId))))
-      setShiftOtherProductions(siblingProds)
       if ((sess as any)?.comments) setComments((sess as any).comments)
 
       // Surface the most recent handover note left on this line (previous shift).
@@ -561,7 +558,6 @@ function CaptureScreen() {
       )
       const siblingProds = siblingRows.flatMap(r => (r.draft_data?.productions ?? []) as Production[])
       setSiblingProductions(siblingProds.filter(p => activeMatchKeys.has(productionMatchKey(p, sectionId))))
-      setShiftOtherProductions(siblingProds)
 
       // Mirror whichever source last populated otherShiftProductions: once a run
       // is linked, that effect (below) widens it to every session sharing the
@@ -1825,14 +1821,6 @@ function CaptureScreen() {
   // "No data" session behind (the duplicate-orders bug).
   function startNewProduction() {
     const aL = assignment?.lot_number ?? ''
-    // The record being closed is still part of this shift, so hand it to the
-    // whole-shift bag log before the local state is cleared — otherwise "Bags
-    // this shift" drops to zero the moment a new batch record opens, since the
-    // sibling prod_sessions rows are only re-read on a page load. Deliberately
-    // NOT added to siblingProductions: that set feeds the mass balance, which
-    // may only ever combine records running the same variant/grade.
-    const closing = productionsRef.current.filter(p => hasCaptureData([p]))
-    if (closing.length) setShiftOtherProductions(prev => [...prev, ...closing])
     sessionRef.current = null
     setSessionId(null)
     setStatus('new')
@@ -2205,33 +2193,6 @@ function CaptureScreen() {
                   <p className="text-[11px] text-stone-400">Bulk bags are locked in under this variant/grade — use <strong className="text-stone-500">Changeover</strong> below to switch.</p>
                 )}
 
-                {/* Per-batch breakdown — a changeover (addProduction) keeps the
-                    run's mass balance combined, but that combined figure alone
-                    doesn't show a changeover ever happened. Each batch's own
-                    numbers stay visible here so one can be sanity-checked
-                    without waiting for the combined total to explain itself. */}
-                {multi && (
-                  <div className="pt-3 border-t border-stone-100 space-y-1.5">
-                    <span className="text-[10px] font-semibold text-stone-400 uppercase tracking-widest">Batches this run ({productions.length})</span>
-                    {productions.map((p, i) => {
-                      const pt = prodTotals(p, shiftBal)
-                      const isActive = i === activeIdx
-                      const variantLabel = VARIANT_OPTIONS.find(v => v.value === p.variant)?.label ?? p.variant ?? '—'
-                      const gradeLabel = p.grade ? DESTINATION_OPTIONS.find(o => o.value === p.grade)?.label ?? p.grade : ''
-                      return (
-                        <div key={p.id} className={`flex flex-wrap items-center gap-2 px-3 py-2 rounded-xl border text-[12px] ${isActive ? 'border-brand/40 bg-brand/5' : 'border-stone-200'}`}>
-                          <span className="font-semibold text-text shrink-0">P{i + 1}</span>
-                          <span className="text-stone-500 truncate flex-1">{variantLabel}{gradeLabel ? ` · ${gradeLabel}` : ''}</span>
-                          <span className="font-mono text-stone-600 shrink-0">{pt.totalIn.toFixed(1)} → {pt.totalOut.toFixed(1)} kg</span>
-                          <span className={`text-[10px] px-1.5 py-0.5 rounded-full shrink-0 ${isActive ? 'bg-brand/10 text-brand' : 'bg-stone-100 text-stone-500'}`}>
-                            {isActive ? 'current' : 'done'}
-                          </span>
-                        </div>
-                      )
-                    })}
-                  </div>
-                )}
-
                 {/* Mid-shift grade/variant changeover — the leftover mass balance
                     stays visible and part of the run (can still go out as Blocks/
                     Sticks under the new grade) unless the closing batch is
@@ -2245,22 +2206,6 @@ function CaptureScreen() {
                   </div>
                 )}
               </div>
-
-              {/* Whole-shift bag reference — collapsed to a one-line in/out
-                  summary, expandable to every bag. Sits between the batch card
-                  and the capture form because it is context for what you are
-                  about to capture, not an action: the shift's own running list
-                  of what went in and what came out, across every batch record
-                  it opened (the capture form below only ever shows the record
-                  open on screen). Asked for by the afternoon shift. */}
-              <ShiftBagLog
-                sectionId={sectionId}
-                shiftLabel={SHIFT_LABEL[shiftBal]}
-                records={[
-                  ...productions.map((p, i) => ({ ...p, label: multi ? `P${i + 1}` : 'This record', current: true })),
-                  ...shiftOtherProductions.map((p, i) => ({ ...p, label: `Earlier record ${i + 1}`, current: false })),
-                ]}
-              />
 
               {variantMismatch && (
                 <div className="flex items-start gap-2.5 px-4 py-3 bg-warn/8 border border-warn/30 rounded-2xl text-[13px] text-amber-800">
