@@ -2,6 +2,99 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-02 — Alyssa (Bag serial scheme: core formats, anchored parser, database-side allocation)
+
+**Files changed:** `lib/core/serials.ts`, `lib/core/serials.scheme.test.ts` (new), `lib/production/serial-allocator.ts` (new), `supabase/migrations/20260902_001_bag_serial_allocation.sql` (new)
+
+The foundation for the serial scheme recorded in ARCHITECTURE.md §5. Formats and
+allocation only — no capture screen is wired to it yet, so nothing an operator sees
+changes with this.
+
+### One owner for every format
+
+Five sections minted serials five different ways, in four different formats, with
+`seqOf` and the date stem copy-pasted between them. `lib/core/serials.ts` now carries
+the current scheme alongside the historic formats, which are kept because bags carrying
+them are in the warehouse and a printed serial is that bag's identity.
+
+`{WC}{TYPE}-{DDMMYYYY}-{QUALIFIER}-{NNN}`, with the two per-section differences that are
+deliberate: **Granule puts the lot before the date** (the lot is its counting scope and
+runs across days as one continuous sequence) and **the Blender carries no type code**
+(the blend type and number are what the Pasteuriser consumes and what the order is
+raised against). Both are pinned by tests that would fail if either were "harmonised".
+
+The date stem went from six digits to eight. Six saved two characters and cost the
+century, on a record that outlives the decade it was printed in.
+
+### The parser is anchored, never split
+
+There was no parser at all before. The new one peels the sequence off the end and the
+work centre off the front, and never splits on `-` — Granule lots contain hyphens, so
+`'GLSG-RSGG-05626-01092026-001'.split('-')` reads the lot as `RSGG` and the date as
+`05626`. Both look plausible, which is what makes it dangerous. A test asserts the
+correct reading *and* what the naive version would have said.
+
+Legacy six-digit serials still parse and report `legacy: true`. Historic `RS` serials
+read back as `RS`, not rewritten to `HS` — that bag says RS.
+
+### Heavy Sticks is one material under four names
+
+`Heavy Sticks`, `Rolsiev Sticks`, `Sticks` and `RS` all map to type code `HS`, on
+Refining 2 as well as Sieving. This is the serial-code layer only; the Acumatica import
+must still send `15IGST` / "Sticks", and `acumatica-codes.ts` matches on the exact string
+`'Rolsiev Sticks'` — renaming the display without following it through there blanks the
+code silently, with no error.
+
+An unknown product now returns null instead of a code built from its first two letters.
+A guessed code is indistinguishable from a real one once it is printed on a bag.
+
+### Numbers come from the database
+
+`production.next_bag_seq(scope)` — one atomic upsert on a counter row, so two operators
+adding a bag in the same moment get 7 and 8 rather than 7 and 7. App-side `max + 1` is
+the documented cause of 44% of Fine/Coarse Leaf bags going missing from `prod_bagging`
+and 7 of 24 Sieving bags never reaching `bag_tags`, and the `limit(4000)` on that scan
+made it worse past 4000 rows.
+
+The counter is keyed on the counting **scope**, which is not always the serial prefix:
+`GLSG-RSGG-05626` carries no date, so one lot keeps one sequence across several days
+while its serials still say which day each bag was made.
+
+`allocateBagSerial()` falls back to a local max when the RPC is unreachable, scoped to
+the same counter so a tablet that loses signal keeps numbering upward instead of
+restarting at 001. It reports `source: 'local'` rather than letting a silent downgrade
+look like the safe path.
+
+### Two things found while building
+
+**The Small Blender was missing.** It is a real section with its own code (`SB`) that
+shares `SectionKind 'blender'`; leaving it out of the work-centre map would have returned
+null and silently disabled serials on that line. It gets its own counter — mapping it
+onto `BL` would interleave two physical lines' bags in one sequence.
+
+**A Granule bag with no lot produced `GLSG--01092026-001`** — a double hyphen that reads
+back as a valid serial with an empty lot, so the bag looks tagged while belonging to no
+counter. Granule and Blender serials now throw without their qualifier. Callers must gate
+on it, exactly as the floor does: you cannot label a granule bag before you know its lot.
+
+### Seeding, and the one scope that survives the format change
+
+Date-scoped sections need no seeding — a four-digit year cannot collide with a
+six-digit stem. The Granule Line does: a lot in progress today keeps running tomorrow
+under the new format. Historic Granule serials carry no type code, so a lot's existing
+bags cannot be attributed to SG, SF or EXP after the fact; all three scopes are seeded to
+that lot's highest number. That over-seeds two of the three and costs some gaps, which is
+explicitly fine. Under-seeding would reprint a number already on a bag in the warehouse.
+
+**Verification:** 140 unit tests pass (up from 106), boundary lint clean, 32 type errors
+(unchanged).
+
+**Migration pending — apply to STAGING first:** `20260902_001_bag_serial_allocation.sql`.
+It carries verification queries for the seeded lots and an atomicity self-test. Until it
+is applied, `allocateBagSerial()` returns `source: 'local'` for every call.
+
+---
+
 ## 2026-09-01 — Alyssa (Sieving changeover row duplication; additive UI stood down)
 
 **Files changed:** `components/production/capture/SievingCapture.tsx`, `lib/production/debag-reconcile.ts` (new), `lib/production/debag-reconcile.test.ts` (new), `app/(app)/production/capture/[section]/page.tsx`, `components/production/capture/CaptureOverview.tsx`, `components/production/LiveCaptureKPIs.tsx`, `app/(app)/production/orders/page.tsx`, `app/(app)/production/orders/[id]/page.tsx`, `app/(app)/production/live/capture/page.tsx`, `supabase/migrations/20260901_001_repair_sieving_changeover_duplication_DRAFT.sql` (new)
