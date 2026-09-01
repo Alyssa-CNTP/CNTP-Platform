@@ -53,10 +53,6 @@ interface ProductGroup { product: string; acumaticaCode?: string | null; acumati
 // per ingredient), not a simple in/out total — computed by the page from the
 // BOM plus this section's captured inputs, since that's the only place that
 // already knows both.
-export interface BlenderRatioGroup {
-  bomId: string
-  rows: { label: string; kg: number; actualPct: number; targetPct: number }[]
-}
 
 // ── Grouping functions ────────────────────────────────────────────────────────
 
@@ -302,11 +298,10 @@ const fmtTime = (iso?: string) =>
 
 export function CaptureOverview({
   productions, sectionId, sectionName, sectionColor, date, shift, showSerials = false,
-  productionOrders, locked = false, blenderRatios,
+  productionOrders, locked = false,
 }: {
   productions: Production[]; sectionId: string; sectionName: string; sectionColor: string; date: string; shift: string; showSerials?: boolean
   productionOrders?: any; locked?: boolean
-  blenderRatios?: BlenderRatioGroup[]
 }) {
   // Which section this screen is showing. Comes from the route, so it is
   // authoritative — the five data shapes are never told apart by guessing at
@@ -554,29 +549,6 @@ export function CaptureOverview({
                 </div>
               </div>
             )}
-
-            {/* ── Blend component ratio — target vs actual (mass balance for a
-                blend is read as a ratio per ingredient, not a simple total) ── */}
-            {blenderRatios && blenderRatios.length > 0 && blenderRatios.map(br => (
-              <div key={br.bomId} className="bg-white border border-stone-200 rounded-2xl p-4 space-y-2">
-                <p className="text-[11px] font-semibold text-stone-400 uppercase tracking-wide">
-                  Blend <span className="font-mono">{br.bomId}</span> — component ratio (target vs actual)
-                </p>
-                <div className="grid grid-cols-2 gap-1.5">
-                  {br.rows.map(r => {
-                    const off = Math.abs(r.actualPct - r.targetPct) > 5
-                    return (
-                      <div key={r.label} className={`flex justify-between px-3 py-2 rounded-lg border text-[11px] ${off ? 'bg-amber-50 border-amber-200' : 'bg-stone-50 border-stone-100'}`}>
-                        <span className="text-stone-600 truncate pr-2">{r.label}</span>
-                        <span className={`font-mono font-bold flex-shrink-0 ${off ? 'text-amber-700' : 'text-stone-700'}`}>
-                          {r.actualPct.toFixed(0)}% <span className="text-stone-400">/ {r.targetPct.toFixed(0)}%</span>
-                        </span>
-                      </div>
-                    )
-                  })}
-                </div>
-              </div>
-            ))}
 
             {/* ── Bagging — out ───────────────────────────────────────────────── */}
             {(productGroups.length > 0 || bucketOutKg > 0) && (

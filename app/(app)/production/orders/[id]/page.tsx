@@ -120,6 +120,11 @@ export default function ProductionOrderDetailPage() {
   // output (WIP left in the tower), which is a derived reading of the row rather
   // than the row itself — the kind of additive layer this page no longer carries.
   const inputRows = debags
+  // Summed from the rows this page actually lists, never from the
+  // prod_mass_balance snapshot — a stored total that disagrees with the rows
+  // under it is how the order page came to read 91 036 kg in against 4 704 kg
+  // out with a "-94.8% material lost" verdict printed next to it.
+  const inputKg = inputRows.reduce((t, d) => t + (Number(d.kg_nett) || 0), 0)
 
   return (
     <div className="px-4 py-6 max-w-[1000px] mx-auto space-y-5 print-full-width">
@@ -203,6 +208,21 @@ export default function ProductionOrderDetailPage() {
               ))}
             </div>
           )}
+        </PanelBody>
+      </Panel>
+
+      {/* Mass balance — the two totals above and the difference between them,
+          stated plainly. Both are sums of the rows this page lists, so this can
+          only disagree with them if the rows themselves are wrong. */}
+      <Panel>
+        <PanelHead title="Mass balance" />
+        <PanelBody>
+          <div className="grid grid-cols-3 gap-4">
+            <Field label="Total in — debagged" value={`${inputKg.toFixed(1)} kg`} />
+            <Field label="Total out — bagged"  value={`${bagsOutputKg.toFixed(1)} kg`} />
+            <Field label="Difference"
+              value={`${inputKg - bagsOutputKg > 0 ? '+' : ''}${(inputKg - bagsOutputKg).toFixed(1)} kg`} />
+          </div>
         </PanelBody>
       </Panel>
 
