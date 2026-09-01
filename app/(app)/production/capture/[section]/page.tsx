@@ -36,9 +36,9 @@ import {
 } from '@/components/production/capture/PasteuriserCapture'
 import { HalfBagTopUpModal } from '@/components/production/capture/HalfBagTopUpModal'
 import { HalfBagTopUpActivity } from '@/components/production/capture/HalfBagTopUpActivity'
-import { fetchTopUpEventsForSession } from '@/lib/production/scan-utils'
+import { fetchTopUpEventsForSession, sanitizeSerial } from '@/lib/production/scan-utils'
 import { sectionKindFor, assertNever, type SectionKind } from '@/lib/core/types/capture'
-import { productionTotals, sumProductionTotals, withTopUp,
+import { productionTotals, sumProductionTotals, withSessionAdjustments,
   type ProductionTotals, type AnyBalanceData } from '@/lib/core/mass-balance'
 import { outstandingBucketElevator, variantFamily } from '@/lib/production/bucket-elevator'
 import { upperCode } from '@/lib/production/normalize-code'
@@ -52,7 +52,7 @@ import { normalizeBatch } from '@/lib/production/batch-key'
 import { ensureCheckRecord, appendCheckEvent, loadCheckRecord } from '@/lib/production/checks-db'
 import { machineChecksFor } from '@/lib/production/checks-config'
 import { cleanersOnDuty } from '@/lib/production/cleaner-roster'
-import { sectionMeta, makeSerial, massBalanceToleranceFor, VARIANT_OPTIONS, variantToShort, DESTINATION_OPTIONS, isOrganicVariant } from '@/lib/production/capture-config'
+import { sectionMeta, makeSerial, massBalanceToleranceKg, VARIANT_OPTIONS, variantToShort, DESTINATION_OPTIONS, isOrganicVariant } from '@/lib/production/capture-config'
 import { LineChat } from '@/components/production/capture/LineChat'
 import { getMySignatureStatus, type MySignatureStatus } from '@/lib/production/employee-signature'
 import type { Operator, ShiftAssignment } from '@/lib/supabase/database.types'
@@ -126,6 +126,54 @@ function emptyDataFor(kind: SectionKind): Production['data'] {
     case 'sieving':     return emptySievingData()
     default:            return assertNever(kind, 'section kind')
   }
+}
+
+// The serials of the output bags THIS session captured.
+//
+// Used to tell apart the two kinds of half-bag transfer: one into a bag this
+// session bagged (its mass is already inside the captured weight, so a transfer
+// into it must come back off Total Output) versus one into a bag from an
+// earlier day (never in these outputs, so nothing to adjust).
+//
+// Dispatches on the section kind and ends in assertNever — the five sections
+// keep their output bags under different field names and shapes, and guessing
+// at them is the exact failure this file spent 2,770 lines learning about.
+function outputSerialSet(kind: SectionKind, prods: Production[]): Set<string> {
+  const out = new Set<string>()
+  const add = (serial: string | undefined | null) => {
+    const clean = sanitizeSerial(String(serial ?? ''))
+    if (clean) out.add(clean)
+  }
+  const addBags = (bags: readonly { serial: string }[] | undefined) =>
+    (bags ?? []).forEach(b => add(b.serial))
+
+  for (const p of prods) {
+    switch (kind) {
+      case 'refining': {
+        const d = p.data as RefiningData
+        for (const g of [d.outputA, d.outputB, d.outputC, d.outputD]) addBags(g?.bags)
+        break
+      }
+      case 'granule': {
+        const d = p.data as GranuleData
+        addBags(d.outputs)
+        addBags(d.dustOutputs)
+        break
+      }
+      case 'sieving':
+        addBags((p.data as SievingData).outputs)
+        break
+      case 'blender':
+        addBags((p.data as BlenderData).outputs)
+        break
+      case 'pasteuriser':
+        addBags((p.data as PasteuriserData).outputs)
+        break
+      default:
+        return assertNever(kind, 'section kind')
+    }
+  }
+  return out
 }
 
 // True only when a production actually has weighed capture (any section type).
@@ -251,6 +299,10 @@ function CaptureScreen() {
   // the output side to balance it. Session-scoped, so added once — not per
   // production, since a session can hold several runs.
   const [sessionTopUpKg, setSessionTopUpKg] = useState(0)
+  // Mass that arrived in one of THIS session's output bags by transfer from an
+  // existing bag rather than by being produced here. Subtracted from Total
+  // Output — see the effect that loads it, and BalanceContext.transferInKg.
+  const [sessionTransferInKg, setSessionTransferInKg] = useState(0)
   // Bucket-elevator carry-over left by a previous day and consumed by this
   // shift, read from the ledger and matched on VARIANT FAMILY — conventional
   // and organic are separate physical pools and never mix. Undefined until
@@ -614,16 +666,30 @@ function CaptureScreen() {
   // output when IT was bagged, so counting it again would double-count.
   useEffect(() => {
     let cancelled = false
-    if (!sessionId) { setSessionTopUpKg(0); return }
+    if (!sessionId) { setSessionTopUpKg(0); setSessionTransferInKg(0); return }
     fetchTopUpEventsForSession(sectionId, sessionId)
       .then(map => {
-        const kg = Array.from(map.values()).flat()
-          .filter(t => t.mode === 'production').reduce((s, t) => s + t.kg, 0)
-        if (!cancelled) setSessionTopUpKg(kg)
+        const events = Array.from(map.values()).flat()
+        const kg = events.filter(t => t.mode === 'production').reduce((s, t) => s + t.kg, 0)
+        // The other half of the same rule. A bag-to-bag transfer is normally
+        // invisible to the balance — mass moves between two bags that were both
+        // already counted. But the Blender routinely makes up a NEW bag by
+        // drawing from an existing one, and that new bag IS captured as output
+        // here, carrying mass that was counted when the source bag was bagged.
+        // Left in, the shift and its production order both report it twice.
+        //
+        // Only transfers whose TARGET is one of this session's own output bags
+        // qualify: a transfer into a bag from an earlier day was never in these
+        // outputs, so there is nothing to take back off.
+        const ownOutputs = outputSerialSet(kind, productionsRef.current)
+        const transferKg = events
+          .filter(t => t.mode === 'existing' && ownOutputs.has(sanitizeSerial(t.serial)))
+          .reduce((s, t) => s + t.kg, 0)
+        if (!cancelled) { setSessionTopUpKg(kg); setSessionTransferInKg(transferKg) }
       })
       .catch(() => { /* best-effort — balance falls back to captured output only */ })
     return () => { cancelled = true }
-  }, [sectionId, sessionId, tab])
+  }, [sectionId, sessionId, tab, productions])
 
   // Bucket-elevator carry-over is Sieving-only, and only the shift that CONSUMES
   // it counts it as input — the afternoon shift LEAVES a new one for tomorrow
@@ -1224,10 +1290,15 @@ function CaptureScreen() {
     return productionTotals(kind, p.data as AnyBalanceData, { shift: sh, carryOverInKg })
   }
   // Session totals — summed across all productions on one shift, with the
-  // session half-bag top-ups added once at the end (withTopUp knows which way
-  // each section balance sign runs).
+  // session-level adjustments applied once at the end: half-bag top-ups add,
+  // bag-to-bag transfers into this session's own output bags subtract
+  // (withSessionAdjustments knows which way each section's balance sign runs).
   function sessionTotals(prods: Production[], sh: Shift = shiftBal): ProductionTotals {
-    return withTopUp(kind, sumProductionTotals(prods.map(p => prodTotals(p, sh))), sessionTopUpKg)
+    return withSessionAdjustments(
+      kind,
+      sumProductionTotals(prods.map(p => prodTotals(p, sh))),
+      { topUpKg: sessionTopUpKg, transferInKg: sessionTransferInKg },
+    )
   }
 
   // Resolve canonical batch ids for a set of raw lot strings: upsert any new
@@ -1523,6 +1594,10 @@ function CaptureScreen() {
     await db.schema('production').from('prod_mass_balance').upsert({
       session_id: sid, total_input_kg: totalIn,
       total_output_a_kg: mbA, total_output_b_kg: mbB, total_output_c_kg: mbC, total_output_d_kg: mbD,
+      // The column defaulted to 15 and was never written, so every row on the
+      // table claimed a flat 15 kg allowance regardless of size. Write the real
+      // +/-1% figure so a stored row can be read back without recomputing it.
+      tolerance_kg: massBalanceToleranceKg(totalIn),
       calculated_at: new Date().toISOString(),
     } as any, { onConflict: 'session_id' })
 
@@ -1793,7 +1868,7 @@ function CaptureScreen() {
       if (recId) await appendCheckEvent(recId, {
         phase: 'shutdown', check_key: 'mass_balance', check_label: 'Mass balance (change-over)', kind: 'massbalance',
         value_num: prev.totalIn - prev.totalOut, value_text: `${prev.totalIn.toFixed(1)} in / ${prev.totalOut.toFixed(1)} out`,
-        unit: 'kg', status: Math.abs(prev.totalIn - prev.totalOut) <= massBalanceToleranceFor(sectionId) ? 'ok' : 'flagged',
+        unit: 'kg', status: Math.abs(prev.totalIn - prev.totalOut) <= massBalanceToleranceKg(prev.totalIn) ? 'ok' : 'flagged',
         production_idx: activeIdx, source: 'auto',
       })
     } catch { /* snapshot is best-effort */ }
@@ -2324,7 +2399,7 @@ function CaptureScreen() {
               variant={active?.variant ?? ''} grade={active?.grade ?? 'A'}
               massBalance={{
                 totalIn: rt.totalIn, totalOut: rt.totalOut, variance: rt.balance,
-                withinTol: Math.abs(rt.balance) <= massBalanceToleranceFor(sectionId),
+                withinTol: Math.abs(rt.balance) <= massBalanceToleranceKg(rt.totalIn),
               }}
               running={totalIn > 0} active={status !== 'submitted' && status !== 'approved'}
             />

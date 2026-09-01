@@ -14,7 +14,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { getCallerPermissions, getAdminClient } from '@/lib/auth/server-helpers'
-import { sectionMeta, SECTION_ORDER, massBalanceToleranceFor } from '@/lib/production/capture-config'
+import { sectionMeta, SECTION_ORDER, massBalanceToleranceKg } from '@/lib/production/capture-config'
 import { round1, kgPerHour } from '@/lib/core/metrics'
 
 export const runtime = 'nodejs'
@@ -117,7 +117,12 @@ export async function GET(req: NextRequest) {
       // which is why the yield views sum B+C+D only.
       const inputKg = m ? num(m.total_input_kg) : 0
       const outputKg = m ? num(m.total_output_b_kg) + num(m.total_output_c_kg) + num(m.total_output_d_kg) : 0
-      const tol = m ? (num(m.tolerance_kg) || massBalanceToleranceFor(s.section_id)) : massBalanceToleranceFor(s.section_id)
+      // +/-1% of Total Input, computed live rather than read from the
+      // persisted tolerance_kg. Rows written before the change carry a flat
+      // 15 kg (100 for refining2), so preferring the stored value would leave
+      // two tolerance regimes side by side on the same screen -- an operator
+      // could not tell why two similar sessions flagged differently.
+      const tol = massBalanceToleranceKg(inputKg)
       const balance = m && m.balance_kg !== null ? num(m.balance_kg) : null
       return {
         id: s.id, sectionId: s.section_id, date: s.date, shift: s.shift, status: s.status,

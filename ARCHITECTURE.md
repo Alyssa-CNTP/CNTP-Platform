@@ -131,6 +131,145 @@ component. Never by reading a max in app code — the sequence is allocated by t
 (`next_bag_serial`, mirroring the existing `next_job_card_no` RPC pattern), because app-side
 allocation mints duplicates under concurrent use and reads a wrong max past `limit(4000)`.
 
+#### What a serial is for
+
+A serial has to satisfy four things at once, and they pull against each other:
+
+1. **Legible on the floor.** An operator reads it off a bag and knows the line, the product
+   and roughly when. Barcode scanning is the goal, not the excuse — a serial nobody can read
+   aloud is a serial nobody can correct.
+2. **Countable.** The trailing number tells you how many bags of that product came off that
+   line for that counting scope. Half-bag top-ups are excluded: they are handled separately
+   and never mint a serial (see §6).
+3. **Traceable through every hop.** Every work centre can scan, type, or search for a bag
+   and consume it, and the consumed serial stays attached to what was made from it.
+4. **Matched to the production order.** Orders are raised against what the work centre
+   *outputs*, so the serial's product code and the order's Acumatica item must come from one
+   map, never two.
+
+#### The format
+
+```
+{WC}{TYPE}-{DDMMYYYY}-{QUALIFIER}-{NNN}
+ │    │         │           │        └── sequence within the counting scope
+ │    │         │           └── lot (Granule) or blend + number (Blender); absent elsewhere
+ │    │         └── the PRODUCTION RUN date, never the device clock
+ │    └── output/product type, 2–4 letters
+ └── work centre, always exactly 2 characters
+```
+
+**Parse it anchored from both ends, never by splitting on `-`.** Work centre is the first two
+characters; type is the letters up to the first hyphen; the sequence is the trailing digits;
+everything in between is the qualifier and *may itself contain hyphens* — Granule lots like
+`RSGG-05626` do. A `split('-')` here silently mis-reads every Granule serial.
+
+The type code is 2–4 characters, not two. `CHSF` and `EXP` do not fit in two, and forcing
+them to would collide `EXP` with something else later. Length is not what makes it
+unambiguous; the fixed 2-character work centre and the anchored parse are.
+
+| Section | Format | Example |
+|---|---|---|
+| Sieving | `ST{TT}-{DDMMYYYY}-{NNN}` | `STRB-01092026-001` |
+| Refining 1 | `R1{TT}-{DDMMYYYY}-{NNN}` | `R1WD-01092026-001` |
+| Refining 2 | `R2{TTTT}-{DDMMYYYY}-{NNN}` | `R2CHSF-01092026-001` |
+| Granule | `GL{TT}-{LOT}-{DDMMYYYY}-{NNN}` | `GLSG-RSGG-05626-01092026-001` |
+| Blender | `BL-{BLEND}-{DDMMYYYY}/{n}-{NNN}` | `BL-SFCKUN25/C-01092026/1-001` |
+
+Type codes — Sieving `FL CL RB BD PD IS HS`; Refining 1 `ID WD PD`; Refining 2 `CHSF CHSC WD
+PD`; Granule `SG SF EXP`. Anything else takes its description and naming convention from the
+Acumatica master inventory rather than being invented at the capture screen.
+
+**Blender carries no type code.** It is identified by blend type and blend number, because
+that is what the Pasteuriser consumes and what the order is raised against — a product-type
+code there would be a second name for the same thing.
+
+**Granule puts the lot before the date, and it is the only section that does.** Everywhere
+else the date is the counting scope, so it sits immediately after the type and
+`{WC}{TYPE}-{DDMMYYYY}-` prefix-scans one product on one run day. On the Granule Line the
+**lot** is the counting scope: the same lot routinely runs across several days and must read
+as one continuous sequence, so the stem is `GL{TT}-{LOT}-` and the count continues past
+midnight and past the end of the run. Do not "harmonise" this with the others — it is the
+same class of deliberate per-section difference as the five mass-balance formulas (§4).
+
+#### The production run day
+
+The date stem is the **production run** date: one run is 07h00 → 01h00, spanning the morning
+(07h00–16h00) and afternoon (16h00–01h00) shifts. `productionDayFor()` maps 00h00–06h59 back
+to the previous day, so a bag tagged at 00h30 keeps the run's date and the sequence does not
+restart mid-run. Always pass the **session** date into a serial, never `new Date()`.
+
+A session stays open until **01h30** for the supervisor's final adjustments. That is a safety
+margin on top of the 01h00 run end, not a change to the run window — the run day boundary
+stays 07h00–01h00 and nothing about the date stem moves. Adjustments after that point are
+not lost, they go through the tiered adjustment path in §6 instead.
+
+Date and time formatting is **core**, alongside the rest of the app's shared functionality:
+one `DDMMYYYY` builder for serials, SAST for display, UTC `timestamptz` in storage (§9). Four
+copies of a date format is how two screens end up disagreeing about which day a bag belongs
+to.
+
+#### Allocation, and why deleting a bag is still allowed
+
+The sequence comes from the database. That is not negotiable — app-side `max + 1` is the
+documented cause of 44% of Fine/Coarse Leaf bags lost from `prod_bagging` and 7 of 24 Sieving
+bags missing from `bag_tags` (§1B). Sequencing **per product type** rather than per section
+makes this worse, not better: it turns one counter per line into six or eight, so there are
+more independent races, each one thinner.
+
+**Operators must still be able to add and delete bags as freely as the screen allows today.**
+A database sequence must not become a one-way ratchet that makes a mis-typed bag
+unrecoverable — the operator deletes it and adds the right one, exactly as now.
+
+The consequence, stated plainly so nobody treats it as a bug: **a deleted bag leaves a gap.**
+Numbers are not re-packed, because re-packing would renumber bags that are already printed,
+already scanned into the next section, and already on a production order. So the trailing
+number is the *allocation order*, and after a deletion the highest number can exceed the bag
+count. Where a true count is needed, count `bag_tags` rows — that is the ledger, and it is
+what reporting already reads (§6). The serial answers "which bag", the ledger answers "how
+many".
+
+#### Product naming across the three layers
+
+A product has up to three names and they are not interchangeable:
+
+| Layer | Sieving example | Where it lives |
+|---|---|---|
+| Floor / display | Heavy Sticks | capture screens, labels, reports |
+| Serial code | `HS` | `lib/core/serials.ts` |
+| Acumatica item | `15IGST-C` · "Sticks - Conventional" | `lib/production/acumatica-codes.ts` |
+
+**Heavy Sticks, Rolsiev Sticks, `RS` and Sticks are all the same material** — on Refining 2 as
+well as Sieving. The platform says Heavy Sticks; the Acumatica import must still send
+`15IGST` / "Sticks". Renaming the display without following it through
+`acumatica-codes.ts` — which matches on the exact string `'Rolsiev Sticks'` — makes every one
+of those bags lose its Acumatica code *silently*, with no error, just a blank field.
+
+Existing rows carry `product_type = 'Rolsiev Sticks'` and serials carry `STRS-`. Accept both
+on input, write the new form going forward, and **do not rewrite history** — a serial already
+printed on a bag in the warehouse is the bag's identity.
+
+#### Input paths are the same everywhere
+
+Every section accepts a bag three ways — **scan, type manually, or search the inventory** —
+and that does not vary by section. A section that offers only two of the three sends the
+operator looking for a supervisor. The one exception is Sieving's *input* side, which debags
+farm bags at the head of the line and has no upstream serial to scan.
+
+Two consequences that have already bitten:
+
+- A pick list and a scan of the same bag must agree. The Pasteuriser pick list offered
+  cross-variant bags that `validateBagScan` refused as `wrong_variant`; two paths to the same
+  bag disagreeing is how a mixed-variant bag gets in.
+- A bag not found in `bag_tags` is registered on the row and counts at its typed weight. That
+  is legitimate — Refining 2 routinely runs bought-in material. What it needs is a `bag_tags`
+  record so the material is traceable from the point it entered, not a different balance.
+  Creating those bags properly is Phase 3, built alongside the bag-to-bag transfer component
+  (§6); manual entry is the interim.
+
+The Pasteuriser is deliberately **out of this scheme for now**. Its final product carries its
+own serial and label conventions, and it is sequenced last, once the upstream sections are
+released.
+
 ### Mass balance
 
 Lives in `lib/core/mass-balance/`, one module per section — they stay separate (see §4). The
@@ -159,10 +298,52 @@ So `balance = totalIn − totalOut − carryOverOut`. That is arithmetically ide
 older `totalIn − (product + leftover)` — what changed is that the leftover is no longer
 disguised as output.
 
-Top-ups are session-scoped, so they are added **once** after summing, via `withTopUp()`.
-Never inside a section's own totals, or a path can count them twice. `withTopUp` also knows
-which way each section's balance sign runs — Blender and Pasteuriser read `out − in`, so more
-output moves their balance *up*, the opposite of the other three.
+Top-ups are session-scoped, so they are applied **once** after summing, via
+`withSessionAdjustments()`. Never inside a section's own totals, or a path can count them
+twice. It also knows which way each section's balance sign runs — Blender and Pasteuriser
+read `out − in`, so more output moves their balance *up*, the opposite of the other three.
+
+**The tolerance is ±1% of Total Input, on every section.** `massBalanceToleranceKg(totalIn)`
+in `tolerance.ts` is the only source; there is no per-section variant. It replaced a flat
+`MASS_BALANCE_TOLERANCE_KG = 15` with a 100 kg special case for `refining2` — 15 kg is ~7% of
+a 200 kg trial and ~0.4% of a 4 t shift, so one never flagged and the other always did, and
+the `refining2` exception existed only because that line runs bigger volumes, which is what a
+percentage handles without an exception. It is a percentage of **input**, not output, so a
+shift that under-produces cannot widen its own goalposts.
+
+`production.v_session_yield` derives the same figure in SQL rather than reading
+`prod_mass_balance.tolerance_kg` — every row written before this carries the old 15, and
+trusting the stored value would leave two tolerance regimes side by side on one screen.
+
+### The four other sections, in their own words
+
+Each section's Total Output and Total Input are specified separately. They are *not* variants
+of one rule; the shared part is only the ±1%.
+
+- **Refining 1 / 2** — Output includes the half-bag top-up increment and bags created here for
+  material arriving from outside the line. An input bag whose serial is not in `bag_tags` is
+  registered on the row and counts at its typed weight like any other; what it needs is a
+  `bag_tags` record, not a different formula.
+- **Granule Line** — Output **excludes** leftover dust that tomorrow will consume, per product
+  type: a PO run under SG Granules leaves SG dust, one under SF Granules leaves SF dust, and
+  the two are different physical pools. Input **includes** the previous day's leftover in its
+  designated product-type column, same variant only. The ledger is
+  `production.dust_carryover_log`, keyed on `(section_id, item_key, variant_family)` — never
+  aggregated across any of the three.
+- **Blender** — Output includes top-up increments per product type, **and allows a new
+  half-bag to be generated by drawing from an existing bag**. That new bag is captured as
+  output like any other, but its mass was already counted when the source bag was bagged, so
+  it is subtracted via `BalanceContext.transferInKg`. Only transfers whose *target* is one of
+  this session's own output bags qualify. Left in, the shift and its production order both
+  report the same material twice — this is the case flagged as drastically affecting POs.
+  The Blend Ratio breakdown (`byItem`) is untouched and stays.
+- **Pasteuriser** — Output counts every pallet-line kind: Final Product, High Moisture and
+  Refill. `pasteuriserTotals` sums the lines *without* filtering on `kind`, which is what
+  makes all three count — adding a filter there would silently drop rework and refills. Input
+  counts blend bags and High Moisture rework (stream `main`), plus bags from other lines
+  (stream `postsieve`, the Granule Line), plus leftover part-bags at their actual weight. The
+  system pick list is variant-family filtered, because a scan already refuses a cross-family
+  bag (`validateBagScan` → `wrong_variant`) and the two paths must not disagree.
 
 ---
 
@@ -266,3 +447,14 @@ it passes for real. **Do not delete or skip it to make a run clean.**
 
 Store UTC `timestamptz`. Display in SAST (Africa/Johannesburg, UTC+2). Compare full
 date+time, never a bare `HH:MM`.
+
+Date and time formatting is **core**, not a per-screen helper — see §5. The formats that
+matter are one place each: the `DDMMYYYY` serial stem, SAST for display, UTC in storage.
+
+**A production day is 07h00 → 01h00**, spanning the morning (07h00–16h00) and afternoon
+(16h00–01h00) shifts, with the session left open until **01h30** for the supervisor's final
+adjustments. That grace window does not move the day boundary: a bag tagged at 01h20 still
+belongs to the run that started the previous 07h00. Anything derived from "what day is it" —
+serial stems, shift totals, mass balance, roster — goes through `productionDayFor()`, never
+`new Date()`. Using the live clock rolls the date over mid-shift and restarts a sequence
+inside one continuous run.

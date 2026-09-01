@@ -88,6 +88,126 @@ rebuilt, so the originals survive and the order panels stay populated. `bag_tags
 
 Needs a human to read Step 1 before Step 2 runs, and the code fix must be deployed
 first or the next changeover re-creates the duplication.
+## 2026-09-01 — Alyssa (Per-section mass balance: ±1% tolerance, Granule dust carry-over, Blender bag-to-bag transfers)
+
+**Files changed:** `lib/core/mass-balance/{tolerance,types,granule,index}.ts` (tolerance.ts new), `lib/core/mass-balance/section-rules.test.ts` (new), `lib/production/{capture-config,carryover,order-detail,shift-report-builder}.ts`, `lib/constants/manufacturing.ts`, `components/production/capture/{Granule,Blender,Pasteuriser,Refining}Capture.tsx`, `components/production/capture/CaptureOverview.tsx`, `app/(app)/production/capture/[section]/page.tsx`, `app/(app)/supervisor/analytics/page.tsx`, `app/api/production/{capture-ratings,dashboard-rows,orders-kpis}/route.ts`, `supabase/migrations/20260901_002_dust_carryover_variant.sql` (new), `supabase/migrations/20260901_003_mass_balance_tolerance_pct.sql` (new), `ARCHITECTURE.md`
+
+Mass balance is calculated differently for every section. The previous change gave the five
+sections one shared *vocabulary*; this one implements each section's own specification on top
+of it. The only thing genuinely shared is the tolerance.
+
+### Tolerance is now ±1% of Total Input, everywhere
+
+`MASS_BALANCE_TOLERANCE_KG = 15` — with a 100 kg special case for `refining2` — is gone. A
+fixed kg allowance is the wrong shape for a line running anything from a 200 kg trial to a
+4 t shift: 15 kg is ~7% of the first and ~0.4% of the second, so one never flagged and the
+other always did. The `refining2` exception existed only because that line runs bigger
+volumes, which is exactly what a percentage handles without an exception.
+
+It is a percentage of **input**, deliberately: input is known before the shift produces
+anything, so a shift that under-produces cannot widen its own goalposts. Rounded to 0.1 kg —
+the precision every weight on the floor is captured at — so the figure shown is the figure
+compared, rather than a screen reading "±12.3 kg" while comparing against 12.3456.
+
+Two copies of the old constant existed (`capture-config.ts` and an unused one in
+`constants/manufacturing.ts`); both now re-export the single core source. The signature
+changed from `(sectionId)` to `(totalInKg)` on purpose, so nothing can keep calling it with a
+section id and silently receive a tolerance for the wrong quantity — every one of the ~20
+call sites had to be looked at.
+
+`prod_mass_balance.tolerance_kg` had `DEFAULT 15` and was **never written**, so every row on
+the table claimed a flat 15 kg. The capture save now writes the real figure and the default is
+dropped. `v_session_yield` derives ±1% in SQL rather than reading the stored column, because
+historical rows all carry 15 and trusting them would leave two tolerance regimes side by side
+on the same screen — an operator could not tell why two similar sessions flagged differently.
+
+**This changes which sessions flag.** Small runs are now held tighter and large ones get more
+room. The migration carries a before/after query to see exactly which ones move.
+
+### Granule Line — leftover dust carries over, per product type
+
+A PO run under SG Granules leaves SG dust; one under SF Granules leaves SF dust. Both are
+real, recurring, and were showing up as an unexplained `H − G` shortfall on every shift that
+had any — the variance an operator learns to ignore.
+
+Dust held for tomorrow is now `carryOverOut`: excluded from Total Output, given its own
+column, subtracted from the variance. Dust consumed from a previous day is `carryOverIn` — it
+was already inside A (the Carry-over banner adds it as a real blend input row) but invisible;
+it is now reported, and lands in its designated product-type column instead of the `Other`
+catch-all. An `SF Dust` column was added, which had been missing entirely.
+
+The confirmed leftover is written to `GranuleData.dustCarryOverKg` as well as to the ledger.
+Without that the balance reverted to showing a shortfall the moment the page was reopened,
+and the operator could confirm the same leftover a second time.
+
+`production.dust_carryover_log` gained **`variant_family`**. It already kept SG and SF apart
+via `item_key`, but conventional and organic — separate physical pools — summed into one
+outstanding balance, and whichever line asked first was offered the lot. That is a
+certification failure, not a rounding error. Existing rows backfill to `conventional` (the
+line has run conventional only to this point); the migration says to check for organic rows
+before the `NOT NULL`.
+
+### Blender — a new bag made from an existing one is not new production
+
+The half-bag component can draw material from an existing bag to make up a **new** bag. That
+new bag is captured as output like any other, but its mass was already counted as output when
+the source bag was bagged. Left in, the shift reports the same material twice — and because
+the production-order summaries read the same figure, so does the order.
+
+`BalanceContext.transferInKg` subtracts it. Only transfers whose **target** is one of this
+session's own output bags qualify: a transfer into a bag from an earlier day was never in
+these outputs, so there is nothing to take back off. The session's output serials are
+resolved by a new `outputSerialSet(kind, prods)` that dispatches on section kind and ends in
+`assertNever`, because the five sections keep their output bags under different field names.
+
+`withTopUp()` became `withSessionAdjustments()`, applying both directions at once: top-ups add
+(material produced here that went into an older bag), transfers subtract. `withTopUp` remains
+as a thin wrapper so existing callers keep working. The Blend Ratio breakdown is untouched.
+
+### Pasteuriser and Refining — verified rather than changed
+
+Both already satisfied their specifications; the work was proving it and closing one gap.
+
+Pasteuriser Total Output counts Final Product, High Moisture **and** Refill pallet lines —
+because `pasteuriserTotals` sums the lines *without* filtering on `kind`. That is now pinned
+by a test, since adding a filter there is an easy-looking change that would silently drop
+rework and refills out of production. Total Input counts blend bags and High Moisture rework
+(stream `main`), bags from the Granule Line (stream `postsieve`), and leftover part-bags at
+their actual weight.
+
+The gap: the system pick list was **not** variant-filtered, while a scan of the same bag was
+already refused (`validateBagScan` → `wrong_variant`). Two paths to the same bag disagreeing
+is how a cross-family bag gets in. The pick list now filters on variant family; bags with no
+recorded variant stay visible, since hiding them would strand older hand-registered stock.
+
+Refining's "bags from the outside" count at their typed weight like any other input — nothing
+in the balance treats them differently. What they need is a `bag_tags` record, not a different
+formula, so no formula changed; a test pins it.
+
+### Merged after the derived-figures stand-down
+
+This branch was open while the entry above stood down the derived mass-balance displays —
+`MassBalanceTable`, the YieldStrip, the per-batch balance badges, the flag counts on Live
+Capture KPIs and Production Orders. Those are the surfaces this change was going to relabel,
+so the display half of it is gone: no `carryOverLabel` prop, no per-batch badge fix, no
+`MassBalanceTable`. The stand-down wins; a corrected figure nobody is meant to be reading yet
+is still a figure nobody is meant to be reading.
+
+What survives is all of the calculation: the ±1% rule, Granule's dust carry-over, the Blender
+transfer subtraction, the variant-family gates, and `prod_mass_balance.tolerance_kg` finally
+being written. Those feed the persisted row, the checks panel's mass-balance snapshot and
+`v_session_yield` — so when the displays come back, they come back reading a correct figure
+rather than needing this work done again.
+
+**Verification:** 97 unit tests pass (up from 77), boundary lint clean, production build
+compiles, type errors unchanged at the 34 baseline.
+
+**Migrations:** `20260901_002_dust_carryover_variant.sql` and
+`20260901_003_mass_balance_tolerance_pct.sql` are applied to STAGING. Production needs both
+when this is promoted. Still pending everywhere:
+`20260901_001_prod_bagging_unique_index_drift.sql` (run its pre-flight duplicate query first).
+
+---
 
 ## 2026-09-01 — Alyssa (Mass balance moved to core; Total Output redefined; capture page branching removed)
 

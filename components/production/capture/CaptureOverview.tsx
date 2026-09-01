@@ -16,7 +16,6 @@ import { type RefiningData } from '@/components/production/capture/RefiningCaptu
 import { dustProductType, type GranuleData } from '@/components/production/capture/GranuleCapture'
 import { type BlenderData } from '@/components/production/capture/BlenderCapture'
 import { type PasteuriserData } from '@/components/production/capture/PasteuriserCapture'
-import { massBalanceToleranceFor } from '@/lib/production/capture-config'
 import { n as num } from '@/lib/core/num'
 import { sectionKindFor, assertNever, type SectionKind } from '@/lib/core/types/capture'
 

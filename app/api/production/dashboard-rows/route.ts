@@ -15,7 +15,7 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerSupabaseClient } from '@/lib/supabase/server'
-import { sectionMeta, massBalanceToleranceFor } from '@/lib/production/capture-config'
+import { sectionMeta, massBalanceToleranceKg } from '@/lib/production/capture-config'
 
 export const runtime = 'nodejs'
 
@@ -190,7 +190,7 @@ export async function GET(req: NextRequest) {
         variant: s.variant ?? null,
         productionOrders: (s.production_orders ?? []) as string[],
         inputKg, outputKg, hours, bags: bags.length,
-        toleranceKg: massBalanceToleranceFor(s.section_id),
+        toleranceKg: massBalanceToleranceKg(inputKg),
         checkTotal: checks?.total ?? null, checkOk: checks?.ok ?? null,
         checkFlagged: checks?.flagged ?? null, checkFailed: checks?.fail ?? null,
         vsdHz: checks?.vsd.length ? checks.vsd.reduce((a, b) => a + b, 0) / checks.vsd.length : null,

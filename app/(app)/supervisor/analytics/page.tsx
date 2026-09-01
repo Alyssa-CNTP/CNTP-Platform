@@ -7,7 +7,7 @@ import {
 } from 'recharts'
 import { Clock, Scale, Factory, AlertTriangle, Users, Loader2, TrendingUp } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
-import { sectionMeta, SECTION_ORDER, VARIANT_OPTIONS, massBalanceToleranceFor } from '@/lib/production/capture-config'
+import { sectionMeta, SECTION_ORDER, VARIANT_OPTIONS, massBalanceToleranceKg } from '@/lib/production/capture-config'
 import { sastToday } from '@/lib/production/shifts'
 import { HubHeader } from '@/components/supervisor/HubTabs'
 import { yieldPct as calcYieldPct } from '@/lib/core/metrics'
@@ -113,7 +113,7 @@ export default function SupervisorAnalytics() {
   const totals = useMemo(() => {
     const totalMin = filteredSheets.reduce((s, r) => s + (r.worked_minutes ?? 0), 0)
     const totalKg = filteredSessions.reduce((s, r) => s + kgOut(mb.get(r.id)), 0)
-    const flags = filteredSessions.filter(s => { const m = mb.get(s.id); if (!m) return false; const v = (Number(m.total_input_kg) || 0) - kgOut(m); return Number(m.total_input_kg) > 0 && Math.abs(v) > massBalanceToleranceFor(s.section_id) }).length
+    const flags = filteredSessions.filter(s => { const m = mb.get(s.id); if (!m) return false; const v = (Number(m.total_input_kg) || 0) - kgOut(m); return Number(m.total_input_kg) > 0 && Math.abs(v) > massBalanceToleranceKg(Number(m.total_input_kg) || 0) }).length
     return { totalMin, totalKg: Math.round(totalKg), productions: filteredSessions.length, flags, operators: new Set(filteredSheets.map(s => s.operator_name)).size }
   }, [filteredSheets, filteredSessions, mb])
 
@@ -125,7 +125,7 @@ export default function SupervisorAnalytics() {
       const inputKg = m ? Number(m.total_input_kg) || 0 : 0
       const outputKg = kgOut(m)
       const yieldPct = calcYieldPct(outputKg, inputKg)
-      const flagged = inputKg > 0 && Math.abs(inputKg - outputKg) > massBalanceToleranceFor(s.section_id)
+      const flagged = inputKg > 0 && Math.abs(inputKg - outputKg) > massBalanceToleranceKg(inputKg)
       return { id: s.id, date: s.date, section: sectionMeta(s.section_id).name, color: sectionMeta(s.section_id).colorHex, shift: s.shift, variant: s.variant, inputKg, outputKg, yieldPct, flagged }
     }).sort((a, b) => b.date.localeCompare(a.date) || a.section.localeCompare(b.section))
   , [filteredSessions, mb])
