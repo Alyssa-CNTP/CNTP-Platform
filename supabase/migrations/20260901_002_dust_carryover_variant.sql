@@ -35,6 +35,14 @@ UPDATE production.dust_carryover_log
   SET variant_family = 'conventional'
   WHERE variant_family IS NULL;
 
+-- DEFAULT, not just NOT NULL, and deliberately so. This migration has to be
+-- applied BEFORE the code that supplies the column deploys — but the code
+-- currently running inserts without it, and a bare NOT NULL would make every
+-- one of those inserts fail for the length of the deploy. With the default,
+-- the old code keeps working and the new code always passes the value
+-- explicitly, so neither order of operations has a broken window.
+ALTER TABLE production.dust_carryover_log
+  ALTER COLUMN variant_family SET DEFAULT 'conventional';
 ALTER TABLE production.dust_carryover_log
   ALTER COLUMN variant_family SET NOT NULL;
 
