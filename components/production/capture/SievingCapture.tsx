@@ -493,6 +493,45 @@ export function SievingCapture({
   }
 
   const { totalIn, totalOut } = sievingTotals(value, shift)
+
+  // ── Half-bag top-ups belong in the displayed output total ─────────────────
+  // A top-up is a deliberate side-channel write (see HalfBagTopUpModal) that
+  // never reaches value.outputs, so the total shown on screen was short by
+  // exactly that weight: 2026-09-01 displayed 4 782 kg against 5 084 kg actually
+  // produced, and 31-08 was short 172 kg the same way.
+  //
+  // Only mode === 'production' counts. Those log a plain 'bagging_out' row
+  // (carrying the HALF_BAG_TOPUP notes prefix) precisely because the weight is
+  // genuinely new product. A mode === 'existing' bag-to-bag transfer logs
+  // 'topped_up' instead and must NOT be counted — it moves weight that was
+  // already counted as output when its SOURCE bag was bagged.
+  //
+  // Rows are held raw and filtered during render, so a bag added after the fetch
+  // is still excluded correctly, and the query only re-runs when the session
+  // changes rather than on every keystroke.
+  const [topUpRows, setTopUpRows] = useState<{ serial: string; kg: number }[]>([])
+  useEffect(() => {
+    if (!sessionId) { setTopUpRows([]); return }
+    let cancelled = false
+    ;(async () => {
+      const { data } = await getDb().schema('production').from('scan_events')
+        .select('serial_number, weight_kg, notes')
+        .eq('section_id', sectionId).eq('session_id', sessionId).eq('action', 'bagging_out')
+      if (cancelled) return
+      setTopUpRows(((data as any[]) ?? [])
+        .filter(r => String(r.notes ?? '').startsWith('HALF_BAG_TOPUP'))
+        .map(r => ({ serial: String(r.serial_number), kg: Number(r.weight_kg) || 0 })))
+    })()
+    return () => { cancelled = true }
+  }, [sectionId, sessionId])
+
+  // A top-up into a bag THIS session bagged is already inside that bag's
+  // captured weight in value.outputs — counting it again would double it. In
+  // practice the topped bag is from an earlier day (STRB-310826-*,
+  // STIS-280826-*), which is why the total was short rather than over.
+  const ownSerials = new Set((value.outputs ?? []).map(b => b.serial))
+  const topUpKg = topUpRows.filter(r => !ownSerials.has(r.serial)).reduce((t, r) => t + r.kg, 0)
+  const totalOutWithTopUps = totalOut + topUpKg
   const byType: Record<string, number> = {}
   value.outputs.forEach(b => { byType[b.productType] = (byType[b.productType] ?? 0) + 1 })
   const nudge = nextStepNudge('sieving', byType)
@@ -584,7 +623,7 @@ export function SievingCapture({
       <div className="grid grid-cols-2 gap-2.5">
         {([
           { id: 'debag', label: 'Debagging', dir: 'in',  Icon: Package,      count: debagCount, kg: totalIn,  color: '#1d4ed8' },
-          { id: 'bag',   label: 'Bagging',   dir: 'out', Icon: PackageCheck,  count: bagCount,   kg: totalOut, color: '#d97706' },
+          { id: 'bag',   label: 'Bagging',   dir: 'out', Icon: PackageCheck,  count: bagCount,   kg: totalOutWithTopUps, color: '#d97706' },
         ] as const).map(t => {
           const on = tab === t.id
           // Two bold, distinct colours — blue for "in", amber for "out" — so the
@@ -792,9 +831,21 @@ export function SievingCapture({
               shift — what's left in the tower to be consumed the next day. */}
           {shift === 'afternoon' && bucketCard}
 
+          {topUpKg > 0 && (
+            <div className="flex items-center justify-between px-4 py-2 text-[12px] text-stone-500">
+              <span>Bagged into new bags</span>
+              <span className="font-mono">{totalOut.toFixed(1)} kg</span>
+            </div>
+          )}
+          {topUpKg > 0 && (
+            <div className="flex items-center justify-between px-4 py-2 text-[12px] text-violet-700">
+              <span className="flex items-center gap-1.5"><Scale size={12} /> Half-bag top-ups into existing bags</span>
+              <span className="font-mono">+{topUpKg.toFixed(1)} kg</span>
+            </div>
+          )}
           <div className="flex items-center justify-between px-4 py-3 bg-stone-900 text-white rounded-2xl">
             <span className="text-[12px] font-medium opacity-80">Total bagged out</span>
-            <span className="font-mono font-bold text-[16px]">{totalOut.toFixed(1)} kg</span>
+            <span className="font-mono font-bold text-[16px]">{totalOutWithTopUps.toFixed(1)} kg</span>
           </div>
         </>
       )}
