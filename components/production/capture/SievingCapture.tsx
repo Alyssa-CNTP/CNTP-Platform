@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Plus, Trash2, Printer, PenLine, Package, PackageCheck, Scale, Sparkles, Lock, Pencil, Check } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { voidBagTag, fetchTopUpEventsForSession, type TopUpEvent } from '@/lib/production/scan-utils'
@@ -14,7 +14,9 @@ import type { ShiftAssignment } from '@/lib/supabase/database.types'
 import { logBucketElevator, outstandingBucketElevator, variantFamily } from '@/lib/production/bucket-elevator'
 import { n } from '@/lib/core/num'
 import { sievingTotals } from '@/lib/core/mass-balance/sieving'
+import { debagRowKey, missingDebagRows } from '@/lib/production/debag-reconcile'
 export { sievingTotals }
+export { debagRowKey }
 
 // ── Sieving output serial ─────────────────────────────────────────────────────
 // Format: ST{TYPE}-DDMMYY-NNN  (e.g. Fine Leaf → STFL-120826-003).
@@ -159,6 +161,7 @@ const LBL = 'text-[10px] font-semibold text-stone-500 uppercase tracking-widest'
 export function SievingCapture({
   assignment, variantWord, gradeLetter = 'A', shift = 'morning', locked, value, onChange, genSerial, operatorId, date,
   sectionId = 'sieving', sessionId,
+  otherBatchDebagKeys = [], otherBatchOutputSerials = [],
 }: {
   assignment: ShiftAssignment
   variantWord: string
@@ -172,6 +175,13 @@ export function SievingCapture({
   date: string   // session's dateParam (YYYY-MM-DD) — see nextSievingSerial
   sectionId?: string
   sessionId?: string | null
+  // What the session's OTHER batches already hold. prod_debagging and bag_tags
+  // are keyed on session_id with no batch discriminator, so the self-heal below
+  // cannot tell this batch's rows from a sibling batch's without being told —
+  // and a changeover mounts this component fresh and empty against a session
+  // that already has rows. See the self-heal effect.
+  otherBatchDebagKeys?: string[]
+  otherBatchOutputSerials?: string[]
 }) {
   const [tab, setTab]       = useState<'debag' | 'bag'>('debag')
   const [picking, setPicking] = useState(false)
@@ -202,6 +212,19 @@ export function SievingCapture({
 
   const patch = (p: Partial<SievingData>) => onChange({ ...value, ...p })
 
+  // Read by the async self-heal below so it reconciles against the CURRENT batch
+  // and the CURRENT sibling rows, not whatever they were when it started. Refs
+  // rather than effect deps on purpose: as deps they would re-run the whole
+  // reconcile on every keystroke. Synced in an effect rather than during render —
+  // the self-heal only reads them after awaiting its queries, by which point
+  // effects have committed, so there is nothing to gain from writing them earlier.
+  const valueRef = useRef(value)
+  const excludeRef = useRef({ debagKeys: otherBatchDebagKeys, outputSerials: otherBatchOutputSerials })
+  useEffect(() => { valueRef.current = value })
+  useEffect(() => {
+    excludeRef.current = { debagKeys: otherBatchDebagKeys, outputSerials: otherBatchOutputSerials }
+  })
+
   // Shared by both self-heal effects below: order strictly by when each row
   // was actually logged, never by array position — appending restored rows
   // to the end (their natural query order) is what produced "Bag 1"..N
@@ -213,90 +236,94 @@ export function SievingCapture({
     return [...rows].sort((a, b) => t(a) - t(b))
   }
 
-  // Self-heal outputs from bag_tags. Every output bag's bag_tags row is
-  // written atomically the instant it's added (see addOutput below) — a
-  // completely separate write path from this session's own draft_data,
-  // which is only debounce-saved. If that save gets disrupted mid-shift (a
-  // deploy restart landing while the tab is open, a dropped connection, a
-  // stale second tab's autosave clobbering a newer one) bag_tags stays
-  // correct while `outputs` can silently fall behind, showing the operator
-  // fewer bags than actually exist even though nothing was lost. On load,
-  // pull back in any bag_tags row for this exact session that `outputs`
-  // doesn't have — the ledger is always the source of truth. Never removes
-  // anything outputs already has, and never writes to bag_tags/scan_events
-  // itself — purely a read-and-backfill of the local display.
-  useEffect(() => {
-    if (!sessionId) return
-    let cancelled = false
-    ;(async () => {
-      const { data } = await getDb().schema('production').from('bag_tags')
-        .select('serial_number, product_type, acumatica_id, lot_number, weight_kg, destination, printed_at')
-        .eq('section_id', 'sieving').eq('session_id', sessionId).neq('status', 'voided')
-      if (cancelled || !data) return
-      const known = new Set(value.outputs.map(o => o.serial))
-      const missing = (data as any[]).filter(t => !known.has(t.serial_number))
-      const restored: OutBag[] = missing.map(t => ({
-        id: crypto.randomUUID(), serial: t.serial_number, productType: t.product_type,
-        code: t.acumatica_id ?? null, weight: String(t.weight_kg ?? ''), batch: t.lot_number ?? '',
-        // A bag_tags row from before the grade column was populated for this
-        // batch falls back to the batch's own current grade — the same
-        // fallback addOutput() itself uses when creating one fresh.
-        destination: t.destination ?? gradeLetter, printed: !!t.printed_at,
-        tagMethod: t.printed_at ? 'printed' : null, secured: true,
-        logged_at: t.printed_at ?? new Date().toISOString(),
-      }))
-      // Re-sort even when nothing is missing: a session already fully
-      // restored by an earlier run of this effect still had its rows in
-      // query order, not time order, until this check — the merge above
-      // alone doesn't fire again once outputs already has everything.
-      const merged = byLoggedAt([...value.outputs, ...restored])
-      const changed = merged.length !== value.outputs.length || merged.some((r, i) => r !== value.outputs[i])
-      if (!changed) return
-      patch({ outputs: merged })
-    })()
-    return () => { cancelled = true }
-  }, [sessionId])
-
-  // Self-heal debagging inputs from prod_debagging. Unlike outputs above,
-  // debag rows have no per-row atomic write of their own — persist() in
-  // [section]/page.tsx deletes every prod_debagging row for this session
-  // and reinserts the CURRENT `debag` array, every save. That means if
-  // `debag` ever reverts to a stale, shorter array (the same disruption
-  // that hit outputs), the very next save would delete-and-reinsert only
-  // the stale rows — silently discarding the real ones prod_debagging
-  // already had. Restoring them into `debag` first, before that can
-  // happen, is what actually prevents the loss.
+  // ── Self-heal this batch's rows from the ledgers ──────────────────────────
+  // Output bags (bag_tags, written atomically the instant a bag is added) and
+  // debagging inputs (prod_debagging, rewritten wholesale by persist() on every
+  // save) can both fall behind draft_data if a save is disrupted mid-shift — a
+  // deploy restart landing while the tab is open, a dropped connection, a stale
+  // second tab's autosave clobbering a newer one. The ledger is the source of
+  // truth, so whatever it holds that this batch doesn't is pulled back in. Never
+  // removes anything, and never writes to bag_tags/scan_events itself.
   //
-  // debag rows have no serial (farm bags aren't in bag_tags) and no stable
-  // id round-trips to prod_debagging today, so matching what's "already
-  // known" uses the same fields buildDebag() itself writes: the operator's
-  // own bag-number label (kept in `notes`), lot number, and net weight —
-  // in practice always unique together for a real debag entry.
+  // ONE effect and ONE patch, deliberately. As two effects they each built their
+  // patch from the same mount-time `value` closure, so whichever query resolved
+  // last silently discarded the other's restore — outputs were being dropped
+  // that way, invisibly, whenever the debag query won the race.
+  //
+  // Both ledgers are keyed on session_id ALONE — neither carries a batch
+  // discriminator, so a session that has been through a changeover has every
+  // batch's rows sitting under one id. `excludeRef` carries what the session's
+  // OTHER batches already hold, so those rows are not read as missing and copied
+  // into this one: a row living in another batch of draft_data is not lost, and
+  // restoring it here duplicates it. Without that exclusion every changeover
+  // mounted an empty batch (key={active.id}), restored the whole session into
+  // it, and doubled the session's inputs on the next save — 8 farm bags became
+  // 258 and Sieving's mass balance read +86 t.
   useEffect(() => {
     if (!sessionId) return
     let cancelled = false
     ;(async () => {
-      const { data } = await getDb().schema('production').from('prod_debagging')
-        .select('notes, lot_number, product_type, kg_gross, kg_nett, delivery_date, grade, bagging_time, created_at')
-        // 'Farm Bag' going forward, '500kg Farm Bag' on rows captured before the
-        // rename — historical rows keep the old stored value, never backfilled.
-        .eq('session_id', sessionId).in('product_type', ['Farm Bag', '500kg Farm Bag']).eq('is_spillage', false)
-      if (cancelled || !data) return
-      const key = (bagNo: string, lot: string, nett: number) => `${bagNo.trim()}|${lot.trim()}|${nett}`
-      const known = new Set(value.debag.map(r => key(r.bag_no, r.lot, n(r.nett))))
-      const missing = (data as any[]).filter(d => !known.has(key(d.notes ?? '', d.lot_number ?? '', Number(d.kg_nett) || 0)))
-      const restored: DebagRow[] = missing.map(d => ({
-        id: crypto.randomUUID(), bag_no: d.notes ?? '', lot: d.lot_number ?? '',
-        gross: d.kg_gross != null ? String(d.kg_gross) : '', nett: String(d.kg_nett ?? ''),
-        delivery_date: d.delivery_date ?? '', grade: d.grade ?? '',
-        secured: true, logged_at: d.bagging_time ?? d.created_at ?? new Date().toISOString(),
-      }))
-      // Re-sort even when nothing is missing — same reasoning as the
-      // outputs effect above.
-      const merged = byLoggedAt([...value.debag, ...restored])
-      const changed = merged.length !== value.debag.length || merged.some((r, i) => r !== value.debag[i])
-      if (!changed) return
-      patch({ debag: merged })
+      const db = getDb()
+      const [tagsRes, debagRes] = await Promise.all([
+        db.schema('production').from('bag_tags')
+          .select('serial_number, product_type, acumatica_id, lot_number, weight_kg, destination, printed_at')
+          .eq('section_id', 'sieving').eq('session_id', sessionId).neq('status', 'voided'),
+        db.schema('production').from('prod_debagging')
+          .select('notes, lot_number, product_type, kg_gross, kg_nett, delivery_date, grade, bagging_time, created_at')
+          // 'Farm Bag' going forward, '500kg Farm Bag' on rows captured before the
+          // rename — historical rows keep the old stored value, never backfilled.
+          .eq('session_id', sessionId).in('product_type', ['Farm Bag', '500kg Farm Bag']).eq('is_spillage', false),
+      ])
+      if (cancelled) return
+
+      // The latest value, never the mount-time closure — the operator may have
+      // typed a bag in while those two queries were in flight.
+      const cur = valueRef.current
+      const exclude = excludeRef.current
+      const next: Partial<SievingData> = {}
+
+      const tags = (tagsRes.data as any[]) ?? []
+      if (tags.length) {
+        // Output bags have a serial, which is unique per bag, so identity is exact.
+        const known = new Set([...cur.outputs.map(o => o.serial), ...exclude.outputSerials])
+        const restored: OutBag[] = tags.filter(t => !known.has(t.serial_number)).map(t => ({
+          id: crypto.randomUUID(), serial: t.serial_number, productType: t.product_type,
+          code: t.acumatica_id ?? null, weight: String(t.weight_kg ?? ''), batch: t.lot_number ?? '',
+          // A bag_tags row from before the grade column was populated for this
+          // batch falls back to the batch's own current grade — the same
+          // fallback addOutput() itself uses when creating one fresh.
+          destination: t.destination ?? gradeLetter, printed: !!t.printed_at,
+          tagMethod: t.printed_at ? 'printed' : null, secured: true,
+          logged_at: t.printed_at ?? new Date().toISOString(),
+        }))
+        // Re-sort even when nothing was missing: a batch already fully restored
+        // by an earlier run still had its rows in query order, not time order.
+        const merged = byLoggedAt([...cur.outputs, ...restored])
+        if (merged.length !== cur.outputs.length || merged.some((r, i) => r !== cur.outputs[i])) next.outputs = merged
+      }
+
+      const rows = (debagRes.data as any[]) ?? []
+      if (rows.length) {
+        // Debag rows have no stable identity, and rows off one farm pallet are
+        // byte-identical, so this reconciles on multiplicity rather than set
+        // membership — see lib/production/debag-reconcile.ts for why, and its
+        // test file for the incident it pins.
+        const restored: DebagRow[] = missingDebagRows(
+          rows,
+          d => debagRowKey(d.notes, d.lot_number, d.kg_nett),
+          [...cur.debag.map(r => debagRowKey(r.bag_no, r.lot, r.nett)), ...exclude.debagKeys],
+        )
+          .map(d => ({
+            id: crypto.randomUUID(), bag_no: d.notes ?? '', lot: d.lot_number ?? '',
+            gross: d.kg_gross != null ? String(d.kg_gross) : '', nett: String(d.kg_nett ?? ''),
+            delivery_date: d.delivery_date ?? '', grade: d.grade ?? '',
+            secured: true, logged_at: d.bagging_time ?? d.created_at ?? new Date().toISOString(),
+          }))
+        const merged = byLoggedAt([...cur.debag, ...restored])
+        if (merged.length !== cur.debag.length || merged.some((r, i) => r !== cur.debag[i])) next.debag = merged
+      }
+
+      if (Object.keys(next).length) onChange({ ...cur, ...next })
     })()
     return () => { cancelled = true }
   }, [sessionId])

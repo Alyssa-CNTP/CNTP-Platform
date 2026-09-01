@@ -727,8 +727,6 @@ function CaptureInner() {
   const totalIn    = inputs.reduce((s, b) => s + b.weight_kg, 0)
   const totalOut   = outputs.reduce((s, b) => s + b.weight_kg, 0)
   const balance    = totalIn - totalOut
-  const balColor   = Math.abs(balance) <= 15 ? 'text-ok' : Math.abs(balance) <= 30 ? 'text-warn' : 'text-err'
-  const balBg      = Math.abs(balance) <= 15 ? 'bg-ok/5 border-ok/20' : Math.abs(balance) <= 30 ? 'bg-warn/5 border-warn/20' : 'bg-err/5 border-err/20'
 
   // Output breakdown by product type
   const byType: Record<string, { count: number; kg: number }> = {}
@@ -1270,7 +1268,7 @@ function CaptureInner() {
         {tab === 'totals' && (
           <div className="space-y-4">
             {/* KPI row */}
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-2 gap-3">
               <div className="bg-sky-50 border border-sky-200 rounded-2xl p-4 text-center">
                 <div className="text-[10px] font-semibold text-stone-500 uppercase tracking-wide mb-1">Total In</div>
                 <div className="font-mono font-bold text-[22px] text-sky-700">{totalIn.toFixed(1)}</div>
@@ -1281,20 +1279,7 @@ function CaptureInner() {
                 <div className="font-mono font-bold text-[22px] text-ok">{totalOut.toFixed(1)}</div>
                 <div className="text-[10px] text-stone-400">kg</div>
               </div>
-              <div className={`${balBg} border rounded-2xl p-4 text-center`}>
-                <div className="text-[10px] font-semibold text-stone-500 uppercase tracking-wide mb-1">Balance</div>
-                <div className={`font-mono font-bold text-[22px] ${balColor}`}>{Math.abs(balance).toFixed(1)}</div>
-                <div className="text-[10px] text-stone-400">kg</div>
-              </div>
             </div>
-
-            {/* Tolerance warning */}
-            {Math.abs(balance) > 15 && (
-              <div className="flex items-center gap-2.5 px-4 py-3 rounded-xl bg-warn/8 border border-warn/20 text-warn text-[12px]">
-                <AlertTriangle size={14} className="flex-shrink-0"/>
-                Balance exceeds 15 kg tolerance — please review inputs and outputs before submitting
-              </div>
-            )}
 
             {/* Output breakdown table */}
             {Object.keys(byType).length > 0 && (
@@ -1348,12 +1333,6 @@ function CaptureInner() {
                     <div className="flex items-center justify-between px-4 py-2.5 bg-stone-50">
                       <span className="text-[12px] font-semibold text-stone-700">Total (I)</span>
                       <span className="font-mono font-bold text-[14px] text-purple-700">{totalI.toFixed(1)} kg</span>
-                    </div>
-                    <div className="flex items-center justify-between px-4 py-2.5">
-                      <span className="text-[12px] text-stone-600">Mass balance (G − I)</span>
-                      <span className={`font-mono font-bold text-[13px] ${Math.abs(totalOut - totalI) <= 15 ? 'text-ok' : 'text-warn'}`}>
-                        {(totalOut - totalI).toFixed(1)} kg
-                      </span>
                     </div>
                   </div>
                 </div>
@@ -1585,10 +1564,6 @@ function CaptureInner() {
                 <div className="flex items-center justify-between px-4 py-3">
                   <span className="text-[13px] text-stone-600">Outputs</span>
                   <span className="font-mono font-bold text-[13px] text-ok">{outputs.length} bags · {totalOut.toFixed(1)} kg</span>
-                </div>
-                <div className={`flex items-center justify-between px-4 py-3 ${Math.abs(balance) > 15 ? 'bg-warn/5' : ''}`}>
-                  <span className="text-[13px] text-stone-600">Balance</span>
-                  <span className={`font-mono font-bold text-[13px] ${balColor}`}>{Math.abs(balance).toFixed(1)} kg {Math.abs(balance) > 15 ? '⚠' : '✓'}</span>
                 </div>
                 {outputs.length > 0 && (
                   <div className="px-4 py-3">

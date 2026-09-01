@@ -2,9 +2,95 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-01 — Alyssa (Sieving changeover row duplication; additive UI stood down)
+
+**Files changed:** `components/production/capture/SievingCapture.tsx`, `lib/production/debag-reconcile.ts` (new), `lib/production/debag-reconcile.test.ts` (new), `app/(app)/production/capture/[section]/page.tsx`, `components/production/capture/CaptureOverview.tsx`, `components/production/LiveCaptureKPIs.tsx`, `app/(app)/production/orders/page.tsx`, `app/(app)/production/orders/[id]/page.tsx`, `app/(app)/production/live/capture/page.tsx`, `supabase/migrations/20260901_001_repair_sieving_changeover_duplication_DRAFT.sql` (new)
+
+### The bug: a changeover duplicated the session's debagging rows
+
+Sieving / 2026-09-01 / morning had **258 farm-bag rows of one identical bag**
+(E-744, lot GS-0314, 350.0 kg) — 90 336 kg of input against 4 260 kg out, and 259
+rows on the production order's Debagging panel.
+
+`SievingCapture`'s debag self-heal reads `production.prod_debagging` scoped to
+`session_id`. That table carries **no batch discriminator**, so after a changeover
+every batch's rows sit under one session id. The component is mounted with
+`key={active.id}`, so a changeover remounts it against a brand-new *empty* batch —
+and the self-heal then read the entire session as "missing from this batch" and
+restored a copy of all of it into the new batch. `persist()` wrote that back, so
+each changeover doubled the row count: 8, 16, 32, 64, 128.
+
+Replaying that logic reproduces the screenshots exactly — per-batch 2800, 5600,
+11200, 22400, 44800 kg, 258 rows, 90 336 kg total.
+
+The page now tells the component what the session's **other** batches already
+hold, so a row living in another batch of `draft_data` is no longer read as lost
+and copied. That reconciliation moved to `lib/production/debag-reconcile.ts` with
+tests, because it also had to change shape: a debag row's identity is (bag label,
+lot, net weight), which is **not unique** — bags off one farm pallet are
+byte-identical — so it now matches on **multiplicity**. A `Set` called the
+ledger's ten identical rows "known" as soon as the batch held one, quietly
+recovering none of the nine that were lost, which is the loss the self-heal exists
+to prevent. The test that pins this fails against the old `Set` behaviour.
+
+The two self-heal effects were also merged into one. They each built their patch
+from the same mount-time `value` closure, so whichever query resolved last
+silently discarded the other's restore — outputs were being dropped that way
+whenever the debag query won the race. That race is also why `bag_tags` stayed
+clean and only inputs multiplied, which makes `bag_tags` the trustworthy record
+for the repair.
+
+### Additive UI stood down, to be rebuilt
+
+The derived layer was reporting figures computed from those duplicated rows, so it
+read confidently and wrongly (+86 076 kg, 5% yield). It is removed from the
+capture and orders flow rather than left showing numbers nobody can trust:
+
+- **Production order** — the "Mass balance — full run" panel, the Yield field, the
+  per-shift Input/Output/Balance grid, and the bucket-elevator reclassification
+  that moved an afternoon debag row onto the output side. Debagging rows now show
+  as captured.
+- **Orders list** — the KPI strip (tons, tons/day, tons/week, throughput, yield),
+  the whole Analytics view and its toggle, the per-record variance pill and yield,
+  and the mass-balance flags in the actions panel.
+- **Capture screen** — `MassBalanceTable` on the Production and Sign-off tabs, the
+  per-batch `BalanceBadge`, and the balance readout in the changeover prompt. The
+  capture tab now shows what went in (debagging) and what came out (bagging).
+- **Capture Overview** — the KPI strip (kg in, kg out, yield, tons, bags, balance
+  ±tol), the output-share bars, and the balance line in the copy-for-Acumatica
+  export.
+- **Live capture / LiveCaptureKPIs** — the balance tile, tolerance warning,
+  Granule G − I line and the variance column.
+
+**A general mass balance stays on the Overview**: total in, total out, difference.
+Nothing more — no tolerance verdict, no yield, no per-shift decomposition. Both
+figures are the totals of the debagging and bagging tables directly above it, so it
+cannot disagree with them.
+
+**This is a UI removal only.** `prod_mass_balance` is still written on every save,
+the checks trail still records its shutdown mass-balance event, and
+`/api/production/orders-kpis` still exists and still works — nothing on these pages
+calls it. So there is no gap in the data to backfill when it is rebuilt.
+
+Lint 3028 → 3022; type errors unchanged at the 34 baseline; `npm run test` 86
+passing, including 9 new.
+
+### Data repair — written, NOT run
+
+`20260901_001_..._DRAFT.sql` inspects, repairs and sweeps. It **keeps every batch
+record** — a changeover is a real event, and 31 Aug genuinely ran Export then
+changed over to Export Blend — and removes only rows carrying the copy signature:
+batch *k* holding exactly the union of batches 1..*k*-1 and nothing of its own. A
+batch that captured rows of its own is left alone. `prod_debagging` is trimmed
+oldest-first to the corrected count per row identity rather than deleted and
+rebuilt, so the originals survive and the order panels stay populated. `bag_tags`,
+`prod_bagging` and `scan_events` are not written at all.
+
+Needs a human to read Step 1 before Step 2 runs, and the code fix must be deployed
+first or the next changeover re-creates the duplication.
 ## 2026-09-01 — Alyssa (Per-section mass balance: ±1% tolerance, Granule dust carry-over, Blender bag-to-bag transfers)
 
-**Files changed:** `lib/core/mass-balance/{tolerance,types,granule,index}.ts` (tolerance.ts new), `lib/core/mass-balance/section-rules.test.ts` (new), `lib/production/{capture-config,carryover,order-detail,shift-report-builder}.ts`, `lib/constants/manufacturing.ts`, `components/production/capture/{Granule,Blender,Pasteuriser,Refining}Capture.tsx`, `components/production/capture/{CaptureOverview,MassBalanceTable}.tsx`, `components/production/LiveCaptureKPIs.tsx`, `app/(app)/production/capture/[section]/page.tsx`, `app/(app)/production/orders/page.tsx`, `app/(app)/supervisor/analytics/page.tsx`, `app/api/production/{capture-ratings,dashboard-rows,orders-kpis}/route.ts`, `supabase/migrations/20260901_002_dust_carryover_variant.sql` (new), `supabase/migrations/20260901_003_mass_balance_tolerance_pct.sql` (new), `ARCHITECTURE.md`
+**Files changed:** `lib/core/mass-balance/{tolerance,types,granule,index}.ts` (tolerance.ts new), `lib/core/mass-balance/section-rules.test.ts` (new), `lib/production/{capture-config,carryover,order-detail,shift-report-builder}.ts`, `lib/constants/manufacturing.ts`, `components/production/capture/{Granule,Blender,Pasteuriser,Refining}Capture.tsx`, `components/production/capture/CaptureOverview.tsx`, `app/(app)/production/capture/[section]/page.tsx`, `app/(app)/supervisor/analytics/page.tsx`, `app/api/production/{capture-ratings,dashboard-rows,orders-kpis}/route.ts`, `supabase/migrations/20260901_002_dust_carryover_variant.sql` (new), `supabase/migrations/20260901_003_mass_balance_tolerance_pct.sql` (new), `ARCHITECTURE.md`
 
 Mass balance is calculated differently for every section. The previous change gave the five
 sections one shared *vocabulary*; this one implements each section's own specification on top
@@ -98,23 +184,28 @@ Refining's "bags from the outside" count at their typed weight like any other in
 in the balance treats them differently. What they need is a `bag_tags` record, not a different
 formula, so no formula changed; a test pins it.
 
-### Also fixed
+### Merged after the derived-figures stand-down
 
-The per-batch balance badge on the capture page computed `totalIn − totalOut`, ignoring
-carry-over — so a batch that legitimately left material in the line showed that material as a
-shortfall. It now reads `pt.balance`.
+This branch was open while the entry above stood down the derived mass-balance displays —
+`MassBalanceTable`, the YieldStrip, the per-batch balance badges, the flag counts on Live
+Capture KPIs and Production Orders. Those are the surfaces this change was going to relabel,
+so the display half of it is gone: no `carryOverLabel` prop, no per-batch badge fix, no
+`MassBalanceTable`. The stand-down wins; a corrected figure nobody is meant to be reading yet
+is still a figure nobody is meant to be reading.
 
-`MassBalanceTable`'s carry-over column was hard-labelled "left in elevator", which is wrong on
-the Granule Line. It takes a `carryOverLabel` now: "left in elevator" for Sieving, "dust for
-tomorrow" for Granule.
+What survives is all of the calculation: the ±1% rule, Granule's dust carry-over, the Blender
+transfer subtraction, the variant-family gates, and `prod_mass_balance.tolerance_kg` finally
+being written. Those feed the persisted row, the checks panel's mass-balance snapshot and
+`v_session_yield` — so when the displays come back, they come back reading a correct figure
+rather than needing this work done again.
 
 **Verification:** 97 unit tests pass (up from 77), boundary lint clean, production build
 compiles, type errors unchanged at the 34 baseline.
 
-**Migrations pending — apply to STAGING first:** `20260901_002_dust_carryover_variant.sql`
-and `20260901_003_mass_balance_tolerance_pct.sql`. Also still pending from the previous
-change: `20260901_001_prod_bagging_unique_index_drift.sql` (run its pre-flight duplicate query
-first).
+**Migrations:** `20260901_002_dust_carryover_variant.sql` and
+`20260901_003_mass_balance_tolerance_pct.sql` are applied to STAGING. Production needs both
+when this is promoted. Still pending everywhere:
+`20260901_001_prod_bagging_unique_index_drift.sql` (run its pre-flight duplicate query first).
 
 ---
 
