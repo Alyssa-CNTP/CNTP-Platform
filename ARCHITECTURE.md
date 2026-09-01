@@ -67,8 +67,13 @@ features/
 > `lib/core/**` may not import from `features/**` or `app/**`.
 > Features import core. Core never knows a feature exists.
 
-Note `npm run build` sets `DISABLE_ESLINT_PLUGIN=true`, so the build will **not** catch a
-violation. CI runs `npm run lint` separately for this reason. Do not remove that step.
+Run it with **`npm run lint:boundaries`**. This is the hard gate in CI.
+
+It is a *separate* command from `npm run lint` on purpose. The build sets
+`DISABLE_ESLINT_PLUGIN=true` so it catches nothing, and a full lint of this repo currently
+reports ~3000 pre-existing errors — the one rule that protects the architecture would be
+invisible among them. The boundary rules live in `eslint.boundaries.mjs` and are imported
+by `eslint.config.mjs`, so the two entry points cannot drift.
 
 ---
 
@@ -163,6 +168,22 @@ and `NAV` in `components/layout/Sidebar.tsx`.
 ---
 
 ## 8. Testing
+
+### What CI actually enforces
+
+| Step | Kind |
+|---|---|
+| `npm run lint:boundaries` | **Hard gate.** The architecture rule. No exceptions. |
+| `npm run test` | **Hard gate.** Unit tests over `lib/core/**`. |
+| Typecheck | **Ratchet** — fails only if the count rises above the baseline. |
+| Lint (full) | **Ratchet** — same. |
+
+The two ratchets exist because the repo has ~3000 pre-existing lint errors and 36 type
+errors, and both `DISABLE_ESLINT_PLUGIN=true` and `typescript.ignoreBuildErrors: true` are
+set, which is how they accumulated unnoticed. Demanding zero would put CI permanently red
+and teach everyone to ignore it; demanding "no worse than today" stops the backlog growing
+while it is paid down. **Lower the baselines in `.github/workflows/ci.yml` as you clear
+errors — never raise them.**
 
 **`npm run test`** — vitest over `lib/core/**`. Runs in CI on every PR. Core changes
 require tests. These are characterisation tests: they pin what the code *currently* does,
