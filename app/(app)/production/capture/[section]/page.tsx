@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useRef, Suspense } from 'react'
+import { useState, useEffect, useRef, useMemo, Suspense } from 'react'
 import Link from 'next/link'
 import { useSearchParams, useRouter, useParams } from 'next/navigation'
 import { format, parseISO, differenceInCalendarDays } from 'date-fns'
@@ -17,7 +17,7 @@ import {
   SievingCapture, emptySievingData, sievingTotals,
   type SievingData, type Shift,
 } from '@/components/production/capture/SievingCapture'
-import { MassBalanceTable, BalanceBadge, type BalanceRow } from '@/components/production/capture/MassBalanceTable'
+import { debagRowKey } from '@/lib/production/debag-reconcile'
 import {
   RefiningCapture, emptyRefiningData, refiningTotals,
   type RefiningData,
@@ -47,8 +47,7 @@ import { CleaningPanel } from '@/components/production/capture/CleaningPanel'
 import { ChecksPanel } from '@/components/production/capture/ChecksPanel'
 import { ChecksStatusStrip } from '@/components/production/capture/ChecksStatusStrip'
 import { HourlyVsdPrompt } from '@/components/production/capture/HourlyVsdPrompt'
-import { CaptureOverview, type BlenderRatioGroup } from '@/components/production/capture/CaptureOverview'
-import { getBlendComponents, groupComponentsByItem, type BlendIngredientGroup } from '@/lib/production/bom'
+import { CaptureOverview } from '@/components/production/capture/CaptureOverview'
 import { normalizeBatch } from '@/lib/production/batch-key'
 import { ensureCheckRecord, appendCheckEvent, loadCheckRecord } from '@/lib/production/checks-db'
 import { machineChecksFor } from '@/lib/production/checks-config'
@@ -59,7 +58,6 @@ import { getMySignatureStatus, type MySignatureStatus } from '@/lib/production/e
 import type { Operator, ShiftAssignment } from '@/lib/supabase/database.types'
 import { MessageSquare } from 'lucide-react'
 import { productionShiftNow, SHIFT_LABEL } from '@/lib/production/shifts'
-import { ShiftBagLog } from '@/components/production/capture/ShiftBagLog'
 import { n } from '@/lib/core/num'
 
 type Tab = 'production' | 'checks' | 'cleaning' | 'overview' | 'signoff' | 'messages'
@@ -274,9 +272,6 @@ function CaptureScreen() {
   // shift put in and taken out", which a record on a different grade is still
   // part of, while a mass balance is only ever allowed to combine records
   // running the same thing (hence the filtered set above).
-  const [shiftOtherProductions, setShiftOtherProductions] = useState<Production[]>([])
-  const [blenderRatios, setBlenderRatios] = useState<BlenderRatioGroup[]>([])
-  const bomGroupsCacheRef = useRef<Map<string, BlendIngredientGroup[]>>(new Map())
   const [runId, setRunId]         = useState<string | null>(null)   // this session's production run
   const [continueRun, setContinueRun] = useState<{ id: string; production_order: string | null; variant: string | null; grade: string | null } | null>(null)
   const [endOfRun, setEndOfRun]   = useState(false)       // supervisor: close the run on approval
@@ -406,7 +401,6 @@ function CaptureScreen() {
       )
       const siblingProds = siblingRows.flatMap(r => (r.draft_data?.productions ?? []) as Production[])
       setSiblingProductions(siblingProds.filter(p => activeMatchKeys.has(productionMatchKey(p, sectionId))))
-      setShiftOtherProductions(siblingProds)
       if ((sess as any)?.comments) setComments((sess as any).comments)
 
       // Surface the most recent handover note left on this line (previous shift).
@@ -564,7 +558,6 @@ function CaptureScreen() {
       )
       const siblingProds = siblingRows.flatMap(r => (r.draft_data?.productions ?? []) as Production[])
       setSiblingProductions(siblingProds.filter(p => activeMatchKeys.has(productionMatchKey(p, sectionId))))
-      setShiftOtherProductions(siblingProds)
 
       // Mirror whichever source last populated otherShiftProductions: once a run
       // is linked, that effect (below) widens it to every session sharing the
@@ -724,50 +717,6 @@ function CaptureScreen() {
       )
     } catch { /* storage full — best-effort */ }
   }, [productions, loading, status])
-
-  // ── Blend component ratio for Overview — target vs actual per ingredient,
-  // summed across every Blender production sharing a blend code (both shifts,
-  // same as the rest of Overview's totals). BOM lookups are cached per bomId
-  // so retyping a weight doesn't refetch the recipe on every keystroke.
-  useEffect(() => {
-    if (!isBlenderSection(sectionId)) { setBlenderRatios([]); return }
-    const allProds = [...productions, ...siblingProductions, ...otherShiftProductions]
-    const byBom = new Map<string, Production[]>()
-    allProds.forEach(p => {
-      const bomId = (p.data as BlenderData)?.bomId
-      if (!bomId) return
-      const arr = byBom.get(bomId) ?? []
-      arr.push(p)
-      byBom.set(bomId, arr)
-    })
-    if (byBom.size === 0) { setBlenderRatios([]); return }
-    let cancelled = false
-    Promise.all(Array.from(byBom.entries()).map(async ([bomId, prods]) => {
-      let groups = bomGroupsCacheRef.current.get(bomId)
-      if (!groups) {
-        groups = groupComponentsByItem(await getBlendComponents(bomId))
-        bomGroupsCacheRef.current.set(bomId, groups)
-      }
-      const byItem: Record<string, number> = {}
-      let totalIn = 0
-      prods.forEach(p => {
-        ;((p.data as BlenderData).inputs ?? []).forEach(r => {
-          const kg = parseFloat(String(r.weight).replace(',', '.')) || 0
-          byItem[r.itemKey] = (byItem[r.itemKey] ?? 0) + kg
-          totalIn += kg
-        })
-      })
-      return {
-        bomId,
-        rows: groups!.map(g => ({
-          label: g.label, kg: byItem[g.key] ?? 0,
-          actualPct: totalIn > 0 ? ((byItem[g.key] ?? 0) / totalIn) * 100 : 0,
-          targetPct: g.targetPct * 100,
-        })),
-      }
-    })).then(ratios => { if (!cancelled) setBlenderRatios(ratios) })
-    return () => { cancelled = true }
-  }, [sectionId, productions, siblingProductions, otherShiftProductions])
 
   // ── Save ~2.5s after each change (timers fire while the tab is active) ────
   useEffect(() => {
@@ -1773,6 +1722,25 @@ function CaptureScreen() {
   }
 
   const locked = status === 'approved'
+  // What the session's OTHER batches already hold, for SievingCapture's self-heal.
+  // prod_debagging and bag_tags are keyed on session_id alone — no batch
+  // discriminator — so a changeover (addProduction) leaves every batch's rows
+  // under one id, and the freshly-mounted empty batch would otherwise read the
+  // whole session as "missing" and restore a copy of it into itself, doubling the
+  // session's inputs on the next save. Only THIS session's batches: the self-heal
+  // queries are session-scoped, so siblings/other shifts are already out of range.
+  //
+  // Guarded on the section kind, never on a field name — `data` is the section
+  // union and only Sieving's arm has these shapes (§4).
+  const otherBatchRows = useMemo(() => {
+    if (kind !== 'sieving') return { debagKeys: [] as string[], outputSerials: [] as string[] }
+    const others = productions.filter((_, i) => i !== activeIdx).map(p => p.data as SievingData)
+    return {
+      debagKeys: others.flatMap(d => (d.debag ?? []).map(r => debagRowKey(r.bag_no, r.lot, r.nett))),
+      outputSerials: others.flatMap(d => (d.outputs ?? []).map(o => o.serial)),
+    }
+  }, [kind, productions, activeIdx])
+
   const at = active ? prodTotals(active) : { totalIn: 0, totalOut: 0, carryOverIn: 0, carryOverOut: 0, balance: 0 }
   const totalIn = at.totalIn   // active batch — only used for the "machine running" cue
   // This shift's own contribution, and the other shift's (each with its own
@@ -1789,48 +1757,7 @@ function CaptureScreen() {
   // Material left in the elevator for tomorrow is work in progress, not a
   // shortfall — it comes out of Total Output and off the variance, and is shown
   // in its own column instead.
-  const rtVariance  = rt.balance
-  const rtWithinTol = Math.abs(rtVariance) <= massBalanceToleranceFor(sectionId)
   const multi = productions.length > 1
-  // Rows for the tabular balance — only shifts that actually captured material.
-  const balanceRows = [
-    (morningTotals.totalIn > 0 || morningTotals.totalOut > 0) ? { shift: 'Morning' as const, ...morningTotals } : null,
-    (afternoonTotals.totalIn > 0 || afternoonTotals.totalOut > 0) ? { shift: 'Afternoon' as const, ...afternoonTotals } : null,
-  ].filter(Boolean) as { shift: 'Morning' | 'Afternoon'; totalIn: number; totalOut: number; carryOverOut: number }[]
-  // The bucket-elevator note only applies to Sieving; Granule shows its custom
-  // PR-FM-026/7 decomposition (G = C* + carry-over/waste, and % yield); other
-  // lines get a generic run note.
-  let balanceNote: string | undefined =
-    sectionId === 'sieving'
-      ? undefined
-      : 'One balance for the whole production run (07h00–01h00), combined across every shift.'
-  if (sectionId === 'granule') {
-    const runProds = runSpansShifts ? [...productions, ...siblingProductions, ...otherShiftProductions] : [...productions, ...siblingProductions]
-    let A = 0, cStar = 0, carry = 0
-    runProds.forEach(p => {
-      const g = granuleTotals(p.data as GranuleData)
-      A += g.totalA; cStar += g.cStar; carry += g.D + g.E + g.wasteF
-    })
-    const G = cStar + carry
-    const yieldPct = A > 0 ? (G / A) * 100 : 0
-    balanceNote = `Granules produced (C*) ${cStar.toFixed(0)} kg + carry-over/waste ${carry.toFixed(0)} kg = ${G.toFixed(0)} kg produced (G), from ${A.toFixed(0)} kg dust mixed (A). Yield ${yieldPct.toFixed(0)}%.`
-  }
-  // A batch record this shift running a genuinely different variant/grade is
-  // deliberately kept out of the combined balance above (two different runs
-  // must never have their balances summed just because they share a shift) —
-  // but a SILENT exclusion reads to the operator as "this shift's whole
-  // story", making an already-bagged batch look like it's still owed. Surface
-  // it instead of hiding it, without changing what actually gets combined.
-  const siblingIds = new Set(siblingProductions.map(p => p.id))
-  const excludedThisShift = shiftOtherProductions.filter(p => !siblingIds.has(p.id) && hasCaptureData([p]))
-  if (excludedThisShift.length > 0) {
-    const ex = sessionTotals(excludedThisShift, shiftBal)
-    const exLabels = Array.from(new Set(excludedThisShift.map(p =>
-      (VARIANT_OPTIONS.find(v => v.value === p.variant)?.label ?? p.variant) || 'unspecified'
-    ))).join(', ')
-    const exNote = `Also on this shift, under a different variant/grade (${exLabels}): ${ex.totalIn.toFixed(0)} kg in, ${ex.totalOut.toFixed(0)} kg out — its own separate balance, not part of the total above.`
-    balanceNote = balanceNote ? `${balanceNote} ${exNote}` : exNote
-  }
 
   // Sign-off candidates: a person-logged-in tablet has a single verified operator;
   // a section/machine tablet resolves the signer from the rostered operators by PIN.
@@ -1894,14 +1821,6 @@ function CaptureScreen() {
   // "No data" session behind (the duplicate-orders bug).
   function startNewProduction() {
     const aL = assignment?.lot_number ?? ''
-    // The record being closed is still part of this shift, so hand it to the
-    // whole-shift bag log before the local state is cleared — otherwise "Bags
-    // this shift" drops to zero the moment a new batch record opens, since the
-    // sibling prod_sessions rows are only re-read on a page load. Deliberately
-    // NOT added to siblingProductions: that set feeds the mass balance, which
-    // may only ever combine records running the same variant/grade.
-    const closing = productionsRef.current.filter(p => hasCaptureData([p]))
-    if (closing.length) setShiftOtherProductions(prev => [...prev, ...closing])
     sessionRef.current = null
     setSessionId(null)
     setStatus('new')
@@ -1979,10 +1898,6 @@ function CaptureScreen() {
                 </p>
               ) : (
                 <>
-                  <div className="flex items-center gap-2">
-                    <span className="text-[13px] text-text-muted">Current mass balance:</span>
-                    <BalanceBadge variance={rtVariance} tolerance={massBalanceToleranceFor(sectionId)} />
-                  </div>
                   <p className="text-[13px] text-text-muted">
                     This carries into the new batch — leftover raw material is still part of the same run and can be bagged out as Blocks / Rolsiev Sticks / Indent Sticks under the new grade.
                   </p>
@@ -2278,43 +2193,6 @@ function CaptureScreen() {
                   <p className="text-[11px] text-stone-400">Bulk bags are locked in under this variant/grade — use <strong className="text-stone-500">Changeover</strong> below to switch.</p>
                 )}
 
-                {/* Per-batch breakdown — a changeover (addProduction) keeps the
-                    run's mass balance combined, but that combined figure alone
-                    doesn't show a changeover ever happened. Each batch's own
-                    numbers stay visible here so one can be sanity-checked
-                    without waiting for the combined total to explain itself. */}
-                {multi && (
-                  <div className="pt-3 border-t border-stone-100 space-y-1.5">
-                    <span className="text-[10px] font-semibold text-stone-400 uppercase tracking-widest">Batches this run ({productions.length})</span>
-                    {productions.map((p, i) => {
-                      const pt = prodTotals(p, shiftBal)
-                      const pVariance = pt.totalIn - pt.totalOut
-                      const isActive = i === activeIdx
-                      const variantLabel = VARIANT_OPTIONS.find(v => v.value === p.variant)?.label ?? p.variant ?? '—'
-                      const gradeLabel = p.grade ? DESTINATION_OPTIONS.find(o => o.value === p.grade)?.label ?? p.grade : ''
-                      return (
-                        <div key={p.id} className={`flex flex-wrap items-center gap-2 px-3 py-2 rounded-xl border text-[12px] ${isActive ? 'border-brand/40 bg-brand/5' : 'border-stone-200'}`}>
-                          <span className="font-semibold text-text shrink-0">P{i + 1}</span>
-                          <span className="text-stone-500 truncate flex-1">{variantLabel}{gradeLabel ? ` · ${gradeLabel}` : ''}</span>
-                          <span className="font-mono text-stone-600 shrink-0">{pt.totalIn.toFixed(1)} → {pt.totalOut.toFixed(1)} kg</span>
-                          <BalanceBadge variance={pVariance} tolerance={massBalanceToleranceFor(sectionId)} />
-                          <span className={`text-[10px] px-1.5 py-0.5 rounded-full shrink-0 ${isActive ? 'bg-brand/10 text-brand' : 'bg-stone-100 text-stone-500'}`}>
-                            {isActive ? 'current' : 'done'}
-                          </span>
-                        </div>
-                      )
-                    })}
-                  </div>
-                )}
-
-                {/* Granule's balance is custom and lives in one place only — the
-                    Overview. Other sections show the quick balance here too. */}
-                {rt.totalIn > 0 && sectionId !== 'granule' && (
-                  <div className="pt-3 border-t border-stone-100">
-                    <MassBalanceTable rows={balanceRows} tolerance={massBalanceToleranceFor(sectionId)} note={balanceNote} />
-                  </div>
-                )}
-
                 {/* Mid-shift grade/variant changeover — the leftover mass balance
                     stays visible and part of the run (can still go out as Blocks/
                     Sticks under the new grade) unless the closing batch is
@@ -2328,22 +2206,6 @@ function CaptureScreen() {
                   </div>
                 )}
               </div>
-
-              {/* Whole-shift bag reference — collapsed to a one-line in/out
-                  summary, expandable to every bag. Sits between the batch card
-                  and the capture form because it is context for what you are
-                  about to capture, not an action: the shift's own running list
-                  of what went in and what came out, across every batch record
-                  it opened (the capture form below only ever shows the record
-                  open on screen). Asked for by the afternoon shift. */}
-              <ShiftBagLog
-                sectionId={sectionId}
-                shiftLabel={SHIFT_LABEL[shiftBal]}
-                records={[
-                  ...productions.map((p, i) => ({ ...p, label: multi ? `P${i + 1}` : 'This record', current: true })),
-                  ...shiftOtherProductions.map((p, i) => ({ ...p, label: `Earlier record ${i + 1}`, current: false })),
-                ]}
-              />
 
               {variantMismatch && (
                 <div className="flex items-start gap-2.5 px-4 py-3 bg-warn/8 border border-warn/30 rounded-2xl text-[13px] text-amber-800">
@@ -2415,6 +2277,8 @@ function CaptureScreen() {
                       />
                     : <SievingCapture
                         key={active.id}
+                        otherBatchDebagKeys={otherBatchRows.debagKeys}
+                        otherBatchOutputSerials={otherBatchRows.outputSerials}
                         assignment={assignment}
                         variantWord={active.variant}
                         gradeLetter={active.grade || 'A'}
@@ -2458,7 +2322,10 @@ function CaptureScreen() {
               sectionId={sectionId} date={dateParam} shift={shift} sessionId={sessionId} locked={locked}
               operators={candidateOps}
               variant={active?.variant ?? ''} grade={active?.grade ?? 'A'}
-              massBalance={{ totalIn: rt.totalIn, totalOut: rt.totalOut, variance: rtVariance, withinTol: rtWithinTol }}
+              massBalance={{
+                totalIn: rt.totalIn, totalOut: rt.totalOut, variance: rt.balance,
+                withinTol: Math.abs(rt.balance) <= massBalanceToleranceFor(sectionId),
+              }}
               running={totalIn > 0} active={status !== 'submitted' && status !== 'approved'}
             />
           )}
@@ -2498,9 +2365,6 @@ function CaptureScreen() {
                 showSerials={isIT}
                 productionOrders={assignment?.production_orders}
                 locked={locked}
-                balanceRows={balanceRows}
-                balanceNote={balanceNote}
-                blenderRatios={blenderRatios}
               />
             </>
           )}
@@ -2509,7 +2373,6 @@ function CaptureScreen() {
             <SignOff
               status={status} locked={locked} canApprove={canApprove}
               operatorName={verifiedOp ? (verifiedOp.display_name || verifiedOp.name) : (opNames[0] ?? '')}
-              balanceRows={balanceRows} balanceTolerance={massBalanceToleranceFor(sectionId)} balanceNote={balanceNote}
               sessionId={sessionId} operatorId={verifiedOp?.user_id ?? user?.id ?? null}
               sectionId={sectionId} date={dateParam} shift={shift}
               comments={comments} onComments={setComments}
@@ -2548,9 +2411,8 @@ function CaptureScreen() {
 }
 
 // ── Sign-off tab ──────────────────────────────────────────────────────────────
-function SignOff({ status, locked, canApprove, operatorName, balanceRows, balanceTolerance, balanceNote, sessionId, operatorId, sectionId, date, shift, comments, onComments, hasRun, endOfRun, onEndOfRun, onSign, onSubmit, onApprove, submitting, capturedCodes }: {
+function SignOff({ status, locked, canApprove, operatorName, sessionId, operatorId, sectionId, date, shift, comments, onComments, hasRun, endOfRun, onEndOfRun, onSign, onSubmit, onApprove, submitting, capturedCodes }: {
   status: string; locked: boolean; canApprove: boolean; operatorName: string
-  balanceRows: BalanceRow[]; balanceTolerance: number; balanceNote?: string
   sessionId: string | null; operatorId: string | null; sectionId: string; date: string; shift: string
   comments: string; onComments: (v: string) => void
   hasRun: boolean; endOfRun: boolean; onEndOfRun: (v: boolean) => void
@@ -2577,13 +2439,6 @@ function SignOff({ status, locked, canApprove, operatorName, balanceRows, balanc
           <span>Check your totals below, then sign your name and tap submit. Your supervisor approves and locks it after.</span>
         </div>
       )}
-      {/* Mass balance — same table as the Production tab, so sign-off never
-          shows this figure in a different shape than what was already seen
-          while capturing. */}
-      <div className="bg-white border border-stone-200 rounded-2xl p-4">
-        <MassBalanceTable rows={balanceRows} tolerance={balanceTolerance} note={balanceNote} />
-      </div>
-
       {/* Auto-derived timesheet — operator confirms (with light edits) at sign-off */}
       <TimesheetConfirm
         sessionId={sessionId} operatorName={opName || operatorName} operatorId={operatorId}

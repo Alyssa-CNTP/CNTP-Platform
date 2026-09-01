@@ -17,7 +17,6 @@ import { dustProductType, type GranuleData } from '@/components/production/captu
 import { type BlenderData } from '@/components/production/capture/BlenderCapture'
 import { type PasteuriserData } from '@/components/production/capture/PasteuriserCapture'
 import { massBalanceToleranceFor } from '@/lib/production/capture-config'
-import { MassBalanceTable, type BalanceRow } from '@/components/production/capture/MassBalanceTable'
 import { n as num } from '@/lib/core/num'
 import { sectionKindFor, assertNever, type SectionKind } from '@/lib/core/types/capture'
 
@@ -54,10 +53,6 @@ interface ProductGroup { product: string; acumaticaCode?: string | null; acumati
 // per ingredient), not a simple in/out total — computed by the page from the
 // BOM plus this section's captured inputs, since that's the only place that
 // already knows both.
-export interface BlenderRatioGroup {
-  bomId: string
-  rows: { label: string; kg: number; actualPct: number; targetPct: number }[]
-}
 
 // ── Grouping functions ────────────────────────────────────────────────────────
 
@@ -303,25 +298,19 @@ const fmtTime = (iso?: string) =>
 
 export function CaptureOverview({
   productions, sectionId, sectionName, sectionColor, date, shift, showSerials = false,
-  productionOrders, locked = false, balanceRows, balanceNote, blenderRatios,
+  productionOrders, locked = false,
 }: {
   productions: Production[]; sectionId: string; sectionName: string; sectionColor: string; date: string; shift: string; showSerials?: boolean
   productionOrders?: any; locked?: boolean
-  balanceRows?: BalanceRow[]; balanceNote?: string; blenderRatios?: BlenderRatioGroup[]
 }) {
   // Which section this screen is showing. Comes from the route, so it is
   // authoritative — the five data shapes are never told apart by guessing at
   // their fields any more. See ARCHITECTURE.md §4.
   const kind = sectionKindFor(sectionId)
 
-  const [copied, setCopied] = useState(false)
   const [expandedProducts,  setExpandedProducts]  = useState<Set<string>>(new Set())
   const [expandedLots,      setExpandedLots]      = useState<Set<string>>(new Set())
   const [expandedDebagLots, setExpandedDebagLots] = useState<Set<string>>(new Set())
-  const [filterProduct, setFilterProduct] = useState('')
-  const [filterVariant, setFilterVariant] = useState('')
-  const [filterGrade,   setFilterGrade]   = useState('')
-  const [showFilters,   setShowFilters]   = useState(false)
 
   const { groups: debagGroups, bucketInKg, bucketOutKg, machineKg } = useMemo(() => buildDebagLotGroups(productions, kind), [productions, kind])
   const rawProductGroups = useMemo(() => buildProductGroups(productions, kind), [productions, kind])
@@ -366,124 +355,17 @@ export function CaptureOverview({
   const baggedOnlyKg  = productGroups.reduce((s, g) => s + g.totalKg, 0)
   const totalOut      = baggedOnlyKg + bucketOutKg
   const totalBags     = productGroups.reduce((s, g) => s + g.totalCount, 0)
-  const variance      = totalOut - totalIncl
-  const balanceTolKg  = massBalanceToleranceFor(sectionId ?? '')
-  const withinTol     = Math.abs(variance) <= balanceTolKg
   const hasData       = debagGroups.length > 0 || productGroups.length > 0
   const poStr         = formatPO(productionOrders)
-
-  const filteredProducts = productGroups.filter(g => {
-    if (filterProduct && !g.product.toLowerCase().includes(filterProduct.toLowerCase())) return false
-    if (filterVariant && !g.lots.some(l => l.variant === filterVariant)) return false
-    if (filterGrade   && !g.lots.some(l => l.grade   === filterGrade))   return false
-    return true
-  })
-  const activeFilters  = [filterProduct, filterVariant, filterGrade].filter(Boolean).length
-  const uniqueVariants = Array.from(new Set(productGroups.flatMap(g => g.lots.map(l => l.variant)).filter(Boolean)))
-  const uniqueGrades   = Array.from(new Set(productGroups.flatMap(g => g.lots.map(l => l.grade)).filter(Boolean)))
 
   const toggleProduct  = (k: string) => setExpandedProducts(s => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); return n })
   const toggleLot      = (k: string) => setExpandedLots(s => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); return n })
   const toggleDebagLot = (k: string) => setExpandedDebagLots(s => { const n = new Set(s); n.has(k) ? n.delete(k) : n.add(k); return n })
-  const clearFilters   = () => { setFilterProduct(''); setFilterVariant(''); setFilterGrade('') }
 
-  function handleCopy() {
-    const lines = [`CNTP — ${sectionName}`, `${date} · ${shift} shift`]
-    if (poStr) lines.push(`Production Order: ${poStr}`)
-    lines.push('', 'DEBAGGING', 'Lot\tBag No\tVariant\tWeight (kg)')
-    debagGroups.forEach(g => {
-      g.rows.forEach(r => lines.push(`${g.lot}\t${r.bagNo}\t${r.variant}\t${r.kg.toFixed(1)}`))
-      if (g.rows.length > 1) lines.push(`Subtotal ${g.lot}\t\t\t${g.totalKg.toFixed(1)}`)
-    })
-    if (bucketInKg > 0 || machineKg > 0) {
-      lines.push(`Total debagging (excl. spillage)\t\t\t${debagOnlyKg.toFixed(1)}`)
-      if (bucketInKg > 0) lines.push(`Bucket elevator (from yesterday)\t\t\t${bucketInKg.toFixed(1)}`)
-      if (machineKg > 0) lines.push(`Machine spillage\t\t\t${machineKg.toFixed(1)}`)
-    }
-    lines.push(`Total incl. spillage\t\t\t${totalIncl.toFixed(1)}`)
-    lines.push('', 'BAGGING', 'Product\tLot\tVariant\tGrade\tBags\tWeight (kg)')
-    productGroups.forEach(g => {
-      g.lots.forEach(l => lines.push(`${g.product}\t${l.lot}\t${l.variant}\t${l.grade}\t${l.count}\t${l.kg.toFixed(1)}`))
-      if (g.lots.length > 1) lines.push(`Total ${g.product}\t\t\t\t${g.totalCount}\t${g.totalKg.toFixed(1)}`)
-    })
-    if (bucketOutKg > 0) lines.push(`Bucket elevator (left for tomorrow)\t\t\t\t\t${bucketOutKg.toFixed(1)}`)
-    lines.push('', `Total out\t\t\t\t${totalBags}\t${totalOut.toFixed(1)}`)
-    lines.push(`Balance (out − in)\t\t\t\t\t${variance > 0 ? '+' : ''}${variance.toFixed(1)}`)
-    navigator.clipboard.writeText(lines.join('\n')).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000) })
-  }
+
 
   return (
     <div className="rounded-2xl border border-stone-200 overflow-hidden bg-white shadow-sm">
-
-      {/* Header */}
-      <div className="flex items-center justify-between px-5 py-3 bg-stone-50 border-b border-stone-200">
-        <div className="flex items-center gap-3 min-w-0">
-          <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: sectionColor }} />
-          <div className="min-w-0">
-            <p className="font-semibold text-[13px] text-stone-800 truncate">{sectionName} — what you captured</p>
-            <p className="font-mono text-[10px] text-stone-400">{date} · <span className="capitalize">{shift}</span> shift</p>
-          </div>
-        </div>
-        <div className="flex gap-2 shrink-0">
-          <button onClick={() => setShowFilters(f => !f)}
-            className={`relative flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-[11px] font-medium transition-colors
-              ${showFilters || activeFilters > 0 ? 'border-brand text-brand bg-brand/5' : 'border-stone-200 text-stone-500 hover:border-brand hover:text-brand'}`}>
-            <Filter size={12} /> Filter
-            {activeFilters > 0 && (
-              <span className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-brand text-white text-[9px] font-bold flex items-center justify-center">{activeFilters}</span>
-            )}
-          </button>
-          <button onClick={handleCopy}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-stone-200 text-[11px] font-medium text-stone-500 hover:border-brand hover:text-brand transition-colors">
-            {copied ? <CheckCircle2 size={12} className="text-ok" /> : <Copy size={12} />}{copied ? 'Copied' : 'Copy'}
-          </button>
-          <button onClick={() => window.print()}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-stone-200 text-[11px] font-medium text-stone-500 hover:border-brand hover:text-brand transition-colors">
-            <Printer size={12} /> Print
-          </button>
-        </div>
-      </div>
-
-      {/* Yield & throughput — the numbers this record is actually judged on.
-          They were only visible by leaving capture for /traceability, which is
-          how "yields are hiding" became true: the line that produced the figures
-          couldn't see them. Computed here from the same totals the tables below
-          show, so the strip can never disagree with the detail under it. */}
-      {hasData && (
-        <YieldStrip
-          sectionId={sectionId} inKg={totalIncl} outKg={totalOut} bags={totalBags}
-          variance={variance} withinTol={withinTol} tolKg={balanceTolKg}
-          topProducts={productGroups
-            .map(g => ({ product: g.product, kg: g.totalKg, sharePct: totalOut > 0 ? (g.totalKg / totalOut) * 100 : 0 }))
-            .sort((a, b) => b.kg - a.kg).slice(0, 4)}
-          lot={productions.map(p => p.lot).find(l => !!l) ?? null}
-        />
-      )}
-
-      {/* Filter panel */}
-      {showFilters && (
-        <div className="px-5 py-3 bg-stone-50 border-b border-stone-100">
-          <div className="flex items-center gap-2 flex-wrap">
-            <input value={filterProduct} onChange={e => setFilterProduct(e.target.value)} placeholder="Filter product…"
-              className="px-3 py-1.5 rounded-lg border border-stone-200 bg-white text-[12px] outline-none focus:border-brand w-40" />
-            <select value={filterVariant} onChange={e => setFilterVariant(e.target.value)}
-              className="px-2.5 py-1.5 rounded-lg border border-stone-200 bg-white text-[12px] outline-none focus:border-brand cursor-pointer">
-              <option value="">All variants</option>
-              {uniqueVariants.map(v => <option key={v} value={v}>{v}</option>)}
-            </select>
-            <select value={filterGrade} onChange={e => setFilterGrade(e.target.value)}
-              className="px-2.5 py-1.5 rounded-lg border border-stone-200 bg-white text-[12px] outline-none focus:border-brand cursor-pointer">
-              <option value="">All grades</option>
-              {uniqueGrades.map(g => <option key={g} value={g}>{g}</option>)}
-            </select>
-            {activeFilters > 0 && (
-              <button onClick={clearFilters} className="flex items-center gap-1 text-[11px] text-stone-400 hover:text-err px-2 py-1.5 rounded-lg">
-                <X size={12} /> Clear
-              </button>
-            )}
-          </div>
-        </div>
-      )}
 
       <div className="p-4 space-y-4">
 
@@ -576,29 +458,6 @@ export function CaptureOverview({
               </div>
             )}
 
-            {/* ── Blend component ratio — target vs actual (mass balance for a
-                blend is read as a ratio per ingredient, not a simple total) ── */}
-            {blenderRatios && blenderRatios.length > 0 && blenderRatios.map(br => (
-              <div key={br.bomId} className="bg-white border border-stone-200 rounded-2xl p-4 space-y-2">
-                <p className="text-[11px] font-semibold text-stone-400 uppercase tracking-wide">
-                  Blend <span className="font-mono">{br.bomId}</span> — component ratio (target vs actual)
-                </p>
-                <div className="grid grid-cols-2 gap-1.5">
-                  {br.rows.map(r => {
-                    const off = Math.abs(r.actualPct - r.targetPct) > 5
-                    return (
-                      <div key={r.label} className={`flex justify-between px-3 py-2 rounded-lg border text-[11px] ${off ? 'bg-amber-50 border-amber-200' : 'bg-stone-50 border-stone-100'}`}>
-                        <span className="text-stone-600 truncate pr-2">{r.label}</span>
-                        <span className={`font-mono font-bold flex-shrink-0 ${off ? 'text-amber-700' : 'text-stone-700'}`}>
-                          {r.actualPct.toFixed(0)}% <span className="text-stone-400">/ {r.targetPct.toFixed(0)}%</span>
-                        </span>
-                      </div>
-                    )
-                  })}
-                </div>
-              </div>
-            ))}
-
             {/* ── Bagging — out ───────────────────────────────────────────────── */}
             {(productGroups.length > 0 || bucketOutKg > 0) && (
               <div className="rounded-xl border-2 overflow-hidden" style={{ borderColor: BAG_ORANGE + '40' }}>
@@ -611,14 +470,9 @@ export function CaptureOverview({
                   </span>
                 </div>
 
-                {activeFilters > 0 && filteredProducts.length !== productGroups.length && (
-                  <div className="px-3 py-1.5 bg-brand/5 border-b border-brand/10 text-[11px] text-brand">
-                    Showing {filteredProducts.length} of {productGroups.length} products
-                  </div>
-                )}
 
                 <div className="divide-y divide-stone-200">
-                  {filteredProducts.map(pg => {
+                  {productGroups.map(pg => {
                     const isProdOpen = expandedProducts.has(pg.product)
                     return (
                       <div key={pg.product}>
@@ -749,17 +603,35 @@ export function CaptureOverview({
               </div>
             )}
 
-            {/* Mass balance — tabular (Morning / Afternoon / whole run) when the
-                page supplies per-shift rows; otherwise a single-line fallback. */}
-            {balanceRows && balanceRows.length > 0 ? (
-              <MassBalanceTable rows={balanceRows} tolerance={balanceTolKg} note={balanceNote} />
-            ) : (
-              <div className={`flex items-center justify-between px-3 py-2 rounded-lg border text-[12px] font-mono ${withinTol ? 'bg-ok/5 border-ok/30' : 'bg-warn/5 border-warn/30'}`}>
-                <span className="text-stone-500">In {totalIncl.toFixed(1)} − Out {totalOut.toFixed(1)} =</span>
-                <span className="inline-flex items-center gap-1.5 font-bold text-[13px]">
-                  <span className={withinTol ? 'text-ok' : 'text-warn'}>{(-variance) > 0 ? '+' : ''}{(-variance).toFixed(1)} kg</span>
-                  {withinTol ? <CheckCircle2 size={14} className="text-ok" /> : <AlertTriangle size={14} className="text-warn" />}
-                </span>
+            {/* General mass balance — what went in, what came out, and the
+                difference. Stated plainly and nothing more: no tolerance verdict,
+                no yield, no per-shift decomposition. Those read as authoritative
+                while being derived from whatever the capture rows happened to
+                say, so when the rows were wrong the summary was confidently
+                wrong with them. The two figures here are the totals of the
+                debagging and bagging tables directly above, so this can only
+                ever disagree with them if those tables are themselves wrong. */}
+            {hasData && (
+              <div className="rounded-xl border border-stone-200 overflow-hidden">
+                <div className="px-3 py-2 bg-stone-50 text-[10px] font-semibold text-stone-400 uppercase tracking-wide flex items-center gap-1.5">
+                  <Scale size={12} /> Mass balance
+                </div>
+                <div className="divide-y divide-stone-100 text-[12px]">
+                  <div className="flex items-center justify-between px-3 py-2">
+                    <span className="text-stone-600">Total in — debagged</span>
+                    <span className="font-mono text-text">{totalIncl.toFixed(1)} kg</span>
+                  </div>
+                  <div className="flex items-center justify-between px-3 py-2">
+                    <span className="text-stone-600">Total out — bagged</span>
+                    <span className="font-mono text-text">{totalOut.toFixed(1)} kg</span>
+                  </div>
+                  <div className="flex items-center justify-between px-3 py-2.5 font-bold bg-stone-50/70">
+                    <span className="text-stone-800">Difference</span>
+                    <span className="font-mono text-stone-900">
+                      {totalIncl - totalOut > 0 ? '+' : ''}{(totalIncl - totalOut).toFixed(1)} kg
+                    </span>
+                  </div>
+                </div>
               </div>
             )}
           </>
@@ -770,77 +642,3 @@ export function CaptureOverview({
 }
 
 export default CaptureOverview
-
-// ── Yield & throughput strip ─────────────────────────────────────────────────
-// One row of the figures that describe the record: kg in, kg out, yield, tons,
-// bags, mass-balance variance, and how the output split across products. The
-// deep links go to the two places that hold the wider picture — the analytics
-// view of Production Orders filtered to this line, and full batch traceability
-// for this lot — so "where do I see this over time" has an answer from the
-// capture screen instead of being something you have to already know.
-function YieldStrip({ sectionId, inKg, outKg, bags, variance, withinTol, tolKg, topProducts, lot }: {
-  sectionId?: string
-  inKg: number; outKg: number; bags: number
-  variance: number; withinTol: boolean; tolKg: number
-  topProducts: { product: string; kg: number; sharePct: number }[]
-  lot: string | null
-}) {
-  const yieldPct = inKg > 0 ? Math.round((outKg / inKg) * 1000) / 10 : null
-  // Sign convention matches the mass-balance row below: in − out.
-  const balance = -variance
-
-  const tiles = [
-    { label: 'kg in',   value: inKg.toFixed(1) },
-    { label: 'kg out',  value: outKg.toFixed(1) },
-    { label: 'yield',   value: yieldPct != null ? `${yieldPct}%` : '—' },
-    { label: 'tons out',value: (outKg / 1000).toFixed(2) },
-    { label: 'bags',    value: String(bags) },
-    {
-      label: `balance ±${tolKg}`,
-      value: `${balance > 0 ? '+' : ''}${balance.toFixed(1)}`,
-      warn: !withinTol,
-    },
-  ]
-
-  return (
-    <div className="px-5 py-3 border-b border-stone-100 bg-white space-y-2.5">
-      <div className="flex items-stretch gap-4 overflow-x-auto">
-        {tiles.map((t, i) => (
-          <div key={t.label} className="flex items-stretch gap-4 shrink-0">
-            {i > 0 && <div className="w-px bg-stone-200" />}
-            <div>
-              <div className={`font-mono font-bold text-[16px] leading-tight ${t.warn ? 'text-warn' : 'text-stone-800'}`}>{t.value}</div>
-              <div className="text-[9px] text-stone-400 uppercase tracking-wide">{t.label}</div>
-            </div>
-          </div>
-        ))}
-      </div>
-
-      {/* Output split — which product this record actually made, and how much of
-          it, without expanding the tables below. Identity is on the label, never
-          on colour alone. */}
-      {topProducts.length > 1 && (
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-          {topProducts.map(p => (
-            <span key={p.product} className="inline-flex items-center gap-1.5 text-[11px] text-stone-500">
-              <span className="inline-block w-10 h-1.5 rounded-full bg-stone-100 overflow-hidden">
-                <span className="block h-full" style={{ width: `${Math.min(100, p.sharePct)}%`, background: BAG_ORANGE }} />
-              </span>
-              <span className="text-stone-700 font-medium">{p.product}</span>
-              <span className="font-mono">{Math.round(p.sharePct)}% · {p.kg.toFixed(0)} kg</span>
-            </span>
-          ))}
-        </div>
-      )}
-
-      <div className="flex flex-wrap items-center gap-3 text-[11px]">
-        <a href={`/production/orders?view=analytics${sectionId ? `&section=${sectionId}` : ''}`}
-          className="text-brand hover:underline">Yield &amp; throughput over time →</a>
-        {lot && (
-          <a href={`/traceability?batch=${encodeURIComponent(lot)}`}
-            className="text-brand hover:underline">Full traceability for {lot} →</a>
-        )}
-      </div>
-    </div>
-  )
-}
