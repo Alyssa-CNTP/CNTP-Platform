@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef } from 'react'
-import { Plus, Trash2, Printer, PenLine, Package, PackageCheck, Scale, Sparkles, Lock, Pencil, Check } from 'lucide-react'
+import { Plus, Trash2, Printer, PenLine, Package, PackageCheck, Scale, Sparkles, Lock, Pencil, Check, AlertTriangle } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { voidBagTag, fetchTopUpEventsForSession, type TopUpEvent } from '@/lib/production/scan-utils'
 import { printLabelAuto } from '@/lib/production/label-print'
@@ -13,6 +13,8 @@ import type { OutputBag, Variant as ShortVariant } from '@/lib/production/live-t
 import type { ShiftAssignment } from '@/lib/supabase/database.types'
 import { logBucketElevator, outstandingBucketElevator, variantFamily } from '@/lib/production/bucket-elevator'
 import { n } from '@/lib/core/num'
+import { resolveTypeCode } from '@/lib/core/serials'
+import { allocateBagSerial } from '@/lib/production/serial-allocator'
 import { sievingTotals } from '@/lib/core/mass-balance/sieving'
 import { debagRowKey, missingDebagRows } from '@/lib/production/debag-reconcile'
 export { sievingTotals }
@@ -23,43 +25,15 @@ export { debagRowKey }
 // A 2-letter output-type code plus a per-type daily sequence, so the number of
 // bags of each output type is readable straight off the serial and its barcode
 // (the barcode encodes serial_number verbatim). Each type counts independently.
-const SIEVING_TYPE_ABBR: Array<[RegExp, string]> = [
-  [/fine leaf/i,               'FL'],
-  [/coarse leaf/i,             'CL'],
-  [/rolsiev|rol siev/i,        'RS'],
-  [/indent stick/i,            'IS'],
-  [/rb block|\bblock/i,        'RB'],
-  [/brown dust/i,              'BD'],
-  [/powder dust/i,             'PD'],
-  [/white dust/i,              'WD'],
-  [/bucket elevator|spillage/i,'BE'],
-]
-function sievingAbbr(productType: string): string {
-  for (const [re, code] of SIEVING_TYPE_ABBR) if (re.test(productType || '')) return code
-  // Unknown/one-off product: first two letters of its name, so it's still a
-  // stable per-type stem rather than colliding with everything else.
-  const letters = (productType || '').replace(/[^A-Za-z]/g, '').toUpperCase()
-  return letters.slice(0, 2) || 'XX'
-}
-// date is the session's own dateParam (YYYY-MM-DD), NOT wall-clock "now" — the
-// afternoon/night shift runs past midnight, and using the device's live date
-// would roll the daily stem over to tomorrow mid-shift, resetting the sequence
-// even though it's the same continuous production run (07h00-01h00).
-async function nextSievingSerial(productType: string, localSerials: string[], date: string): Promise<string> {
-  const dp = date.split('-')
-  const ddmmyy = dp.length === 3 ? `${dp[2]}${dp[1]}${dp[0].slice(2)}` : '000000'
-  const prefix = `ST${sievingAbbr(productType)}-${ddmmyy}-`
-  const seqOf = (s: string) => { const m = String(s).match(/-(\d{1,4})$/); return m ? parseInt(m[1]) : 0 }
-  // Seed the per-type sequence from bags already tagged under this exact prefix
-  // (this session's local bags + anything persisted for the same type + day).
-  let maxSeq = localSerials.filter(s => s.startsWith(prefix)).reduce((mx, s) => Math.max(mx, seqOf(s)), 0)
-  try {
-    const { data } = await getDb().schema('production').from('bag_tags')
-      .select('serial_number').ilike('serial_number', `${prefix}%`).limit(4000)
-    ;(data ?? []).forEach((r: any) => { maxSeq = Math.max(maxSeq, seqOf(r.serial_number)) })
-  } catch { /* offline — fall back to local max */ }
-  return `${prefix}${String(maxSeq + 1).padStart(3, '0')}`
-}
+// Serial minting moved to lib/core/serials.ts + lib/production/serial-allocator.ts
+// (ARCHITECTURE.md §5). What used to live here was a private copy of the type
+// abbreviations, the date stem and seqOf, plus a max+1 scan of bag_tags capped
+// at limit(4000) -- the race that loses bags when two operators bag at once,
+// and the wrong-max read that starts colliding past 4000 rows (§1B).
+//
+// The date is still the SESSION's date, never the device clock: the afternoon
+// shift runs to 01h00 and wall-clock time would roll the stem to tomorrow
+// mid-run and restart the sequence inside one continuous production day.
 
 export interface SpillageRow { id: string; kg: string }
 export interface DebagRow {
@@ -172,7 +146,7 @@ export function SievingCapture({
   onChange: (d: SievingData) => void
   genSerial: () => string
   operatorId?: string | null
-  date: string   // session's dateParam (YYYY-MM-DD) — see nextSievingSerial
+  date: string   // session's dateParam (YYYY-MM-DD), never the device clock — see addOutput
   sectionId?: string
   sessionId?: string | null
   // What the session's OTHER batches already hold. prod_debagging and bag_tags
@@ -185,6 +159,12 @@ export function SievingCapture({
 }) {
   const [tab, setTab]       = useState<'debag' | 'bag'>('debag')
   const [picking, setPicking] = useState(false)
+  // Set when a bag's serial was minted on a degraded path: an unmapped product
+  // whose type code had to be derived from its name, or a number allocated
+  // locally because the database was unreachable. Neither stops the operator
+  // bagging; both are things somebody has to know about, and a silent
+  // downgrade that looks identical to the safe path is how they go unnoticed.
+  const [serialNotice, setSerialNotice] = useState<string | null>(null)
   const [dbBatches, setDbBatches] = useState<string[]>([])
   useEffect(() => { recentBatches('sieving').then(setDbBatches) }, [])
   const variantShort = variantToShort(variantWord as any) as ShortVariant
@@ -420,7 +400,22 @@ export function SievingCapture({
 
   // ── Bagging — picker → serial → tag → label ──────────────────────────────
   async function addOutput(p: PickedOutput) {
-    const serial = await nextSievingSerial(p.productType, value.outputs.map(o => o.serial), date)
+    // Number comes from the database (production.next_bag_seq), not from a
+    // max over bag_tags. localSerials is only the offline fallback.
+    const { code: typeCode, configured } = resolveTypeCode('ST', p.productType)
+    const alloc = await allocateBagSerial(
+      { workCentre: 'ST', typeCode, date },
+      value.outputs.map(o => o.serial),
+    )
+    const serial = alloc.serial
+    // Both of these are worth saying out loud rather than swallowing: an
+    // unmapped product got a guessed code that looks exactly like a real one,
+    // and a locally-allocated number is not collision-proof.
+    if (!configured || alloc.source === 'local') {
+      setSerialNotice(!configured
+        ? `"${p.productType}" has no serial code configured — ${typeCode} was derived from its name. Tell IT so it gets a proper one.`
+        : 'Offline — this bag was numbered locally. Check for a duplicate serial once the tablet reconnects.')
+    }
     const grade  = gradeLetter || 'A'
     const now    = new Date().toISOString()
     const bag: OutputBag = {
@@ -716,6 +711,14 @@ export function SievingCapture({
 
       {tab === 'bag' && (
         <>
+          {serialNotice && (
+            <div className="flex items-start gap-2 px-3 py-2.5 bg-amber-50 border border-amber-200 rounded-xl text-[12px] text-amber-900">
+              <AlertTriangle size={14} className="shrink-0 mt-0.5" />
+              <span className="flex-1">{serialNotice}</span>
+              <button type="button" onClick={() => setSerialNotice(null)}
+                className="shrink-0 text-amber-700 underline">Dismiss</button>
+            </div>
+          )}
           {value.outputs.length > 0 && (() => {
             const groups = sortOutputGroups(Array.from(new Set(value.outputs.map(b => b.productType))))
             return groups.map((productType, gi) => {

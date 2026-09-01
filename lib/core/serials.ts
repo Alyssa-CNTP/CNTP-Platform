@@ -224,7 +224,7 @@ export function ddmmyyyy(dateStr: string): string {
 
 /** Every type code a work centre may mint, in floor order. */
 export const TYPE_CODES: Readonly<Record<WorkCentre, readonly string[]>> = {
-  ST: ['FL', 'CL', 'RB', 'BD', 'PD', 'IS', 'HS'],
+  ST: ['FL', 'CL', 'RB', 'BD', 'PD', 'IS', 'HS', 'BE'],
   R1: ['ID', 'WD', 'PD'],
   R2: ['CHSF', 'CHSC', 'WD', 'PD', 'HS'],
   GL: ['SG', 'SF', 'EXP'],
@@ -254,6 +254,9 @@ const TYPE_MATCHERS: Readonly<Record<WorkCentre, ReadonlyArray<readonly [RegExp,
     [/rb block|\bblock/i,                       'RB'],
     [/brown dust/i,                             'BD'],
     [/powder dust/i,                            'PD'],
+    // A real Sieving output, though not one of the named products: material
+    // recovered from the bucket elevator. It bags and it needs a code.
+    [/bucket elevator|spillage/i,               'BE'],
   ],
   R1: [
     [/indent/i,      'ID'],
@@ -484,4 +487,55 @@ export function parseBagSerial(serial: string): ParsedBagSerial | null {
   // ST/R1/R2: {TYPE}-{DDMMYYYY}, nothing in between.
   if (!/^(\d{6}|\d{8})$/.test(rest)) return null
   return mk(typeCode, rest, '', null)
+}
+
+/**
+ * A chronologically sortable "when was this bag made" key, or null.
+ *
+ * Used to order bags of ONE product against each other — never across
+ * products, since each product's sequence counts independently and bag 007 of
+ * Fine Leaf has nothing to do with bag 007 of Coarse Leaf.
+ *
+ * Returns null for anything unparseable rather than guessing, so hand-typed
+ * legacy serials ('13.08.05') are excluded from an ordering they cannot be
+ * placed in. A six-digit legacy serial DOES sort, alongside eight-digit ones:
+ * the date is normalised to yyyy-mm-dd first, so a changeover day mixing both
+ * formats still orders correctly instead of splitting into two runs.
+ */
+export function serialOrderKey(serial: string | null | undefined): string | null {
+  const p = parseBagSerial(String(serial ?? ''))
+  if (!p || !p.date) return null
+  return `${p.date}-${String(p.seq).padStart(6, '0')}`
+}
+
+export interface ResolvedTypeCode {
+  code: string
+  /** False when the code was derived rather than looked up. */
+  configured: boolean
+}
+
+/**
+ * typeCodeFor(), but it always returns a code — for the one caller that cannot
+ * fail: the capture screen, mid-shift, with a bag on the scale.
+ *
+ * Products can reach a capture screen from the Acumatica master inventory
+ * without anyone having added them to TYPE_MATCHERS, so an unmapped product is
+ * a routine event, not a broken install. Refusing to bag it would stop the
+ * line over a naming gap; the old SievingCapture behaviour — first two letters
+ * — keeps it moving.
+ *
+ * What is new is that the caller is TOLD. `configured: false` means the code
+ * was guessed, and a guessed code is indistinguishable from a real one once it
+ * is printed on a bag, so the screen surfaces it and someone maps the product
+ * properly. Sequence allocation is unaffected either way: the scope contains
+ * whatever code came back, so the count stays correct for that product.
+ *
+ * typeCodeFor() keeps returning null, because callers deciding whether a
+ * product is known must not be handed a guess.
+ */
+export function resolveTypeCode(wc: WorkCentre, productType: string): ResolvedTypeCode {
+  const known = typeCodeFor(wc, productType)
+  if (known) return { code: known, configured: true }
+  const letters = String(productType ?? '').replace(/[^A-Za-z]/g, '').toUpperCase()
+  return { code: letters.slice(0, 2) || 'XX', configured: false }
 }

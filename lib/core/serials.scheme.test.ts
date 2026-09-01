@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   workCentreFor, ddmmyyyy, typeCodeFor, TYPE_CODES,
-  serialScope, formatBagSerial, parseBagSerial,
+  serialScope, formatBagSerial, parseBagSerial, serialOrderKey,
   type WorkCentre,
 } from './serials'
 
@@ -259,5 +259,39 @@ describe('the qualifier guard', () => {
   it('leaves the date-scoped sections alone', () => {
     expect(() => formatBagSerial({ workCentre: 'ST', typeCode: 'FL', date: '2026-09-01', seq: 1 }))
       .not.toThrow()
+  })
+})
+
+// The Quality Sieving page orders pending bags by this to remind a QC that an
+// earlier bag has not been sampled yet. Its own copy of this required a
+// six-digit date, so every current-format bag returned null and the reminder
+// silently stopped firing.
+describe('order key (Quality QC ordering)', () => {
+  it('sorts current-format bags within a day', () => {
+    const a = serialOrderKey('STFL-01092026-001')!
+    const b = serialOrderKey('STFL-01092026-002')!
+    expect(a < b).toBe(true)
+  })
+
+  it('sorts across month and year boundaries', () => {
+    const dec = serialOrderKey('STFL-31122026-099')!
+    const jan = serialOrderKey('STFL-01012027-001')!
+    expect(dec < jan).toBe(true)
+  })
+
+  it('orders legacy and current formats against each other on a changeover day', () => {
+    // The whole point: both formats coexist the day the wiring lands, and a
+    // reminder that splits them into two runs is worse than none.
+    const legacy  = serialOrderKey('STFL-010926-004')!
+    const current = serialOrderKey('STFL-01092026-005')!
+    expect(legacy).not.toBeNull()
+    expect(current).not.toBeNull()
+    expect(legacy < current).toBe(true)
+  })
+
+  it('returns null for a hand-typed serial rather than placing it wrongly', () => {
+    expect(serialOrderKey('13.08.05')).toBeNull()
+    expect(serialOrderKey('')).toBeNull()
+    expect(serialOrderKey(null)).toBeNull()
   })
 })
