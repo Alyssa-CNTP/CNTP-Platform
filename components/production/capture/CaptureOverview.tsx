@@ -65,11 +65,12 @@ export interface BlenderRatioGroup {
 
 // ── Grouping functions ────────────────────────────────────────────────────────
 
-function buildDebagLotGroups(prods: Production[]): { groups: DebagLotGroup[]; bucketInKg: number; bucketOutKg: number; machineKg: number } {
+function buildDebagLotGroups(prods: Production[]): { groups: DebagLotGroup[]; bucketInKg: number; bucketOutKg: number; machineKg: number; duplicatesHidden: number } {
   const map = new Map<string, DebagLotGroup>()
   // Spans every production, so a copy sitting in batch 6 is recognised against
   // the original in batch 1 — the copies live in OTHER batches, not this one.
   const seenSievingBag = new Set<string>()
+  let duplicatesHidden = 0
   let bucketInKg = 0
   let bucketOutKg = 0
   let machineKg = 0
@@ -165,7 +166,7 @@ function buildDebagLotGroups(prods: Production[]): { groups: DebagLotGroup[]; bu
         const label = String(r.bag_no ?? '').trim()
         if (label) {
           const identity = `${lot}|${label}`
-          if (seenSievingBag.has(identity)) return
+          if (seenSievingBag.has(identity)) { duplicatesHidden++; return }
           seenSievingBag.add(identity)
         }
         const row: DebagRow = { bagNo: label || `Bulk bag ${i + 1}`, kg: num(r.nett), variant: p.variant, loggedAt: r.logged_at }
@@ -175,7 +176,7 @@ function buildDebagLotGroups(prods: Production[]): { groups: DebagLotGroup[]; bu
       })
     }
   })
-  return { groups: Array.from(map.values()), bucketInKg, bucketOutKg, machineKg }
+  return { groups: Array.from(map.values()), bucketInKg, bucketOutKg, machineKg, duplicatesHidden }
 }
 
 function buildProductGroups(prods: Production[]): ProductGroup[] {
@@ -284,7 +285,7 @@ export function CaptureOverview({
   const [filterGrade,   setFilterGrade]   = useState('')
   const [showFilters,   setShowFilters]   = useState(false)
 
-  const { groups: debagGroups, bucketInKg, bucketOutKg, machineKg } = useMemo(() => buildDebagLotGroups(productions), [productions])
+  const { groups: debagGroups, bucketInKg, bucketOutKg, machineKg, duplicatesHidden } = useMemo(() => buildDebagLotGroups(productions), [productions])
   const productGroups = useMemo(() => buildProductGroups(productions), [productions])
 
   const debagOnlyKg   = debagGroups.reduce((s, g) => s + g.totalKg, 0)
@@ -441,6 +442,11 @@ export function CaptureOverview({
                 <div className="flex items-center justify-between px-3 py-2" style={{ background: DEBAG_BLUE + '12' }}>
                   <span className="inline-flex items-center gap-1.5 text-[12px] font-bold" style={{ color: DEBAG_BLUE }}>
                     <Package size={14} /> Debagging — in
+                    {duplicatesHidden > 0 && (
+                      <span className="font-normal normal-case tracking-normal text-[10px] text-stone-400">
+                        · {duplicatesHidden} duplicate row{duplicatesHidden === 1 ? '' : 's'} hidden
+                      </span>
+                    )}
                   </span>
                   <span className="font-mono font-bold text-[13px]" style={{ color: DEBAG_BLUE }}>{totalIncl.toFixed(1)} kg</span>
                 </div>
