@@ -142,26 +142,34 @@ function emptyDataFor(kind: SectionKind): Production['data'] {
 // at them is the exact failure this file spent 2,770 lines learning about.
 function outputSerialSet(kind: SectionKind, prods: Production[]): Set<string> {
   const out = new Set<string>()
-  const add = (serial: unknown) => {
-    const s = sanitizeSerial(String(serial ?? ''))
-    if (s) out.add(s)
+  const add = (serial: string | undefined | null) => {
+    const clean = sanitizeSerial(String(serial ?? ''))
+    if (clean) out.add(clean)
   }
+  const addBags = (bags: readonly { serial: string }[] | undefined) =>
+    (bags ?? []).forEach(b => add(b.serial))
+
   for (const p of prods) {
-    const d = p.data as any
     switch (kind) {
-      case 'refining':
-        for (const g of [d?.outputA, d?.outputB, d?.outputC, d?.outputD]) {
-          (g?.bags ?? []).forEach((b: any) => add(b?.serial))
-        }
+      case 'refining': {
+        const d = p.data as RefiningData
+        for (const g of [d.outputA, d.outputB, d.outputC, d.outputD]) addBags(g?.bags)
         break
-      case 'granule':
-        (d?.outputs ?? []).forEach((b: any) => add(b?.serial))
-        ;(d?.dustOutputs ?? []).forEach((b: any) => add(b?.serial))
+      }
+      case 'granule': {
+        const d = p.data as GranuleData
+        addBags(d.outputs)
+        addBags(d.dustOutputs)
         break
+      }
       case 'sieving':
+        addBags((p.data as SievingData).outputs)
+        break
       case 'blender':
+        addBags((p.data as BlenderData).outputs)
+        break
       case 'pasteuriser':
-        (d?.outputs ?? []).forEach((b: any) => add(b?.serial))
+        addBags((p.data as PasteuriserData).outputs)
         break
       default:
         return assertNever(kind, 'section kind')
