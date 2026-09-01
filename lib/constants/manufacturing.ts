@@ -258,11 +258,14 @@ export function isValidSerial(serial: string): boolean {
 }
 
 // ── MASS BALANCE ──────────────────────────────────────────────────────────────
-export const MASS_BALANCE_TOLERANCE_KG = 15
-
-export function isWithinTolerance(varianceKg: number): boolean {
-  return Math.abs(varianceKg) <= MASS_BALANCE_TOLERANCE_KG
-}
+// A SECOND copy of the tolerance lived here, unused, while every screen
+// imported the one in capture-config. Re-exported from the single core source
+// so the two can never drift apart again; the tolerance is +/-1% of Total
+// Input, so it takes the input, not a section id.
+export {
+  massBalanceToleranceKg,
+  withinMassBalanceTolerance as isWithinTolerance,
+} from '@/lib/core/mass-balance/tolerance'
 
 // ── SCAN UX TIMING ────────────────────────────────────────────────────────────
 export const SCAN_UX = {

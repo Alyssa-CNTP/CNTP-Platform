@@ -124,15 +124,25 @@ export function makeSerial(sectionCode: string, dateStr: string, seq: number): s
   return `${sectionCode}-${ddmmyy}-${String(seq).padStart(3, '0')}`
 }
 
-export const MASS_BALANCE_TOLERANCE_KG = 15
-
-// Refining 2's process naturally carries a wider swing before a mass-balance
-// variance is actually worth flagging — every screen that flags a variance
-// (Capture footer, Overview, dashboards/KPIs) should agree on this, so it's
-// centralised here rather than each screen guessing its own threshold.
-export function massBalanceToleranceFor(sectionId: string): number {
-  return sectionId === 'refining2' ? 100 : MASS_BALANCE_TOLERANCE_KG
-}
+// Mass-balance tolerance is +/-1% of Total Input for EVERY section, and lives
+// in lib/core/mass-balance/tolerance.ts. Re-exported here because this file is
+// where every capture screen already looks for it.
+//
+// It replaced a flat 15 kg (with a 100 kg special case for refining2), which
+// was the wrong shape for a line running anything from a 200 kg trial to a 4 t
+// shift: 15 kg is ~7% of the first and ~0.4% of the second, so one never
+// flagged and the other always did. Taking the tolerance from what actually
+// went in makes every section's threshold mean the same thing.
+//
+// Note the signature changed from (sectionId) to (totalInKg) — deliberately,
+// so nothing can keep calling it with a section id and silently get a
+// tolerance for the wrong quantity.
+export {
+  MASS_BALANCE_TOLERANCE_PCT,
+  massBalanceToleranceKg,
+  withinMassBalanceTolerance,
+  massBalanceVariancePct,
+} from '@/lib/core/mass-balance/tolerance'
 
 // Standard full-bag weights, used to (a) prefill the weight field so the
 // operator only overrides for an end-of-shift half bag, and (b) sanity-check

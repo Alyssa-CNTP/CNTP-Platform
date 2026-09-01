@@ -58,9 +58,33 @@ export interface BalanceContext {
   topUpKg?: number
   /**
    * Carry-over consumed from a previous day, for the SAME variant family.
-   * Read from production.bucket_elevator_log via outstandingBucketElevator().
-   * When omitted, the section falls back to the figure typed on the capture
-   * screen.
+   * Read from the section's own ledger — production.bucket_elevator_log
+   * (Sieving) or production.dust_carryover_log (Granule, keyed per dust type
+   * so SG and SF never mix). When omitted, the section falls back to the
+   * figure carried on the captured data.
    */
   carryOverInKg?: number
+  /**
+   * Carry-over LEFT for the next day: material physically held in the line
+   * rather than bagged. Work in progress, never product — excluded from
+   * Total Output and subtracted from the balance, so a shift that legitimately
+   * leaves material behind does not read as a shortfall.
+   */
+  carryOverOutKg?: number
+  /**
+   * Mass that entered THIS session's output bags by transfer from an existing
+   * bag, rather than by being produced here.
+   *
+   * The half-bag component can move material from one bag into another, and on
+   * the Blender it can draw from an existing bag to make up a NEW bag. That new
+   * bag is captured as output like any other, but its mass was already counted
+   * as output when the source bag was first bagged — counting it again inflates
+   * the shift's production and, because production-order summaries read the
+   * same figure, inflates the order. Subtracted from Total Output.
+   *
+   * Only the portion whose TARGET bag appears in this session's captured
+   * outputs belongs here. A transfer into a bag from an earlier day is neither
+   * added nor subtracted: it is not in this session's outputs to begin with.
+   */
+  transferInKg?: number
 }

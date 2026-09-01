@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from 'react'
 import { Plus, Trash2, Package, PackageCheck, Lock, Pencil, Check, Search, X, AlertTriangle, Printer, PenLine, Shuffle } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { printLabelAuto } from '@/lib/production/label-print'
-import { variantToShort, MASS_BALANCE_TOLERANCE_KG, isImplausibleWeight, isOpenBagWeight, OPEN_BAG_WEIGHT_THRESHOLD_KG } from '@/lib/production/capture-config'
+import { variantToShort, massBalanceToleranceKg, withinMassBalanceTolerance, isImplausibleWeight, isOpenBagWeight, OPEN_BAG_WEIGHT_THRESHOLD_KG } from '@/lib/production/capture-config'
 import { markBagConsumed, sanitizeSerial, voidBagTag } from '@/lib/production/scan-utils'
 import { validateBagScan, type ScanValidationResult } from '@/lib/production/validate-scan'
 import { ScanBox, BagScanModal } from '@/components/production/capture/BagScanIn'
@@ -780,7 +780,10 @@ export function BlenderCapture({
   // ── Derived totals ────────────────────────────────────────────────────────
 
   const { totalIn, totalOut, balance, byItem } = blenderTotals(value)
-  const withinTol = Math.abs(balance) <= MASS_BALANCE_TOLERANCE_KG
+  // +/-1% of what was mixed in, not a flat kg figure — a 200 kg trial blend
+  // and a 4 t production blend should not share one allowance.
+  const balanceTolKg = massBalanceToleranceKg(totalIn)
+  const withinTol = withinMassBalanceTolerance(balance, totalIn)
   const inputCount = value.inputs.length
   const outputCount = value.outputs.length
 
@@ -1024,7 +1027,7 @@ export function BlenderCapture({
                 <div className={`px-4 py-3 rounded-2xl border ${withinTol ? 'bg-ok/5 border-ok/20' : 'bg-amber-50 border-amber-200'}`}>
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-[11px] font-semibold text-stone-400 uppercase tracking-wide">Mass balance (J = bagged − mixed)</span>
-                    {!withinTol && <span className="flex items-center gap-1 text-[11px] font-medium text-amber-700 bg-amber-100 px-2 py-0.5 rounded-full"><AlertTriangle size={12} /> Outside ±{MASS_BALANCE_TOLERANCE_KG} kg</span>}
+                    {!withinTol && <span className="flex items-center gap-1 text-[11px] font-medium text-amber-700 bg-amber-100 px-2 py-0.5 rounded-full"><AlertTriangle size={12} /> Outside ±{balanceTolKg.toFixed(1)} kg (1%)</span>}
                   </div>
                   <div className="flex items-center gap-1.5 text-[12px] text-stone-500 flex-wrap">
                     <span className="font-mono font-bold text-text">{totalOut.toFixed(1)}</span><span>bagged</span>

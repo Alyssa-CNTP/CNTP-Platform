@@ -8,7 +8,7 @@
 // detail page so the report always shows the same data.
 
 import { getDb } from '@/lib/supabase/db'
-import { massBalanceToleranceFor } from '@/lib/production/capture-config'
+import { massBalanceToleranceKg } from '@/lib/production/capture-config'
 
 export interface OrderSession {
   id: string
@@ -224,7 +224,11 @@ function sumMassBalance(shifts: OrderShiftBlock[], sectionId: string): OrderMass
     total_input_kg,
     total_output_a_kg: a, total_output_b_kg: b, total_output_c_kg: c, total_output_d_kg: d,
     balance_kg: total_input_kg - (a + b + c + d),
-    tolerance_kg: massBalanceToleranceFor(sectionId),
+    // +/-1% of the run's total input. Taken from the summed input rather
+    // than per shift, so the whole-run figure is the tolerance for the whole
+    // run -- summing each shift's own allowance would give the same number
+    // here, but not once a shift books carry-over.
+    tolerance_kg: massBalanceToleranceKg(total_input_kg),
     water_kg: sum('water_kg'), dust_extraction_kg: sum('dust_extraction_kg'), floor_waste_kg: sum('floor_waste_kg'),
   }
 }

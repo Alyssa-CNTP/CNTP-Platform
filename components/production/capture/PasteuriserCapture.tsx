@@ -37,7 +37,8 @@ import {
 } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { printLabelAuto } from '@/lib/production/label-print'
-import { variantToShort, MASS_BALANCE_TOLERANCE_KG, isImplausibleWeight } from '@/lib/production/capture-config'
+import { variantToShort, massBalanceToleranceKg, withinMassBalanceTolerance, isImplausibleWeight } from '@/lib/production/capture-config'
+import { variantFamily } from '@/lib/production/bucket-elevator'
 import { markBagConsumed, sanitizeSerial } from '@/lib/production/scan-utils'
 import { validateBagScan, type ScanValidationResult } from '@/lib/production/validate-scan'
 import { loadAllInventory } from '@/lib/production/inventory'
@@ -181,7 +182,7 @@ interface SystemBag {
 // material folded in at the post-sieve stage — NOT blender output; a different
 // pool of bags entirely. Whole-bag pick throughout, matching every other
 // section: the operator consumes one complete in-stock bag at a time.
-function useSystemBagsForStream(stream: 'main' | 'postsieve', blendCode: string): SystemBag[] {
+function useSystemBagsForStream(stream: 'main' | 'postsieve', blendCode: string, variantWord: string): SystemBag[] {
   const [bags, setBags] = useState<SystemBag[]>([])
   useEffect(() => {
     let q = getDb().schema('production').from('bag_tags')
@@ -205,20 +206,31 @@ function useSystemBagsForStream(stream: 'main' | 'postsieve', blendCode: string)
           (b.product_type ?? '').toLowerCase().includes(bc))
         if (narrowed.length) rows = narrowed
       }
+      // Same variant family only. A scan already refuses a cross-family bag
+      // (validateBagScan returns 'wrong_variant'), so the pick list must not
+      // offer one either — conventional and organic are separate physical
+      // pools, and mixing them is a certification failure, not a variance.
+      // Bags with no recorded variant are left visible: they are older or
+      // hand-registered records, and hiding them would strand real stock.
+      if (variantWord) {
+        const want = variantFamily(variantWord)
+        rows = rows.filter(b => !b.variant || variantFamily(b.variant) === want)
+      }
       setBags(rows)
     })
-  }, [stream, blendCode])
+  }, [stream, blendCode, variantWord])
   return bags
 }
 
-function SystemPickList({ stream, blendCode, onPick, onClose }: {
+function SystemPickList({ stream, blendCode, variantWord, onPick, onClose }: {
   stream: 'main' | 'postsieve'
   blendCode: string
+  variantWord: string
   onPick: (b: SystemBag) => void
   onClose: () => void
 }) {
   const [query, setQuery] = useState('')
-  const bags = useSystemBagsForStream(stream, blendCode)
+  const bags = useSystemBagsForStream(stream, blendCode, variantWord)
   const q = query.trim().toLowerCase()
   const filtered = q
     ? bags.filter(b =>
@@ -359,7 +371,7 @@ function AddBagModal({ stream, blendCode, variantWord, editingRow, existing, onC
 
         <div className="p-5 space-y-3 overflow-y-auto">
           {browsing ? (
-            <SystemPickList stream={stream} blendCode={blendCode} onPick={pickSystemBag} onClose={() => setBrowsing(false)} />
+            <SystemPickList stream={stream} blendCode={blendCode} variantWord={variantWord} onPick={pickSystemBag} onClose={() => setBrowsing(false)} />
           ) : (
             <>
               <div className="space-y-1">
@@ -743,7 +755,9 @@ export function PasteuriserCapture({
     if (lot && debaggedLots.size > 0 && !debaggedLots.has(lot))
       traceWarnings.push(`Output batch "${l.lot}" wasn't debagged this session — check for a typing mistake in the lot/batch number.`)
   }
-  const withinTol = Math.abs(t.balance) <= MASS_BALANCE_TOLERANCE_KG
+  // +/-1% of raw material used (D + E), per the section specification.
+  const balanceTolKg = massBalanceToleranceKg(t.rawUsed)
+  const withinTol = withinMassBalanceTolerance(t.balance, t.rawUsed)
 
   const mainRows = value.debag.filter(r => r.stream === 'main')
   const postRows = value.debag.filter(r => r.stream === 'postsieve')
@@ -987,7 +1001,7 @@ export function PasteuriserCapture({
             <div className={`px-4 py-3 rounded-2xl border ${withinTol ? 'bg-ok/5 border-ok/20' : 'bg-amber-50 border-amber-200'}`}>
               <div className="flex items-center justify-between mb-2">
                 <span className="text-[11px] font-semibold text-stone-400 uppercase tracking-wide">Mass balance (produced − used)</span>
-                {!withinTol && <span className="flex items-center gap-1 text-[11px] font-medium text-amber-700 bg-amber-100 px-2 py-0.5 rounded-full"><AlertTriangle size={12} /> Outside ±{MASS_BALANCE_TOLERANCE_KG} kg</span>}
+                {!withinTol && <span className="flex items-center gap-1 text-[11px] font-medium text-amber-700 bg-amber-100 px-2 py-0.5 rounded-full"><AlertTriangle size={12} /> Outside ±{balanceTolKg.toFixed(1)} kg (1%)</span>}
               </div>
               <div className="flex items-center gap-1.5 text-[12px] text-stone-500 flex-wrap">
                 <span className="font-mono font-bold text-text">{t.produced.toFixed(1)}</span><span>produced (A+B+C)</span>

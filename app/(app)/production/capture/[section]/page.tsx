@@ -36,9 +36,9 @@ import {
 } from '@/components/production/capture/PasteuriserCapture'
 import { HalfBagTopUpModal } from '@/components/production/capture/HalfBagTopUpModal'
 import { HalfBagTopUpActivity } from '@/components/production/capture/HalfBagTopUpActivity'
-import { fetchTopUpEventsForSession } from '@/lib/production/scan-utils'
+import { fetchTopUpEventsForSession, sanitizeSerial } from '@/lib/production/scan-utils'
 import { sectionKindFor, assertNever, type SectionKind } from '@/lib/core/types/capture'
-import { productionTotals, sumProductionTotals, withTopUp,
+import { productionTotals, sumProductionTotals, withSessionAdjustments,
   type ProductionTotals, type AnyBalanceData } from '@/lib/core/mass-balance'
 import { outstandingBucketElevator, variantFamily } from '@/lib/production/bucket-elevator'
 import { upperCode } from '@/lib/production/normalize-code'
@@ -53,7 +53,7 @@ import { normalizeBatch } from '@/lib/production/batch-key'
 import { ensureCheckRecord, appendCheckEvent, loadCheckRecord } from '@/lib/production/checks-db'
 import { machineChecksFor } from '@/lib/production/checks-config'
 import { cleanersOnDuty } from '@/lib/production/cleaner-roster'
-import { sectionMeta, makeSerial, massBalanceToleranceFor, VARIANT_OPTIONS, variantToShort, DESTINATION_OPTIONS, isOrganicVariant } from '@/lib/production/capture-config'
+import { sectionMeta, makeSerial, massBalanceToleranceKg, VARIANT_OPTIONS, variantToShort, DESTINATION_OPTIONS, isOrganicVariant } from '@/lib/production/capture-config'
 import { LineChat } from '@/components/production/capture/LineChat'
 import { getMySignatureStatus, type MySignatureStatus } from '@/lib/production/employee-signature'
 import type { Operator, ShiftAssignment } from '@/lib/supabase/database.types'
@@ -128,6 +128,46 @@ function emptyDataFor(kind: SectionKind): Production['data'] {
     case 'sieving':     return emptySievingData()
     default:            return assertNever(kind, 'section kind')
   }
+}
+
+// The serials of the output bags THIS session captured.
+//
+// Used to tell apart the two kinds of half-bag transfer: one into a bag this
+// session bagged (its mass is already inside the captured weight, so a transfer
+// into it must come back off Total Output) versus one into a bag from an
+// earlier day (never in these outputs, so nothing to adjust).
+//
+// Dispatches on the section kind and ends in assertNever — the five sections
+// keep their output bags under different field names and shapes, and guessing
+// at them is the exact failure this file spent 2,770 lines learning about.
+function outputSerialSet(kind: SectionKind, prods: Production[]): Set<string> {
+  const out = new Set<string>()
+  const add = (serial: unknown) => {
+    const s = sanitizeSerial(String(serial ?? ''))
+    if (s) out.add(s)
+  }
+  for (const p of prods) {
+    const d = p.data as any
+    switch (kind) {
+      case 'refining':
+        for (const g of [d?.outputA, d?.outputB, d?.outputC, d?.outputD]) {
+          (g?.bags ?? []).forEach((b: any) => add(b?.serial))
+        }
+        break
+      case 'granule':
+        (d?.outputs ?? []).forEach((b: any) => add(b?.serial))
+        ;(d?.dustOutputs ?? []).forEach((b: any) => add(b?.serial))
+        break
+      case 'sieving':
+      case 'blender':
+      case 'pasteuriser':
+        (d?.outputs ?? []).forEach((b: any) => add(b?.serial))
+        break
+      default:
+        return assertNever(kind, 'section kind')
+    }
+  }
+  return out
 }
 
 // True only when a production actually has weighed capture (any section type).
@@ -253,6 +293,10 @@ function CaptureScreen() {
   // the output side to balance it. Session-scoped, so added once — not per
   // production, since a session can hold several runs.
   const [sessionTopUpKg, setSessionTopUpKg] = useState(0)
+  // Mass that arrived in one of THIS session's output bags by transfer from an
+  // existing bag rather than by being produced here. Subtracted from Total
+  // Output — see the effect that loads it, and BalanceContext.transferInKg.
+  const [sessionTransferInKg, setSessionTransferInKg] = useState(0)
   // Bucket-elevator carry-over left by a previous day and consumed by this
   // shift, read from the ledger and matched on VARIANT FAMILY — conventional
   // and organic are separate physical pools and never mix. Undefined until
@@ -621,16 +665,30 @@ function CaptureScreen() {
   // output when IT was bagged, so counting it again would double-count.
   useEffect(() => {
     let cancelled = false
-    if (!sessionId) { setSessionTopUpKg(0); return }
+    if (!sessionId) { setSessionTopUpKg(0); setSessionTransferInKg(0); return }
     fetchTopUpEventsForSession(sectionId, sessionId)
       .then(map => {
-        const kg = Array.from(map.values()).flat()
-          .filter(t => t.mode === 'production').reduce((s, t) => s + t.kg, 0)
-        if (!cancelled) setSessionTopUpKg(kg)
+        const events = Array.from(map.values()).flat()
+        const kg = events.filter(t => t.mode === 'production').reduce((s, t) => s + t.kg, 0)
+        // The other half of the same rule. A bag-to-bag transfer is normally
+        // invisible to the balance — mass moves between two bags that were both
+        // already counted. But the Blender routinely makes up a NEW bag by
+        // drawing from an existing one, and that new bag IS captured as output
+        // here, carrying mass that was counted when the source bag was bagged.
+        // Left in, the shift and its production order both report it twice.
+        //
+        // Only transfers whose TARGET is one of this session's own output bags
+        // qualify: a transfer into a bag from an earlier day was never in these
+        // outputs, so there is nothing to take back off.
+        const ownOutputs = outputSerialSet(kind, productionsRef.current)
+        const transferKg = events
+          .filter(t => t.mode === 'existing' && ownOutputs.has(sanitizeSerial(t.serial)))
+          .reduce((s, t) => s + t.kg, 0)
+        if (!cancelled) { setSessionTopUpKg(kg); setSessionTransferInKg(transferKg) }
       })
       .catch(() => { /* best-effort — balance falls back to captured output only */ })
     return () => { cancelled = true }
-  }, [sectionId, sessionId, tab])
+  }, [sectionId, sessionId, tab, productions])
 
   // Bucket-elevator carry-over is Sieving-only, and only the shift that CONSUMES
   // it counts it as input — the afternoon shift LEAVES a new one for tomorrow
@@ -1278,7 +1336,11 @@ function CaptureScreen() {
   // session half-bag top-ups added once at the end (withTopUp knows which way
   // each section balance sign runs).
   function sessionTotals(prods: Production[], sh: Shift = shiftBal): ProductionTotals {
-    return withTopUp(kind, sumProductionTotals(prods.map(p => prodTotals(p, sh))), sessionTopUpKg)
+    return withSessionAdjustments(
+      kind,
+      sumProductionTotals(prods.map(p => prodTotals(p, sh))),
+      { topUpKg: sessionTopUpKg, transferInKg: sessionTransferInKg },
+    )
   }
 
   // Resolve canonical batch ids for a set of raw lot strings: upsert any new
@@ -1574,6 +1636,10 @@ function CaptureScreen() {
     await db.schema('production').from('prod_mass_balance').upsert({
       session_id: sid, total_input_kg: totalIn,
       total_output_a_kg: mbA, total_output_b_kg: mbB, total_output_c_kg: mbC, total_output_d_kg: mbD,
+      // The column defaulted to 15 and was never written, so every row on the
+      // table claimed a flat 15 kg allowance regardless of size. Write the real
+      // +/-1% figure so a stored row can be read back without recomputing it.
+      tolerance_kg: massBalanceToleranceKg(totalIn),
       calculated_at: new Date().toISOString(),
     } as any, { onConflict: 'session_id' })
 
@@ -1790,13 +1856,21 @@ function CaptureScreen() {
   // shortfall — it comes out of Total Output and off the variance, and is shown
   // in its own column instead.
   const rtVariance  = rt.balance
-  const rtWithinTol = Math.abs(rtVariance) <= massBalanceToleranceFor(sectionId)
+  // +/-1% of Total Input, the same rule on every section.
+  const rtTolKg     = massBalanceToleranceKg(rt.totalIn)
+  const rtWithinTol = Math.abs(rtVariance) <= rtTolKg
   const multi = productions.length > 1
   // Rows for the tabular balance — only shifts that actually captured material.
   const balanceRows = [
     (morningTotals.totalIn > 0 || morningTotals.totalOut > 0) ? { shift: 'Morning' as const, ...morningTotals } : null,
     (afternoonTotals.totalIn > 0 || afternoonTotals.totalOut > 0) ? { shift: 'Afternoon' as const, ...afternoonTotals } : null,
   ].filter(Boolean) as { shift: 'Morning' | 'Afternoon'; totalIn: number; totalOut: number; carryOverOut: number }[]
+  // What the carry-over column is called on this section. Each line holds its
+  // work in progress somewhere different, and "carried over" alone leaves the
+  // operator guessing which pile the column is about.
+  const carryOverLabel =
+    kind === 'granule' ? 'dust for tomorrow' :
+    kind === 'sieving' ? 'left in elevator' : 'carried over'
   // The bucket-elevator note only applies to Sieving; Granule shows its custom
   // PR-FM-026/7 decomposition (G = C* + carry-over/waste, and % yield); other
   // lines get a generic run note.
@@ -1806,14 +1880,20 @@ function CaptureScreen() {
       : 'One balance for the whole production run (07h00–01h00), combined across every shift.'
   if (sectionId === 'granule') {
     const runProds = runSpansShifts ? [...productions, ...siblingProductions, ...otherShiftProductions] : [...productions, ...siblingProductions]
-    let A = 0, cStar = 0, carry = 0
+    let A = 0, cStar = 0, carry = 0, dustHeld = 0, consumed = 0
     runProds.forEach(p => {
       const g = granuleTotals(p.data as GranuleData)
       A += g.totalA; cStar += g.cStar; carry += g.D + g.E + g.wasteF
+      dustHeld += g.carryOverOut; consumed += g.carryOverIn
     })
     const G = cStar + carry
     const yieldPct = A > 0 ? (G / A) * 100 : 0
     balanceNote = `Granules produced (C*) ${cStar.toFixed(0)} kg + carry-over/waste ${carry.toFixed(0)} kg = ${G.toFixed(0)} kg produced (G), from ${A.toFixed(0)} kg dust mixed (A). Yield ${yieldPct.toFixed(0)}%.`
+    // Say out loud which part of A came from yesterday and which part of the
+    // line's contents is being held for tomorrow — both move the balance, and
+    // an unexplained figure in a column is how an operator learns to ignore it.
+    if (consumed > 0) balanceNote += ` Includes ${consumed.toFixed(0)} kg dust carried over from a previous shift.`
+    if (dustHeld > 0) balanceNote += ` ${dustHeld.toFixed(0)} kg dust held for tomorrow's blend — excluded from output, not a shortfall.`
   }
   // A batch record this shift running a genuinely different variant/grade is
   // deliberately kept out of the combined balance above (two different runs
@@ -1866,7 +1946,7 @@ function CaptureScreen() {
       if (recId) await appendCheckEvent(recId, {
         phase: 'shutdown', check_key: 'mass_balance', check_label: 'Mass balance (change-over)', kind: 'massbalance',
         value_num: prev.totalIn - prev.totalOut, value_text: `${prev.totalIn.toFixed(1)} in / ${prev.totalOut.toFixed(1)} out`,
-        unit: 'kg', status: Math.abs(prev.totalIn - prev.totalOut) <= massBalanceToleranceFor(sectionId) ? 'ok' : 'flagged',
+        unit: 'kg', status: Math.abs(prev.totalIn - prev.totalOut) <= massBalanceToleranceKg(prev.totalIn) ? 'ok' : 'flagged',
         production_idx: activeIdx, source: 'auto',
       })
     } catch { /* snapshot is best-effort */ }
@@ -1981,7 +2061,7 @@ function CaptureScreen() {
                 <>
                   <div className="flex items-center gap-2">
                     <span className="text-[13px] text-text-muted">Current mass balance:</span>
-                    <BalanceBadge variance={rtVariance} tolerance={massBalanceToleranceFor(sectionId)} />
+                    <BalanceBadge variance={rtVariance} tolerance={rtTolKg} />
                   </div>
                   <p className="text-[13px] text-text-muted">
                     This carries into the new batch — leftover raw material is still part of the same run and can be bagged out as Blocks / Rolsiev Sticks / Indent Sticks under the new grade.
@@ -2288,7 +2368,11 @@ function CaptureScreen() {
                     <span className="text-[10px] font-semibold text-stone-400 uppercase tracking-widest">Batches this run ({productions.length})</span>
                     {productions.map((p, i) => {
                       const pt = prodTotals(p, shiftBal)
-                      const pVariance = pt.totalIn - pt.totalOut
+                      // pt.balance, not totalIn - totalOut: a batch that left
+                      // material in the line (bucket elevator, leftover dust)
+                      // has that held out of output, and subtracting it once
+                      // more here would show the same material as a shortfall.
+                      const pVariance = pt.balance
                       const isActive = i === activeIdx
                       const variantLabel = VARIANT_OPTIONS.find(v => v.value === p.variant)?.label ?? p.variant ?? '—'
                       const gradeLabel = p.grade ? DESTINATION_OPTIONS.find(o => o.value === p.grade)?.label ?? p.grade : ''
@@ -2297,7 +2381,7 @@ function CaptureScreen() {
                           <span className="font-semibold text-text shrink-0">P{i + 1}</span>
                           <span className="text-stone-500 truncate flex-1">{variantLabel}{gradeLabel ? ` · ${gradeLabel}` : ''}</span>
                           <span className="font-mono text-stone-600 shrink-0">{pt.totalIn.toFixed(1)} → {pt.totalOut.toFixed(1)} kg</span>
-                          <BalanceBadge variance={pVariance} tolerance={massBalanceToleranceFor(sectionId)} />
+                          <BalanceBadge variance={pVariance} tolerance={massBalanceToleranceKg(pt.totalIn)} />
                           <span className={`text-[10px] px-1.5 py-0.5 rounded-full shrink-0 ${isActive ? 'bg-brand/10 text-brand' : 'bg-stone-100 text-stone-500'}`}>
                             {isActive ? 'current' : 'done'}
                           </span>
@@ -2311,7 +2395,7 @@ function CaptureScreen() {
                     Overview. Other sections show the quick balance here too. */}
                 {rt.totalIn > 0 && sectionId !== 'granule' && (
                   <div className="pt-3 border-t border-stone-100">
-                    <MassBalanceTable rows={balanceRows} tolerance={massBalanceToleranceFor(sectionId)} note={balanceNote} />
+                    <MassBalanceTable rows={balanceRows} tolerance={rtTolKg} note={balanceNote} carryOverLabel={carryOverLabel} />
                   </div>
                 )}
 
@@ -2509,7 +2593,7 @@ function CaptureScreen() {
             <SignOff
               status={status} locked={locked} canApprove={canApprove}
               operatorName={verifiedOp ? (verifiedOp.display_name || verifiedOp.name) : (opNames[0] ?? '')}
-              balanceRows={balanceRows} balanceTolerance={massBalanceToleranceFor(sectionId)} balanceNote={balanceNote}
+              balanceRows={balanceRows} balanceTolerance={rtTolKg} balanceNote={balanceNote} carryOverLabel={carryOverLabel}
               sessionId={sessionId} operatorId={verifiedOp?.user_id ?? user?.id ?? null}
               sectionId={sectionId} date={dateParam} shift={shift}
               comments={comments} onComments={setComments}
@@ -2548,9 +2632,9 @@ function CaptureScreen() {
 }
 
 // ── Sign-off tab ──────────────────────────────────────────────────────────────
-function SignOff({ status, locked, canApprove, operatorName, balanceRows, balanceTolerance, balanceNote, sessionId, operatorId, sectionId, date, shift, comments, onComments, hasRun, endOfRun, onEndOfRun, onSign, onSubmit, onApprove, submitting, capturedCodes }: {
+function SignOff({ status, locked, canApprove, operatorName, balanceRows, balanceTolerance, balanceNote, carryOverLabel, sessionId, operatorId, sectionId, date, shift, comments, onComments, hasRun, endOfRun, onEndOfRun, onSign, onSubmit, onApprove, submitting, capturedCodes }: {
   status: string; locked: boolean; canApprove: boolean; operatorName: string
-  balanceRows: BalanceRow[]; balanceTolerance: number; balanceNote?: string
+  balanceRows: BalanceRow[]; balanceTolerance: number; balanceNote?: string; carryOverLabel?: string
   sessionId: string | null; operatorId: string | null; sectionId: string; date: string; shift: string
   comments: string; onComments: (v: string) => void
   hasRun: boolean; endOfRun: boolean; onEndOfRun: (v: boolean) => void
@@ -2581,7 +2665,7 @@ function SignOff({ status, locked, canApprove, operatorName, balanceRows, balanc
           shows this figure in a different shape than what was already seen
           while capturing. */}
       <div className="bg-white border border-stone-200 rounded-2xl p-4">
-        <MassBalanceTable rows={balanceRows} tolerance={balanceTolerance} note={balanceNote} />
+        <MassBalanceTable rows={balanceRows} tolerance={balanceTolerance} note={balanceNote} carryOverLabel={carryOverLabel} />
       </div>
 
       {/* Auto-derived timesheet — operator confirms (with light edits) at sign-off */}

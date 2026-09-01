@@ -15,7 +15,7 @@ import {
 } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
-import { sectionMeta, SECTION_ORDER, massBalanceToleranceFor, VARIANT_OPTIONS } from '@/lib/production/capture-config'
+import { sectionMeta, SECTION_ORDER, massBalanceToleranceKg, VARIANT_OPTIONS } from '@/lib/production/capture-config'
 import { sastToday } from '@/lib/production/shifts'
 import {
   Panel, PanelHead, PanelBody, Stat, StatRow, BarRow, ShareBar, ActionPanel,
@@ -336,13 +336,13 @@ function OrdersInner() {
     }
     const flagged = filtered.filter(s => {
       const v = s.balance_kg ?? (s.total_input_kg - s.total_output_kg)
-      return (s.bag_count > 0 || s.debag_count > 0) && Math.abs(v) > massBalanceToleranceFor(s.section_id)
+      return (s.bag_count > 0 || s.debag_count > 0) && Math.abs(v) > massBalanceToleranceKg(s.total_input_kg)
     })
     for (const s of flagged.slice(0, 5)) {
       const v = s.balance_kg ?? (s.total_input_kg - s.total_output_kg)
       out.push({
         label: `${sectionMeta(s.section_id).name} is out by ${v.toFixed(1)} kg`,
-        detail: `${format(parseISO(s.date + 'T12:00:00'), 'EEE d MMM')} · ${s.shift} · tolerance ±${massBalanceToleranceFor(s.section_id)} kg`,
+        detail: `${format(parseISO(s.date + 'T12:00:00'), 'EEE d MMM')} · ${s.shift} · tolerance ±${massBalanceToleranceKg(s.total_input_kg).toFixed(1)} kg (1%)`,
         href: `/production/capture/${s.section_id}?date=${s.date}&shift=${s.shift}&session=${s.id}&tab=overview&return=${encodeURIComponent(returnUrl)}`,
         severity: 'critical',
       })
@@ -721,7 +721,7 @@ function OrderRow({ session: s, canEdit, canDelete, canRequestReopen, returnUrl,
   const meta       = sectionMeta(s.section_id)
   const st         = STATUS[s.status] ?? STATUS.new
   const variance   = s.balance_kg ?? (s.total_input_kg - s.total_output_kg)
-  const withinTol  = Math.abs(variance) <= massBalanceToleranceFor(s.section_id)
+  const withinTol  = Math.abs(variance) <= massBalanceToleranceKg(s.total_input_kg)
   const hasData    = s.bag_count > 0 || s.debag_count > 0 || s.has_raw_data
   const archived   = !!s.deleted_at
   const canManage  = canEdit || canDelete
