@@ -101,13 +101,53 @@
 -- ---------------------------------------------------------------------------
 
 
+-- IF A QUERY HERE RETURNED NOTHING, IT WAS ONE OF THESE THREE
+--   1. COUNT(DISTINCT (a, b)) — fixed. Inside an aggregate's argument list
+--      Postgres parses (a, b) as TWO arguments, so that was count(text, text),
+--      which does not exist. It errored rather than returning rows.
+--   2. The scope filtered on status <> 'approved'. A finished shift is submitted
+--      or signed off by the time anyone looks at it, so the very sessions in
+--      question were excluded. The inspect steps now read every status; only the
+--      writes in Step 2 spare a signed-off record.
+--   3. Steps 1/1b/2 share TEMP views. Run in a new tab, or after a reconnect,
+--      _repair_scope does not exist and the step fails.
+--
+--   Step 0 below avoids all three: one statement, no temp views, no status
+--   filter, no HAVING. Start there.
+--
+-- ── STEP 0 — ONE SELF-CONTAINED CHECK. Paste and run; no setup, no sequencing.
+-- Always returns a row per Sieving session in the window, so an empty result can
+-- only mean "no such session", never "the query silently filtered it out".
+--
+-- Reads: rows_captured = debag rows in draft_data with a weight;
+--        distinct_bags = distinct (lot, bag label) pairs = the real bag count;
+--        copies        = the surplus. copies = 0 means that session is CLEAN.
+SELECT s.date,
+       s.shift,
+       s.status,
+       s.id AS session_id,
+       jsonb_array_length(COALESCE(s.draft_data->'productions','[]'::jsonb)) AS batches,
+       COUNT(d.*)                                                            AS rows_captured,
+       COUNT(DISTINCT btrim(COALESCE(d->>'lot','')) || '|' || btrim(COALESCE(d->>'bag_no',''))) AS distinct_bags,
+       COUNT(d.*) - COUNT(DISTINCT btrim(COALESCE(d->>'lot','')) || '|' || btrim(COALESCE(d->>'bag_no',''))) AS copies,
+       ROUND(SUM(COALESCE(NULLIF(replace(d->>'nett', ',', '.'), ''), '0')::numeric), 1) AS input_kg
+  FROM production.prod_sessions s
+  LEFT JOIN LATERAL jsonb_array_elements(COALESCE(s.draft_data->'productions','[]'::jsonb)) p ON TRUE
+  LEFT JOIN LATERAL jsonb_array_elements(COALESCE(p->'data'->'debag','[]'::jsonb)) d
+         ON COALESCE(NULLIF(replace(d->>'nett', ',', '.'), ''), '0')::numeric > 0
+ WHERE s.section_id = 'sieving'
+   AND s.date >= DATE '2026-08-26'
+ GROUP BY s.date, s.shift, s.status, s.id, s.draft_data
+ ORDER BY s.date DESC, s.shift;
+
+
 -- ── STEP 1 — INSPECT (read-only). Re-run this; the verdict has changed. ─────
 CREATE TEMP VIEW _repair_scope AS
   SELECT id, date, shift, status, draft_data
     FROM production.prod_sessions
    WHERE section_id = 'sieving'
      AND date BETWEEN DATE '2026-08-26' AND DATE '2026-09-01'   -- ← window to inspect
-     AND status <> 'approved';                                  -- never rewrite a signed-off record
+     AND TRUE;  -- inspect every status. Step 2 is what must spare a signed-off record.
 
 -- A debagging row's identity, matching lib/production/debag-reconcile.ts:
 -- (operator's bag label, lot, net weight). Split by whether the row could ever
@@ -169,8 +209,8 @@ SELECT b.session_id, b.date, b.shift, b.idx AS batch_no,
 -- distinct_bags is the number to check against the paper sheet / the operator.
 SELECT s.date, s.shift, s.id AS session_id,
        COUNT(*)                                      AS rows_captured,
-       COUNT(DISTINCT (r.lot, r.bag_no))              AS distinct_bags,
-       COUNT(*) - COUNT(DISTINCT (r.lot, r.bag_no))   AS copies_to_remove
+       COUNT(DISTINCT r.lot || '|' || r.bag_no)              AS distinct_bags,
+       COUNT(*) - COUNT(DISTINCT r.lot || '|' || r.bag_no)   AS copies_to_remove
   FROM _repair_scope s,
        LATERAL jsonb_array_elements(COALESCE(s.draft_data->'productions', '[]'::jsonb)) p,
        LATERAL jsonb_array_elements(COALESCE(p->'data'->'debag', '[]'::jsonb)) d,
@@ -239,9 +279,11 @@ UPDATE production.prod_sessions s
        updated_at = NOW()
   FROM rebuilt rb
  WHERE s.id = rb.session_id
-   -- Idempotent, and a session that was already clean (31 Aug afternoon) is
-   -- skipped rather than rewritten for no reason.
-   AND s.draft_data->'productions' IS DISTINCT FROM rb.productions;
+   -- Idempotent: a session that was already clean (31 Aug afternoon) is skipped
+   -- rather than rewritten for no reason.
+   AND s.draft_data->'productions' IS DISTINCT FROM rb.productions
+   -- The inspect steps look at every status on purpose; the WRITE must not.
+   AND s.status <> 'approved';
 
 -- Trim prod_debagging the same way: one row per (lot, bag label), oldest kept.
 -- Farm bags only — bucket-elevator and machine-spillage rows were never part of
@@ -256,7 +298,7 @@ WITH ranked AS (
            ORDER BY dbg.bagging_time NULLS LAST, dbg.created_at, dbg.id
          ) AS rn
     FROM production.prod_debagging dbg
-    JOIN _repair_scope s ON s.id = dbg.session_id
+    JOIN _repair_scope s ON s.id = dbg.session_id AND s.status <> 'approved'
    WHERE dbg.is_spillage = false
      AND dbg.product_type IN ('Farm Bag', '500kg Farm Bag')
 )
@@ -288,12 +330,12 @@ COMMIT;
 -- 2026-08-26) still holding a repeated bag identity.
 SELECT s.date, s.shift, s.id, s.status,
        COUNT(*) AS rows_captured,
-       COUNT(DISTINCT (btrim(COALESCE(d->>'lot', '')), btrim(COALESCE(d->>'bag_no', '')))) AS distinct_bags
+       COUNT(DISTINCT btrim(COALESCE(d->>'lot','')) || '|' || btrim(COALESCE(d->>'bag_no',''))) AS distinct_bags
   FROM production.prod_sessions s,
        LATERAL jsonb_array_elements(COALESCE(s.draft_data->'productions', '[]'::jsonb)) p,
        LATERAL jsonb_array_elements(COALESCE(p->'data'->'debag', '[]'::jsonb)) d
  WHERE s.section_id = 'sieving' AND s.date >= DATE '2026-08-26'
    AND COALESCE(NULLIF(replace(d->>'nett', ',', '.'), ''), '0')::numeric > 0
  GROUP BY s.date, s.shift, s.id, s.status
-HAVING COUNT(*) > COUNT(DISTINCT (btrim(COALESCE(d->>'lot', '')), btrim(COALESCE(d->>'bag_no', ''))))
+HAVING COUNT(*) > COUNT(DISTINCT btrim(COALESCE(d->>'lot','')) || '|' || btrim(COALESCE(d->>'bag_no','')))
  ORDER BY s.date DESC, s.shift;
