@@ -45,18 +45,49 @@
 --   and remains the record of what was bagged; this script does not write to it,
 --   to prod_bagging, or to scan_events.
 --
--- THE TRAP — READ BEFORE RUNNING ANYTHING
---   Every farm bag in these sessions carries the SAME identity: bag label E-744,
---   lot GS-0314, 350.0 kg. So a copied row is byte-identical to a real one, and
---   no query can tell them apart. On 31 Aug morning the offset is 5 — meaning if
---   batch 1 held five zero-weight rows, batch 2's 16 real bags would match the
---   copy signature exactly and a structural repair would delete a genuine
---   changeover's records.
+-- WHAT MAKES THIS EXACT — bag identity, not counting
+--   An earlier draft of this script assumed the rows could not be told apart,
+--   because the production-order page showed 258 rows all reading E-744 /
+--   GS-0314 / 350.0 kg. That was the duplicate view, not the capture. The
+--   capture screen shows distinct bags — Bulk bag 1 is E-744 / GS-0314, bulk bag
+--   2 is I-705 / GS-0382 — and the paper sheet for 31-08-2026 carries 41 bags
+--   with 41 distinct (lot, bag label) pairs.
 --
---   So the signature is NOT trusted on its own. Step 2A only ever touches an
---   explicitly listed batch, and the list below is deliberately limited to the
---   batches where a copy is beyond doubt: exact doubling AND zero output bags.
---   For everything else use Step 2B, which trims to a count YOU confirm.
+--   A farm bag is a physical object and is debagged ONCE, so (lot, bag label) is
+--   a unique identity and a repeated pair IS a copy. No count to guess, no
+--   tolerance to pick, and nothing that can delete a real record: the rule keeps
+--   one row per real bag.
+--
+--   Verified against the floor's own numbers:
+--     2026-08-31 morning    37 rows captured -> 21 real  (13 Export + 8 Blend)
+--     2026-08-31 afternoon  20 rows captured -> 20 real  (already clean)
+--     2026-09-01 morning   262 rows captured -> 15 real  (operator: 15 in, 12 out)
+--
+--   Note the copying runs BOTH ways. A changeover copies the session into the new
+--   empty batch, and a page RELOAD resets activeIdx to 0 and copies the other
+--   batches into batch 1 — which is how 31 Aug morning's batch 1 came to hold 21
+--   rows when only 13 Export bags were debagged under it. The code fix covers
+--   both: the exclusion is symmetric, every batch now knows what its siblings
+--   hold.
+--
+-- DOES DEPLOYING THE CODE FIX LOSE THE CORRECT ROWS? NO.
+--   The fix is append-only. SievingCapture's self-heal has no delete path at all
+--   — its only write is `[...cur.debag, ...restored]`, and missingDebagRows()
+--   returns rows to ADD. What changed is that it now knows what the session's
+--   other batches hold, so it stops COPYING. It removes nothing.
+--
+--   So the 15 debagged bags and 12 bagged bags showing correctly on the capture
+--   screen right now are untouched by the deploy. The deploy stops the count
+--   growing; THIS script is what brings the already-duplicated rows back down,
+--   and it is a separate, optional step you run when you choose.
+--
+--   The UI changes in the same commits are display-only. Nothing that was
+--   removed from a screen writes to, or deletes from, any table.
+--
+-- RUN ALL STEPS IN ONE SQL SESSION
+--   Steps 1, 1b and 2 share TEMP views (_repair_scope, _rows, _batch). Open the
+--   SQL editor once and run them in order in the same tab; a new connection
+--   drops the temp objects and Step 2 will fail with "relation does not exist".
 --
 -- ORDER OF OPERATIONS
 --   1. Deploy the SievingCapture fix FIRST. Until it is live, every changeover
@@ -82,7 +113,7 @@ CREATE TEMP VIEW _repair_scope AS
 -- (operator's bag label, lot, net weight). Split by whether the row could ever
 -- have reached prod_debagging, because only those could have been copied.
 CREATE TEMP VIEW _rows AS
-  SELECT s.id AS session_id, s.date, s.shift, p.idx, p.batch, r.value AS row,
+  SELECT s.id AS session_id, s.date, s.shift, p.idx, p.batch, r.value AS bag_row,
          concat_ws('|',
            btrim(COALESCE(r.value->>'bag_no', '')),
            btrim(COALESCE(r.value->>'lot', '')),
@@ -128,203 +159,141 @@ SELECT b.session_id, b.date, b.shift, b.idx AS batch_no,
 -- (and possibly 2), distinct_identities = 1. That 1 is the reason for Step 2B.
 
 
--- ── STEP 2A — STRUCTURAL CLEAN, explicit batches only ───────────────────────
--- Use ONLY where distinct_identities > 1, i.e. the rows can actually be told
--- apart. Removes a listed batch's ledger-eligible rows and keeps its zero-weight
--- (still-being-typed) rows, its variant, grade and every output bag.
+-- ── STEP 1b — THE COUNT THAT MATTERS ────────────────────────────────────────
+-- A farm bag is a physical object: it is debagged ONCE. So (lot, bag label) is a
+-- unique identity, and a pair that appears more than once in a session is a copy
+-- by definition. This is what makes the repair exact rather than a judgement —
+-- confirmed against the paper sheet for 31-08-2026, where all 41 bags across the
+-- day carry 41 distinct (lot, bag) pairs.
 --
--- The list is empty on purpose. Add (session_id, batch_no) pairs you have
--- confirmed against Step 1 — nothing runs until you do.
+-- distinct_bags is the number to check against the paper sheet / the operator.
+SELECT s.date, s.shift, s.id AS session_id,
+       COUNT(*)                                      AS rows_captured,
+       COUNT(DISTINCT (r.lot, r.bag_no))              AS distinct_bags,
+       COUNT(*) - COUNT(DISTINCT (r.lot, r.bag_no))   AS copies_to_remove
+  FROM _repair_scope s,
+       LATERAL jsonb_array_elements(COALESCE(s.draft_data->'productions', '[]'::jsonb)) p,
+       LATERAL jsonb_array_elements(COALESCE(p->'data'->'debag', '[]'::jsonb)) d,
+       LATERAL (SELECT btrim(COALESCE(d->>'lot', ''))    AS lot,
+                       btrim(COALESCE(d->>'bag_no', '')) AS bag_no) r
+ WHERE COALESCE(NULLIF(replace(d->>'nett', ',', '.'), ''), '0')::numeric > 0
+ GROUP BY s.date, s.shift, s.id
+ ORDER BY s.date, s.shift;
+
+-- Known-good expectations at time of writing:
+--   2026-08-31 morning    37 rows -> 21 distinct  (13 Export + 8 Export Blend)
+--   2026-08-31 afternoon  20 rows -> 20 distinct  (already clean, nothing to do)
+--   2026-09-01 morning   262 rows -> 15 distinct  (operator confirmed 15 in, 12 out)
+--
+-- If distinct_bags does NOT match the paper sheet, STOP. That would mean bags
+-- were captured with a duplicated or blank label, which this rule cannot repair
+-- and which needs the operator, not a query.
+
+
+-- ── STEP 2 — DE-DUPLICATE ON BAG IDENTITY ───────────────────────────────────
+-- Keeps exactly one row per (lot, bag label) per session and drops the copies.
+-- Nothing else changes: every batch record, variant, grade and output bag stays.
+--
+-- Which copy survives, in order of preference:
+--   1. the one sitting in the batch whose grade matches the ROW's own grade —
+--      a bag debagged under Export Blend belongs to the Export Blend batch, and
+--      that is how 31 Aug's 8 blend bags get back to batch 2 rather than being
+--      stranded in batch 1 where a page reload copied them;
+--   2. failing that, the earliest by logged_at, then by position.
+--
+-- Rows with nett = 0 are left completely alone — they are bags still being typed,
+-- they never reached prod_debagging, and they were never copied.
 BEGIN;
 
-CREATE TEMP TABLE _clean (session_id uuid, batch_no int);
-INSERT INTO _clean (session_id, batch_no) VALUES
-  -- ('7b8774f2-5213-4c34-a687-10f86298df03', 4),
-  -- ('7b8774f2-5213-4c34-a687-10f86298df03', 5),
-  -- ('7b8774f2-5213-4c34-a687-10f86298df03', 6)
-  (NULL, NULL);
-DELETE FROM _clean WHERE session_id IS NULL;
+CREATE TEMP TABLE _keep AS
+  SELECT session_id, idx, ord, in_ledger,
+         ROW_NUMBER() OVER (
+           PARTITION BY session_id,
+                        btrim(COALESCE(bag_row->>'lot', '')),
+                        btrim(COALESCE(bag_row->>'bag_no', ''))
+           ORDER BY (btrim(COALESCE(bag_row->>'grade', '')) IS NOT DISTINCT FROM
+                     btrim(COALESCE(batch->>'grade', ''))) DESC,
+                    NULLIF(bag_row->>'logged_at', '') NULLS LAST,
+                    idx, ord
+         ) AS rn
+    FROM _rows
+   WHERE in_ledger;
 
-CREATE TEMP TABLE _rebuilt AS
+-- Rebuild draft_data: each batch keeps its winning rows plus every nett = 0 row.
+WITH rebuilt AS (
   SELECT b.session_id,
          jsonb_agg(
-           CASE WHEN c.batch_no IS NULL THEN b.batch
-                ELSE jsonb_set(b.batch, '{data,debag}', COALESCE((
-                       SELECT jsonb_agg(r.row ORDER BY r.ord)
-                         FROM _rows r
-                        WHERE r.session_id = b.session_id AND r.idx = b.idx
-                          AND NOT r.in_ledger          -- keep in-progress rows
-                     ), '[]'::jsonb))
-           END ORDER BY b.idx) AS productions,
-         bool_or(c.batch_no IS NOT NULL) AS changed
-    FROM _batch b
-    LEFT JOIN _clean c ON c.session_id = b.session_id AND c.batch_no = b.idx
-   GROUP BY b.session_id;
-
-UPDATE production.prod_sessions s
-   SET draft_data = jsonb_set(s.draft_data, '{productions}', r.productions),
-       updated_at = NOW()
-  FROM _rebuilt r
- WHERE s.id = r.session_id AND r.changed;
-
--- Trim prod_debagging to match: for each row identity, KEEP the earliest rows up
--- to the corrected count and delete only the surplus. Not a delete-and-rebuild —
--- that would empty the order panels until the operator next saved, and it is the
--- originals we want to survive, not the copies.
-WITH target AS (
-  SELECT r.session_id,
-         concat_ws('|',
-           btrim(COALESCE(d->>'bag_no', '')),
-           btrim(COALESCE(d->>'lot', '')),
-           round(COALESCE(NULLIF(replace(d->>'nett', ',', '.'), ''), '0')::numeric, 3)) AS k,
-         COUNT(*) AS keep_n
-    FROM _rebuilt r,
-         LATERAL jsonb_array_elements(r.productions) p,
-         LATERAL jsonb_array_elements(COALESCE(p->'data'->'debag', '[]'::jsonb)) d
-   WHERE r.changed
-   GROUP BY 1, 2
-), ranked AS (
-  SELECT dbg.id, dbg.session_id,
-         concat_ws('|',
-           btrim(COALESCE(dbg.notes, '')),
-           btrim(COALESCE(dbg.lot_number, '')),
-           round(COALESCE(dbg.kg_nett, 0)::numeric, 3)) AS k,
-         ROW_NUMBER() OVER (
-           PARTITION BY dbg.session_id, btrim(COALESCE(dbg.notes, '')),
-                        btrim(COALESCE(dbg.lot_number, '')),
-                        round(COALESCE(dbg.kg_nett, 0)::numeric, 3)
-           ORDER BY dbg.created_at, dbg.id) AS rn
-    FROM production.prod_debagging dbg
-    JOIN _rebuilt r ON r.session_id = dbg.session_id AND r.changed
-   -- Farm bags only. Bucket-elevator and machine-spillage rows were never part
-   -- of the duplication and are not touched.
-   WHERE dbg.is_spillage = false
-     AND dbg.product_type IN ('Farm Bag', '500kg Farm Bag')
-)
-DELETE FROM production.prod_debagging d
- USING ranked
- WHERE d.id = ranked.id
-   AND ranked.rn > COALESCE((SELECT t.keep_n FROM target t
-                              WHERE t.session_id = ranked.session_id AND t.k = ranked.k), 0);
-
-SELECT s.date, s.shift, s.id,
-       jsonb_array_length(s.draft_data->'productions') AS batches_kept,
-       (SELECT COUNT(*) FROM production.prod_debagging x
-         WHERE x.session_id = s.id AND x.is_spillage = false) AS debag_rows_now,
-       (SELECT COUNT(*) FROM production.bag_tags t
-         WHERE t.session_id = s.id AND t.status <> 'voided')  AS output_bags_untouched
-  FROM production.prod_sessions s JOIN _rebuilt r ON r.session_id = s.id AND r.changed;
-
-COMMIT;
--- ROLLBACK;  -- ← if the numbers above do not read right.
-
-
--- ── STEP 2B — CONFIRMED-COUNT TRIM (use this for 2026-09-01) ────────────────
--- When distinct_identities = 1, every row is byte-identical and no structural
--- rule can separate a copy from a real bag. The only honest input is the real
--- number of farm bags debagged, off the paper form or the physical count.
---
--- This keeps the EARLIEST n rows for that identity and deletes the surplus, then
--- rewrites draft_data so the batch that captured them holds exactly those rows
--- and the later batches hold none. Batch records, variants, grades and output
--- bags are all untouched.
---
--- HOW TO PICK THE COUNT — do not guess it from the batch sizes.
---   2026-09-01 morning bagged 4 560 kg across 17 output bags. At ~350 kg a farm
---   bag, the input that implies:
---
---     13 bags = 4 550 kg in -> 100.2% yield   impossible
---     14 bags = 4 900 kg in ->  93.1% yield   implausible
---     15 bags = 5 250 kg in ->  86.9% yield
---     16 bags = 5 600 kg in ->  81.4% yield
---     17 bags = 5 950 kg in ->  76.6% yield
---     22 bags = 7 700 kg in ->  59.2% yield   (batches 1+2 together)
---
---   So batch 1's 13 rows are NOT the whole genuine input — sieving always loses
---   dust, spillage and elevator carry-over, and 100% yield cannot happen. Some
---   of batch 2's 9 rows are real bags debagged after the changeover into
---   RA-Conventional. Trimming to 13 would delete them.
---
---   Take the number off the paper debagging sheet or the physical bag count for
---   that shift. The yield column above is a sanity check on it, not a source
---   for it. Leave this unset and the script refuses to run.
-BEGIN;
-
--- ← SET true_bag_count TO THE CONFIRMED PHYSICAL COUNT. NULL by design.
-CREATE TEMP TABLE _trim AS
-  SELECT '7b8774f2-5213-4c34-a687-10f86298df03'::uuid AS session_id,
-         NULL::int                                    AS true_bag_count;
-
-DO $$ BEGIN
-  IF (SELECT true_bag_count FROM _trim) IS NULL THEN
-    RAISE EXCEPTION 'Set true_bag_count to the confirmed physical bag count first — see the yield table above.';
-  END IF;
-END $$;
-
--- draft_data: the first batch keeps the confirmed rows (plus any in-progress
--- zero-weight rows), later batches keep their zero-weight rows only.
-WITH keep AS (
-  SELECT r.session_id, r.idx, r.ord,
-         ROW_NUMBER() OVER (PARTITION BY r.session_id ORDER BY r.idx, r.ord) AS seq
-    FROM _rows r JOIN _trim t ON t.session_id = r.session_id
-   WHERE r.in_ledger
-), rebuilt AS (
-  SELECT b.session_id,
-         jsonb_agg(COALESCE(
            jsonb_set(b.batch, '{data,debag}', COALESCE((
-             SELECT jsonb_agg(r.row ORDER BY r.ord)
+             SELECT jsonb_agg(r.bag_row ORDER BY r.ord)
                FROM _rows r
-               LEFT JOIN keep k ON k.session_id = r.session_id AND k.idx = r.idx AND k.ord = r.ord
+               LEFT JOIN _keep k
+                      ON k.session_id = r.session_id AND k.idx = r.idx AND k.ord = r.ord
               WHERE r.session_id = b.session_id AND r.idx = b.idx
-                AND (NOT r.in_ledger OR k.seq <= (SELECT true_bag_count FROM _trim))
-           ), '[]'::jsonb)), b.batch) ORDER BY b.idx) AS productions
-    FROM _batch b JOIN _trim t ON t.session_id = b.session_id
+                AND (NOT r.in_ledger OR k.rn = 1)
+           ), '[]'::jsonb)) ORDER BY b.idx) AS productions
+    FROM _batch b
    GROUP BY b.session_id
 )
 UPDATE production.prod_sessions s
    SET draft_data = jsonb_set(s.draft_data, '{productions}', rb.productions),
        updated_at = NOW()
   FROM rebuilt rb
- WHERE s.id = rb.session_id;
+ WHERE s.id = rb.session_id
+   -- Idempotent, and a session that was already clean (31 Aug afternoon) is
+   -- skipped rather than rewritten for no reason.
+   AND s.draft_data->'productions' IS DISTINCT FROM rb.productions;
 
--- prod_debagging: keep the earliest true_bag_count farm-bag rows, drop the rest.
+-- Trim prod_debagging the same way: one row per (lot, bag label), oldest kept.
+-- Farm bags only — bucket-elevator and machine-spillage rows were never part of
+-- the duplication. Deleting the surplus rather than clearing and rebuilding, so
+-- the original rows survive and the order panels stay populated meanwhile.
 WITH ranked AS (
   SELECT dbg.id,
-         ROW_NUMBER() OVER (ORDER BY dbg.created_at, dbg.id) AS rn
-    FROM production.prod_debagging dbg JOIN _trim t ON t.session_id = dbg.session_id
+         ROW_NUMBER() OVER (
+           PARTITION BY dbg.session_id,
+                        btrim(COALESCE(dbg.lot_number, '')),
+                        btrim(COALESCE(dbg.notes, ''))
+           ORDER BY dbg.bagging_time NULLS LAST, dbg.created_at, dbg.id
+         ) AS rn
+    FROM production.prod_debagging dbg
+    JOIN _repair_scope s ON s.id = dbg.session_id
    WHERE dbg.is_spillage = false
      AND dbg.product_type IN ('Farm Bag', '500kg Farm Bag')
 )
 DELETE FROM production.prod_debagging d
- USING ranked, _trim t
- WHERE d.id = ranked.id AND ranked.rn > t.true_bag_count;
+ USING ranked
+ WHERE d.id = ranked.id AND ranked.rn > 1;
 
+-- Verify BEFORE committing. farm_bag_rows_now must equal the paper count
+-- (21 / 20 / 15), and output_bags must be unchanged from Step 1.
 SELECT s.date, s.shift,
        jsonb_array_length(s.draft_data->'productions') AS batches_kept,
        (SELECT COUNT(*) FROM production.prod_debagging x
          WHERE x.session_id = s.id AND x.is_spillage = false
            AND x.product_type IN ('Farm Bag', '500kg Farm Bag'))  AS farm_bag_rows_now,
-       (SELECT COUNT(*) FROM production.bag_tags t2
-         WHERE t2.session_id = s.id AND t2.status <> 'voided')    AS output_bags_untouched
-  FROM production.prod_sessions s JOIN _trim t ON t.session_id = s.id;
+       (SELECT COUNT(*) FROM production.bag_tags t
+         WHERE t.session_id = s.id AND t.status <> 'voided')       AS output_bags,
+       (SELECT COALESCE(SUM(x.kg_nett), 0) FROM production.prod_debagging x
+         WHERE x.session_id = s.id AND x.is_spillage = false)      AS input_kg_now
+  FROM production.prod_sessions s
+  JOIN _repair_scope sc ON sc.id = s.id
+ ORDER BY s.date, s.shift;
 
 COMMIT;
--- ROLLBACK;
+-- ROLLBACK;  -- ← if farm_bag_rows_now does not match the paper sheet.
 
 
 -- ── STEP 3 — SWEEP ──────────────────────────────────────────────────────────
--- Any Sieving session since the self-heal shipped (#819, 2026-08-26) whose input
--- is implausible against its own output. 26-28 Aug and 31 Aug all show a single
--- batch (or, on 31 Aug, two batches from a real changeover) and are expected to
--- be clean — this is the standing check, not a claim that they are dirty.
+-- Standing check for any Sieving session since the self-heal shipped (#819,
+-- 2026-08-26) still holding a repeated bag identity.
 SELECT s.date, s.shift, s.id, s.status,
-       jsonb_array_length(COALESCE(s.draft_data->'productions', '[]'::jsonb)) AS batches,
-       (SELECT COALESCE(SUM(COALESCE(NULLIF(replace(r->>'nett', ',', '.'), ''), '0')::numeric), 0)
-          FROM jsonb_array_elements(COALESCE(s.draft_data->'productions', '[]'::jsonb)) p,
-               jsonb_array_elements(COALESCE(p->'data'->'debag', '[]'::jsonb)) r)   AS in_kg,
-       (SELECT COALESCE(SUM(COALESCE(NULLIF(replace(b->>'weight', ',', '.'), ''), '0')::numeric), 0)
-          FROM jsonb_array_elements(COALESCE(s.draft_data->'productions', '[]'::jsonb)) p,
-               jsonb_array_elements(COALESCE(p->'data'->'outputs', '[]'::jsonb)) b)  AS out_kg
-  FROM production.prod_sessions s
+       COUNT(*) AS rows_captured,
+       COUNT(DISTINCT (btrim(COALESCE(d->>'lot', '')), btrim(COALESCE(d->>'bag_no', '')))) AS distinct_bags
+  FROM production.prod_sessions s,
+       LATERAL jsonb_array_elements(COALESCE(s.draft_data->'productions', '[]'::jsonb)) p,
+       LATERAL jsonb_array_elements(COALESCE(p->'data'->'debag', '[]'::jsonb)) d
  WHERE s.section_id = 'sieving' AND s.date >= DATE '2026-08-26'
+   AND COALESCE(NULLIF(replace(d->>'nett', ',', '.'), ''), '0')::numeric > 0
+ GROUP BY s.date, s.shift, s.id, s.status
+HAVING COUNT(*) > COUNT(DISTINCT (btrim(COALESCE(d->>'lot', '')), btrim(COALESCE(d->>'bag_no', ''))))
  ORDER BY s.date DESC, s.shift;
