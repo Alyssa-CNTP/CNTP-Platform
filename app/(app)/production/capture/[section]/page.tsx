@@ -18,7 +18,6 @@ import {
   type SievingData, type Shift,
 } from '@/components/production/capture/SievingCapture'
 import { debagRowKey } from '@/lib/production/debag-reconcile'
-import { MassBalanceTable, BalanceBadge, type BalanceRow } from '@/components/production/capture/MassBalanceTable'
 import {
   RefiningCapture, emptyRefiningData, refiningTotals,
   type RefiningData,
@@ -1809,48 +1808,7 @@ function CaptureScreen() {
   // Material left in the elevator for tomorrow is work in progress, not a
   // shortfall — it comes out of Total Output and off the variance, and is shown
   // in its own column instead.
-  const rtVariance  = rt.balance
-  const rtWithinTol = Math.abs(rtVariance) <= massBalanceToleranceFor(sectionId)
   const multi = productions.length > 1
-  // Rows for the tabular balance — only shifts that actually captured material.
-  const balanceRows = [
-    (morningTotals.totalIn > 0 || morningTotals.totalOut > 0) ? { shift: 'Morning' as const, ...morningTotals } : null,
-    (afternoonTotals.totalIn > 0 || afternoonTotals.totalOut > 0) ? { shift: 'Afternoon' as const, ...afternoonTotals } : null,
-  ].filter(Boolean) as { shift: 'Morning' | 'Afternoon'; totalIn: number; totalOut: number; carryOverOut: number }[]
-  // The bucket-elevator note only applies to Sieving; Granule shows its custom
-  // PR-FM-026/7 decomposition (G = C* + carry-over/waste, and % yield); other
-  // lines get a generic run note.
-  let balanceNote: string | undefined =
-    sectionId === 'sieving'
-      ? undefined
-      : 'One balance for the whole production run (07h00–01h00), combined across every shift.'
-  if (sectionId === 'granule') {
-    const runProds = runSpansShifts ? [...productions, ...siblingProductions, ...otherShiftProductions] : [...productions, ...siblingProductions]
-    let A = 0, cStar = 0, carry = 0
-    runProds.forEach(p => {
-      const g = granuleTotals(p.data as GranuleData)
-      A += g.totalA; cStar += g.cStar; carry += g.D + g.E + g.wasteF
-    })
-    const G = cStar + carry
-    const yieldPct = A > 0 ? (G / A) * 100 : 0
-    balanceNote = `Granules produced (C*) ${cStar.toFixed(0)} kg + carry-over/waste ${carry.toFixed(0)} kg = ${G.toFixed(0)} kg produced (G), from ${A.toFixed(0)} kg dust mixed (A). Yield ${yieldPct.toFixed(0)}%.`
-  }
-  // A batch record this shift running a genuinely different variant/grade is
-  // deliberately kept out of the combined balance above (two different runs
-  // must never have their balances summed just because they share a shift) —
-  // but a SILENT exclusion reads to the operator as "this shift's whole
-  // story", making an already-bagged batch look like it's still owed. Surface
-  // it instead of hiding it, without changing what actually gets combined.
-  const siblingIds = new Set(siblingProductions.map(p => p.id))
-  const excludedThisShift = shiftOtherProductions.filter(p => !siblingIds.has(p.id) && hasCaptureData([p]))
-  if (excludedThisShift.length > 0) {
-    const ex = sessionTotals(excludedThisShift, shiftBal)
-    const exLabels = Array.from(new Set(excludedThisShift.map(p =>
-      (VARIANT_OPTIONS.find(v => v.value === p.variant)?.label ?? p.variant) || 'unspecified'
-    ))).join(', ')
-    const exNote = `Also on this shift, under a different variant/grade (${exLabels}): ${ex.totalIn.toFixed(0)} kg in, ${ex.totalOut.toFixed(0)} kg out — its own separate balance, not part of the total above.`
-    balanceNote = balanceNote ? `${balanceNote} ${exNote}` : exNote
-  }
 
   // Sign-off candidates: a person-logged-in tablet has a single verified operator;
   // a section/machine tablet resolves the signer from the rostered operators by PIN.
@@ -1999,10 +1957,6 @@ function CaptureScreen() {
                 </p>
               ) : (
                 <>
-                  <div className="flex items-center gap-2">
-                    <span className="text-[13px] text-text-muted">Current mass balance:</span>
-                    <BalanceBadge variance={rtVariance} tolerance={massBalanceToleranceFor(sectionId)} />
-                  </div>
                   <p className="text-[13px] text-text-muted">
                     This carries into the new batch — leftover raw material is still part of the same run and can be bagged out as Blocks / Rolsiev Sticks / Indent Sticks under the new grade.
                   </p>
@@ -2308,7 +2262,6 @@ function CaptureScreen() {
                     <span className="text-[10px] font-semibold text-stone-400 uppercase tracking-widest">Batches this run ({productions.length})</span>
                     {productions.map((p, i) => {
                       const pt = prodTotals(p, shiftBal)
-                      const pVariance = pt.totalIn - pt.totalOut
                       const isActive = i === activeIdx
                       const variantLabel = VARIANT_OPTIONS.find(v => v.value === p.variant)?.label ?? p.variant ?? '—'
                       const gradeLabel = p.grade ? DESTINATION_OPTIONS.find(o => o.value === p.grade)?.label ?? p.grade : ''
@@ -2317,21 +2270,12 @@ function CaptureScreen() {
                           <span className="font-semibold text-text shrink-0">P{i + 1}</span>
                           <span className="text-stone-500 truncate flex-1">{variantLabel}{gradeLabel ? ` · ${gradeLabel}` : ''}</span>
                           <span className="font-mono text-stone-600 shrink-0">{pt.totalIn.toFixed(1)} → {pt.totalOut.toFixed(1)} kg</span>
-                          <BalanceBadge variance={pVariance} tolerance={massBalanceToleranceFor(sectionId)} />
                           <span className={`text-[10px] px-1.5 py-0.5 rounded-full shrink-0 ${isActive ? 'bg-brand/10 text-brand' : 'bg-stone-100 text-stone-500'}`}>
                             {isActive ? 'current' : 'done'}
                           </span>
                         </div>
                       )
                     })}
-                  </div>
-                )}
-
-                {/* Granule's balance is custom and lives in one place only — the
-                    Overview. Other sections show the quick balance here too. */}
-                {rt.totalIn > 0 && sectionId !== 'granule' && (
-                  <div className="pt-3 border-t border-stone-100">
-                    <MassBalanceTable rows={balanceRows} tolerance={massBalanceToleranceFor(sectionId)} note={balanceNote} />
                   </div>
                 )}
 
@@ -2480,7 +2424,10 @@ function CaptureScreen() {
               sectionId={sectionId} date={dateParam} shift={shift} sessionId={sessionId} locked={locked}
               operators={candidateOps}
               variant={active?.variant ?? ''} grade={active?.grade ?? 'A'}
-              massBalance={{ totalIn: rt.totalIn, totalOut: rt.totalOut, variance: rtVariance, withinTol: rtWithinTol }}
+              massBalance={{
+                totalIn: rt.totalIn, totalOut: rt.totalOut, variance: rt.balance,
+                withinTol: Math.abs(rt.balance) <= massBalanceToleranceFor(sectionId),
+              }}
               running={totalIn > 0} active={status !== 'submitted' && status !== 'approved'}
             />
           )}
@@ -2520,8 +2467,6 @@ function CaptureScreen() {
                 showSerials={isIT}
                 productionOrders={assignment?.production_orders}
                 locked={locked}
-                balanceRows={balanceRows}
-                balanceNote={balanceNote}
                 blenderRatios={blenderRatios}
               />
             </>
@@ -2531,7 +2476,6 @@ function CaptureScreen() {
             <SignOff
               status={status} locked={locked} canApprove={canApprove}
               operatorName={verifiedOp ? (verifiedOp.display_name || verifiedOp.name) : (opNames[0] ?? '')}
-              balanceRows={balanceRows} balanceTolerance={massBalanceToleranceFor(sectionId)} balanceNote={balanceNote}
               sessionId={sessionId} operatorId={verifiedOp?.user_id ?? user?.id ?? null}
               sectionId={sectionId} date={dateParam} shift={shift}
               comments={comments} onComments={setComments}
@@ -2570,9 +2514,8 @@ function CaptureScreen() {
 }
 
 // ── Sign-off tab ──────────────────────────────────────────────────────────────
-function SignOff({ status, locked, canApprove, operatorName, balanceRows, balanceTolerance, balanceNote, sessionId, operatorId, sectionId, date, shift, comments, onComments, hasRun, endOfRun, onEndOfRun, onSign, onSubmit, onApprove, submitting, capturedCodes }: {
+function SignOff({ status, locked, canApprove, operatorName, sessionId, operatorId, sectionId, date, shift, comments, onComments, hasRun, endOfRun, onEndOfRun, onSign, onSubmit, onApprove, submitting, capturedCodes }: {
   status: string; locked: boolean; canApprove: boolean; operatorName: string
-  balanceRows: BalanceRow[]; balanceTolerance: number; balanceNote?: string
   sessionId: string | null; operatorId: string | null; sectionId: string; date: string; shift: string
   comments: string; onComments: (v: string) => void
   hasRun: boolean; endOfRun: boolean; onEndOfRun: (v: boolean) => void
@@ -2599,13 +2542,6 @@ function SignOff({ status, locked, canApprove, operatorName, balanceRows, balanc
           <span>Check your totals below, then sign your name and tap submit. Your supervisor approves and locks it after.</span>
         </div>
       )}
-      {/* Mass balance — same table as the Production tab, so sign-off never
-          shows this figure in a different shape than what was already seen
-          while capturing. */}
-      <div className="bg-white border border-stone-200 rounded-2xl p-4">
-        <MassBalanceTable rows={balanceRows} tolerance={balanceTolerance} note={balanceNote} />
-      </div>
-
       {/* Auto-derived timesheet — operator confirms (with light edits) at sign-off */}
       <TimesheetConfirm
         sessionId={sessionId} operatorName={opName || operatorName} operatorId={operatorId}

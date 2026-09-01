@@ -15,13 +15,12 @@ import { useEffect, useState, useRef, type ReactNode } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { format } from 'date-fns'
 import { ArrowLeft, Printer, Loader2, CheckCircle2, Clock, Pen, Play, Radio, Sparkles, MessageSquare, MessageSquarePlus, ArrowRightLeft, Scale, AlertTriangle } from 'lucide-react'
-import { loadOrderDay, type OrderDay, type OrderBagRow, type OrderRebagRow, type OrderFreshTopUpRow, type OrderDebagRow, type OrderShiftBlock, type OrderMassBalance, type OrderTimesheet, type OrderNote } from '@/lib/production/order-detail'
+import { loadOrderDay, type OrderDay, type OrderBagRow, type OrderRebagRow, type OrderFreshTopUpRow, type OrderDebagRow, type OrderShiftBlock, type OrderTimesheet, type OrderNote } from '@/lib/production/order-detail'
 import { sectionMeta } from '@/lib/production/capture-config'
 import { formatSAST } from '@/lib/production/shifts'
 import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
 import { Panel, PanelHead, PanelBody, Table, Tr, Td, Empty, Pill } from '@/components/production/ui/kit'
-import { yieldPct as calcYieldPct } from '@/lib/core/metrics'
 
 const fmtBagTime = (ts: string | null) =>
   ts ? new Intl.DateTimeFormat('en-GB', { timeZone: 'Africa/Johannesburg', hour: '2-digit', minute: '2-digit' }).format(new Date(ts)) : '—'
@@ -40,31 +39,6 @@ const STATUS: Record<string, { label: string; tone: 'neutral' | 'ok' | 'warn' | 
   approved:  { label: 'Signed off',        tone: 'ok',   icon: CheckCircle2 },
   new:       { label: 'Not started',       tone: 'neutral', icon: Play },
 }
-
-const num = (v: number | null | undefined) => v ?? 0
-
-// Mass balance on this page reads OUTPUT − INPUT (not input − output): a
-// shortfall (the normal case — moisture, dust, spillage) is then a NEGATIVE
-// number that reads as "material lost" at a glance, instead of an ambiguous
-// positive figure whichever way round it's framed. Flagged once it's outside
-// ±1% of total input — the tolerance a real run is expected to close within.
-const MASS_BALANCE_TOLERANCE_PCT = 0.01
-function massBalanceInfo(totalOutput: number, totalInput: number) {
-  const balance = totalOutput - totalInput
-  const pct = totalInput > 0 ? (balance / totalInput) * 100 : 0
-  const toleranceKg = totalInput * MASS_BALANCE_TOLERANCE_PCT
-  const within = totalInput > 0 ? Math.abs(balance) <= toleranceKg : true
-  const tone: 'ok' | 'warn' | 'err' = within ? 'ok' : balance < 0 ? 'err' : 'warn'
-  const text = within
-    ? `${balance >= 0 ? '+' : ''}${balance.toFixed(1)} kg (${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%) · within ±1%`
-    : balance < 0
-      ? `${balance.toFixed(1)} kg (${pct.toFixed(1)}%) · material lost, outside ±1% tolerance`
-      : `+${balance.toFixed(1)} kg (+${pct.toFixed(1)}%) · outside ±1% tolerance`
-  return { balance, pct, within, tone, text }
-}
-// Tailwind needs the full class name literally in source to generate it —
-// `text-${tone}` at runtime would silently produce no styling.
-const TONE_TEXT_CLASS: Record<'ok' | 'warn' | 'err', string> = { ok: 'text-ok', warn: 'text-warn', err: 'text-err' }
 
 // A debag row's material as it should READ on the order: the farm's 500kg bag
 // is a "Bulk Bag"; Bucket Elevator / Machine Spillage carry their own type.
@@ -128,7 +102,7 @@ export default function ProductionOrderDetailPage() {
   if (loading) return <div className="p-12 flex justify-center"><Loader2 className="animate-spin text-text-faint" /></div>
   if (error || !day) return <div className="p-6 text-center text-text-muted">{error ?? 'Production order not found.'}</div>
 
-  const { section_id, date, status, shifts, bags, bagsOutputKg, rebagRows, freshTopUps, debags, massBalance: mb, timesheets, takeovers, notes, representativeSessionId } = day
+  const { section_id, date, status, shifts, bags, bagsOutputKg, rebagRows, freshTopUps, debags, timesheets, takeovers, notes, representativeSessionId } = day
   const meta = sectionMeta(section_id)
   const st = STATUS[status] ?? STATUS.new
   const operators = Array.from(new Set(shifts.flatMap(s => s.session.operator_names ?? [])))
@@ -141,16 +115,11 @@ export default function ProductionOrderDetailPage() {
   // not a bagged product and not an input. It's captured as a debag row, so
   // pull it out of the inputs and state it on the output side — that 's exactly
   // the gap between the bagged-bag total and the mass-balance output total.
-  const isBucketCarryOut = (d: OrderDebagRow) =>
-    /bucket elevator/i.test(d.product_type || '') && (d.shift === 'afternoon' || d.shift === 'night')
-  const inputRows = debags.filter(d => !isBucketCarryOut(d))
-  const bucketCarryOverKg = debags.filter(isBucketCarryOut).reduce((s, d) => s + (Number(d.kg_nett) || 0), 0)
-  // Total output = physical bagged product (the reliable ledger) + the bucket
-  // elevator carried over. Derived from the ledger, so it always agrees with
-  // the Bagging section below instead of the race-prone mass-balance snapshot.
-  const totalOutput = bagsOutputKg + bucketCarryOverKg
-  const yieldPct = mb ? calcYieldPct(totalOutput, num(mb.total_input_kg)) : null
-  const wholeRunBalance = massBalanceInfo(totalOutput, num(mb?.total_input_kg))
+  // Every debagging row shows in the inputs panel, as captured. An afternoon
+  // bucket-elevator row used to be pulled out of the inputs and restated as an
+  // output (WIP left in the tower), which is a derived reading of the row rather
+  // than the row itself — the kind of additive layer this page no longer carries.
+  const inputRows = debags
 
   return (
     <div className="px-4 py-6 max-w-[1000px] mx-auto space-y-5 print-full-width">
@@ -185,7 +154,6 @@ export default function ProductionOrderDetailPage() {
             <Field label="Lot number" value={lot || '—'} />
             <Field label="Production orders" value={pos.join(', ') || '—'} />
             <Field label="Output" value={`${bags.length} bag${bags.length === 1 ? '' : 's'} · ${bagsOutputKg.toFixed(1)} kg`} />
-            <Field label="Yield" value={yieldPct != null ? `${yieldPct}%` : '—'} />
           </div>
         </PanelBody>
       </Panel>
@@ -196,23 +164,6 @@ export default function ProductionOrderDetailPage() {
       <div className="no-print">
         <NotesPanel sessionId={representativeSessionId} notes={notes} requestedByName={displayName} />
       </div>
-
-      {/* Whole-run mass balance */}
-      {mb && (
-        <Panel>
-          <PanelHead title="Mass balance — full run (07h00–01h00)" />
-          <PanelBody>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-              <Field label="Total input"  value={`${num(mb.total_input_kg).toFixed(1)} kg`} />
-              <Field label="Bagged output" value={`${bagsOutputKg.toFixed(1)} kg`} />
-              {bucketCarryOverKg > 0 && <Field label="Bucket elevator (carried over)" value={`${bucketCarryOverKg.toFixed(1)} kg`} />}
-              <Field label="Total output" value={`${totalOutput.toFixed(1)} kg`} />
-              <Field label="Balance"      value={<span className={TONE_TEXT_CLASS[wholeRunBalance.tone]}>{wholeRunBalance.text}</span>} />
-              <Field label="Yield"        value={yieldPct != null ? `${yieldPct}%` : '—'} />
-            </div>
-          </PanelBody>
-        </Panel>
-      )}
 
       {/* Debagging (inputs) — grouped by type with per-type totals */}
       <Panel>
@@ -239,7 +190,7 @@ export default function ProductionOrderDetailPage() {
         <PanelHead title="Bagging — outputs"
           meta={`${bags.length} bag${bags.length === 1 ? '' : 's'} · ${bagsOutputKg.toFixed(1)} kg`} />
         <PanelBody>
-          {bags.length === 0 && freshTopUps.length === 0 && bucketCarryOverKg === 0 ? <Empty>No output bags recorded.</Empty> : (
+          {bags.length === 0 && freshTopUps.length === 0 ? <Empty>No output bags recorded.</Empty> : (
             <div className="space-y-4">
               {Array.from(new Set([
                 ...bags.map(b => b.product_type || 'Other'),
@@ -250,18 +201,6 @@ export default function ProductionOrderDetailPage() {
                   topUps={freshTopUps.filter(r => (r.productType || 'Other') === type)}
                   multiShift={shifts.length > 1} />
               ))}
-              {bucketCarryOverKg > 0 && (
-                <div className="flex items-center justify-between gap-2 rounded-xl border border-dashed border-surface-rule px-3 py-2.5 text-[12.5px]">
-                  <span className="text-text-muted">Bucket elevator — carried to next day <span className="text-text-faint">(WIP left in the tower, not bagged)</span></span>
-                  <span className="font-mono text-text tabular-nums whitespace-nowrap">{bucketCarryOverKg.toFixed(1)} kg</span>
-                </div>
-              )}
-              {bucketCarryOverKg > 0 && (
-                <div className="flex items-center justify-between gap-2 px-3 pt-1 text-[13px] font-semibold border-t border-surface-rule/60">
-                  <span className="text-text pt-2">Total output</span>
-                  <span className="font-mono text-text tabular-nums pt-2">{bags.length} bags bagged + {bucketCarryOverKg.toFixed(0)} kg carry-over = {totalOutput.toFixed(1)} kg</span>
-                </div>
-              )}
             </div>
           )}
         </PanelBody>
@@ -499,7 +438,7 @@ function RebagTypeGroup({ type, rows, multiShift }: { type: string; rows: OrderR
 // One shift's block: its AI machine-checks summary, its own mass balance, and
 // its sign-off.
 function ShiftBlock({ block }: { block: OrderShiftBlock }) {
-  const { session: s, massBalance: mb, signatures, aiSummary } = block
+  const { session: s, signatures, aiSummary } = block
   const opSig  = signatures.find(x => x.signer_role === 'operator')
   const supSig = signatures.find(x => x.signer_role === 'supervisor')
   const label = SHIFT_LABEL[s.shift] ?? s.shift
@@ -515,18 +454,9 @@ function ShiftBlock({ block }: { block: OrderShiftBlock }) {
               <p className="text-[12.5px] text-text leading-relaxed">{aiSummary}</p>
             </div>
           )}
-          {mb && (() => {
-            const shiftOutput = num(mb.total_output_a_kg) + num(mb.total_output_b_kg) + num(mb.total_output_c_kg) + num(mb.total_output_d_kg)
-            const shiftBalance = massBalanceInfo(shiftOutput, num(mb.total_input_kg))
-            return (
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-                <Field label="Input"   value={`${num(mb.total_input_kg).toFixed(1)} kg`} />
-                <Field label="Output"  value={`${shiftOutput.toFixed(1)} kg`} />
-                <Field label="Balance" value={<span className={TONE_TEXT_CLASS[shiftBalance.tone]}>{shiftBalance.text}</span>} />
-                <Field label="Operators" value={s.operator_names?.join(', ') || '—'} />
-              </div>
-            )
-          })()}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+            <Field label="Operators" value={s.operator_names?.join(', ') || '—'} />
+          </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <SignoffBlock label="Operator"   name={s.op_name_signoff}  signedAt={s.op_signed_at}  image={opSig?.signature_b64} />
             <SignoffBlock label="Supervisor" name={s.sup_name_signoff} signedAt={s.sup_signed_at} image={supSig?.signature_b64} />

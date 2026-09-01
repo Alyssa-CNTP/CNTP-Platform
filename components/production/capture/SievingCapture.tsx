@@ -213,12 +213,17 @@ export function SievingCapture({
   const patch = (p: Partial<SievingData>) => onChange({ ...value, ...p })
 
   // Read by the async self-heal below so it reconciles against the CURRENT batch
-  // and the CURRENT sibling rows, not whatever they were when it started. Kept as
-  // refs rather than effect deps on purpose: as deps they would re-run the whole
-  // reconcile on every keystroke.
-  const valueRef = useRef(value); valueRef.current = value
+  // and the CURRENT sibling rows, not whatever they were when it started. Refs
+  // rather than effect deps on purpose: as deps they would re-run the whole
+  // reconcile on every keystroke. Synced in an effect rather than during render —
+  // the self-heal only reads them after awaiting its queries, by which point
+  // effects have committed, so there is nothing to gain from writing them earlier.
+  const valueRef = useRef(value)
   const excludeRef = useRef({ debagKeys: otherBatchDebagKeys, outputSerials: otherBatchOutputSerials })
-  excludeRef.current = { debagKeys: otherBatchDebagKeys, outputSerials: otherBatchOutputSerials }
+  useEffect(() => { valueRef.current = value })
+  useEffect(() => {
+    excludeRef.current = { debagKeys: otherBatchDebagKeys, outputSerials: otherBatchOutputSerials }
+  })
 
   // Shared by both self-heal effects below: order strictly by when each row
   // was actually logged, never by array position — appending restored rows

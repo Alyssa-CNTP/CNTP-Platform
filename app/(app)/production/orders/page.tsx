@@ -5,27 +5,30 @@ import Link from 'next/link'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { format, parseISO, subDays } from 'date-fns'
 import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-} from 'recharts'
-import {
   Loader2, CheckCircle2, Clock, Pen, Play, ChevronRight,
   Filter, X, AlertTriangle, Package, ArrowRight, MoreHorizontal, Pencil, Trash2,
-  RotateCcw, Save, Unlock, Archive, BarChart3, List, Gauge, TrendingUp, Undo2,
-  Layers, Scale, FileText, MessageSquare, MessageSquarePlus,
+  RotateCcw, Save, Unlock, Archive, BarChart3, Undo2,
+  FileText, MessageSquare, MessageSquarePlus,
 } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
-import { sectionMeta, SECTION_ORDER, massBalanceToleranceFor, VARIANT_OPTIONS } from '@/lib/production/capture-config'
+import { sectionMeta, SECTION_ORDER, VARIANT_OPTIONS } from '@/lib/production/capture-config'
 import { sastToday } from '@/lib/production/shifts'
 import {
-  Panel, PanelHead, PanelBody, Stat, StatRow, BarRow, ShareBar, ActionPanel,
-  Collapse, Table, Tr, Td, Empty, Pill, SectionChip, MARK, MARK_SOFT,
+  Panel, PanelHead, PanelBody, ActionPanel,
+  Empty, Pill, SectionChip,
   type Action,
 } from '@/components/production/ui/kit'
-import { yieldPct as calcYieldPct } from '@/lib/core/metrics'
 
-// Production Orders — the single home for captured batch records and the KPIs
-// that describe them. Two views over one set of filters: Records and Analytics.
+// Production Orders — the home for captured batch records.
+//
+// The KPI/Analytics half of this page (tons, yield, throughput, per-line and
+// per-variant summaries, and the mass-balance variance flags) was stood down on
+// 2026-09-01 to be rebuilt: the additive layer was reporting figures derived
+// from duplicated capture rows, so it read confidently and wrongly. What is left
+// is the record list itself — each row's own captured input/output, and the
+// states a record can be in. /api/production/orders-kpis still exists and still
+// works; nothing on this page calls it.
 //
 // Rebuilt on components/production/ui/kit.tsx so this page, the Supervisor Hub
 // and the Shift Report read as one product. The changes from the first pass are
@@ -39,7 +42,6 @@ import { yieldPct as calcYieldPct } from '@/lib/core/metrics'
 
 const VARIANT_OPTS = VARIANT_OPTIONS.map(v => v.value)
 const SHIFTS = ['morning', 'afternoon', 'night']
-const AXIS = { fontSize: 10.5, fill: 'var(--color-text-faint)' }
 
 interface SessionRow {
   id: string
@@ -67,36 +69,6 @@ interface SessionRow {
   note_count: number
 }
 
-interface Kpis {
-  sessions: number; totalInputKg: number; totalOutputKg: number; totalTons: number
-  yieldPct: number | null; activeDays: number; tonsPerDay: number | null; tonsPerWeek: number | null
-  bags: number; balanceFlags: number; signedOff: number; outstanding: number; kgPerHour: number | null
-}
-interface DayRow { date: string; inputKg: number; outputKg: number; tons: number; sessions: number; yieldPct: number | null }
-interface WeekRow { weekStart: string; inputKg: number; outputKg: number; tons: number; sessions: number; yieldPct: number | null }
-interface SectionRow {
-  sectionId: string; sectionName: string; sectionCode: string; colorHex: string
-  sessions: number; inputKg: number; outputKg: number; tons: number; yieldPct: number | null
-  runMinutes: number; workedMinutes: number; kgPerHour: number | null
-  basis: 'run' | 'worked' | null; flagged: number
-}
-interface ProductRow {
-  productType: string; kg: number; tons: number; bags: number; sharePct: number | null
-  bySection: { sectionId: string; sectionCode: string; sectionName: string; kg: number }[]
-}
-interface VariantRow { variant: string; inputKg: number; outputKg: number; tons: number; sessions: number; yieldPct: number | null }
-interface Analytics {
-  kpis: Kpis; perDay: DayRow[]; perWeek: WeekRow[]
-  bySection: SectionRow[]; byProduct: ProductRow[]; byVariant: VariantRow[]
-}
-
-// Same predicate as the capture page's hasCaptureData() — checked here too as
-// a fallback, not just prod_debagging/prod_bagging row counts. Those tables
-// are a normalized COPY written by persistCore(); draft_data.productions is
-// what the capture screen itself wrote directly and is the source of truth.
-// Relying on the copy alone risked a sync gap flagging a genuinely-captured
-// record as "empty" — which, with a Discard action right next to it, is a
-// real data-loss risk, not just a cosmetic one.
 function hasRawCaptureData(productions: any[] | undefined): boolean {
   const num = (v: any) => parseFloat(String(v ?? '').replace(',', '.')) || 0
   return (productions ?? []).some((p: any) => {
@@ -136,7 +108,6 @@ function OrdersInner() {
   const pathname = usePathname()
   const params = useSearchParams()
 
-  const view         = params.get('view') === 'analytics' ? 'analytics' : 'records'
   const dateFrom     = params.get('from')    || format(subDays(new Date(), 14), 'yyyy-MM-dd')
   const dateTo       = params.get('to')      || sastToday()
   const filterSection= params.get('section') || ''
@@ -158,9 +129,6 @@ function OrdersInner() {
 
   const [sessions, setSessions] = useState<SessionRow[]>([])
   const [loading, setLoading]   = useState(true)
-  const [analytics, setAnalytics] = useState<Analytics | null>(null)
-  const [kpiLoading, setKpiLoading] = useState(true)
-  const [kpiError, setKpiError] = useState<string | null>(null)
   const [showFilters, setShowFilters] = useState(false)
   const [refreshKey, setRefreshKey] = useState(0)
   const reload = () => setRefreshKey(k => k + 1)
@@ -169,21 +137,6 @@ function OrdersInner() {
   const canEdit   = p('can_edit_session')
   const canDelete = p('can_delete_session')
   const canRequestReopen = isFullAdmin || canEdit || p('can_approve_session')
-
-  useEffect(() => {
-    let alive = true
-    setKpiLoading(true); setKpiError(null)
-    const q = new URLSearchParams({ from: dateFrom, to: dateTo })
-    if (filterSection) q.set('section', filterSection)
-    if (filterVariant) q.set('variant', filterVariant)
-    if (filterShift)   q.set('shift', filterShift)
-    fetch(`/api/production/orders-kpis?${q.toString()}`)
-      .then(async r => { const j = await r.json(); if (!r.ok) throw new Error(j?.error || `Error ${r.status}`); return j })
-      .then(j => { if (alive) setAnalytics(j as Analytics) })
-      .catch(e => { if (alive) { setKpiError(e.message); setAnalytics(null) } })
-      .finally(() => { if (alive) setKpiLoading(false) })
-    return () => { alive = false }
-  }, [dateFrom, dateTo, filterSection, filterVariant, filterShift, refreshKey])
 
   const loadedOnceRef = useRef(false)
 
@@ -334,19 +287,6 @@ function OrdersInner() {
         href: '/supervisor/signoff', severity: 'warn', count: awaiting.length,
       })
     }
-    const flagged = filtered.filter(s => {
-      const v = s.balance_kg ?? (s.total_input_kg - s.total_output_kg)
-      return (s.bag_count > 0 || s.debag_count > 0) && Math.abs(v) > massBalanceToleranceFor(s.section_id)
-    })
-    for (const s of flagged.slice(0, 5)) {
-      const v = s.balance_kg ?? (s.total_input_kg - s.total_output_kg)
-      out.push({
-        label: `${sectionMeta(s.section_id).name} is out by ${v.toFixed(1)} kg`,
-        detail: `${format(parseISO(s.date + 'T12:00:00'), 'EEE d MMM')} · ${s.shift} · tolerance ±${massBalanceToleranceFor(s.section_id)} kg`,
-        href: `/production/capture/${s.section_id}?date=${s.date}&shift=${s.shift}&session=${s.id}&tab=overview&return=${encodeURIComponent(returnUrl)}`,
-        severity: 'critical',
-      })
-    }
     const empties = filtered.filter(s =>
       !s.deleted_at && (s.status === 'submitted' || s.status === 'approved')
       && s.bag_count === 0 && s.debag_count === 0 && !s.has_raw_data)
@@ -376,15 +316,7 @@ function OrdersInner() {
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          <div className="flex gap-1 p-1 bg-surface-dim rounded-xl">
-            {([['records', 'Records', List], ['analytics', 'Analytics', BarChart3]] as const).map(([v, label, Icon]) => (
-              <button key={v} onClick={() => setParams({ view: v === 'records' ? null : v })}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[12px] font-medium transition-colors ${view === v ? 'bg-surface-card text-brand' : 'text-text-muted hover:text-text'}`}>
-                <Icon size={13} /> {label}
-              </button>
-            ))}
-          </div>
-          {(canEdit || canDelete) && view === 'records' && (
+          {(canEdit || canDelete) && (
             <button onClick={() => setParams({ archived: showArchived ? null : '1' })}
               className={`flex items-center gap-2 px-3.5 py-2 rounded-xl border text-[12.5px] font-medium transition-colors
                 ${showArchived ? 'border-brand bg-brand/5 text-brand' : 'border-surface-rule text-text-muted hover:border-brand hover:text-brand'}`}>
@@ -431,7 +363,7 @@ function OrdersInner() {
               {SHIFTS.map(s => <option key={s} value={s} className="capitalize">{s}</option>)}
             </select>
           </Field>
-          {view === 'records' && (
+          {(
             <Field label="Status">
               <select value={filterStatus} onChange={e => setParams({ status: e.target.value })} className={`${INP} cursor-pointer`}>
                 <option value="">All statuses</option>
@@ -451,38 +383,9 @@ function OrdersInner() {
 
       <div className="flex-1 overflow-auto">
         <div className="px-6 py-5 space-y-4 max-w-[1050px]">
-          {kpiError ? (
-            <Panel tone="attention">
-              <PanelBody className="pt-4">
-                <p className="flex items-center gap-2 text-[12px] text-warn"><AlertTriangle size={13} /> KPIs unavailable — {kpiError}</p>
-              </PanelBody>
-            </Panel>
-          ) : (
-            <Panel>
-              <StatRow>
-                <Stat value={analytics ? analytics.kpis.totalTons.toFixed(2) : '—'} unit="t" label="Tons out"
-                  hint={analytics ? `${analytics.kpis.totalOutputKg.toLocaleString()} kg` : ''}
-                  spark={analytics && analytics.perDay.length > 1 ? analytics.perDay.map(d => d.tons) : undefined} />
-                <Stat value={analytics?.kpis.tonsPerDay != null ? analytics.kpis.tonsPerDay.toFixed(2) : '—'} unit="t"
-                  label="Tons per day" hint={analytics ? `over ${analytics.kpis.activeDays} producing day${analytics.kpis.activeDays === 1 ? '' : 's'}` : ''} />
-                <Stat value={analytics?.kpis.tonsPerWeek != null ? analytics.kpis.tonsPerWeek.toFixed(2) : '—'} unit="t"
-                  label="Tons per week" hint="average in range" />
-                <Stat value={analytics?.kpis.kgPerHour != null ? analytics.kpis.kgPerHour.toLocaleString() : '—'} unit="kg/h"
-                  label="Throughput" hint="all lines" />
-                <Stat value={analytics?.kpis.yieldPct != null ? String(analytics.kpis.yieldPct) : '—'} unit="%"
-                  label="Yield" hint={analytics ? `${analytics.kpis.totalInputKg.toLocaleString()} kg in` : ''} />
-                <Stat value={analytics ? String(analytics.kpis.sessions) : '—'} label="Records"
-                  hint={analytics ? `${analytics.kpis.signedOff} signed · ${analytics.kpis.balanceFlags} flagged` : ''}
-                  tone={analytics?.kpis.balanceFlags ? 'warn' : 'plain'} />
-              </StatRow>
-            </Panel>
-          )}
+          {actions.length > 0 && <ActionPanel actions={actions} />}
 
-          {view === 'records' && actions.length > 0 && <ActionPanel actions={actions} />}
-
-          {view === 'analytics' ? (
-            <AnalyticsView data={analytics} loading={kpiLoading} error={kpiError} returnUrl={returnUrl} />
-          ) : loading ? (
+          {loading ? (
             <div className="flex items-center justify-center h-48"><Loader2 size={22} className="animate-spin text-text-faint" /></div>
           ) : filtered.length === 0 ? (
             <Panel>
@@ -532,175 +435,6 @@ const Field = ({ label, children }: { label: string; children: React.ReactNode }
   </div>
 )
 
-// ── Analytics ────────────────────────────────────────────────────────────────
-
-function AnalyticsView({ data, loading, error, returnUrl }: {
-  data: Analytics | null; loading: boolean; error: string | null; returnUrl: string
-}) {
-  if (loading && !data) return <div className="flex items-center justify-center h-48"><Loader2 size={22} className="animate-spin text-text-faint" /></div>
-  if (error) return null
-  if (!data || data.kpis.sessions === 0) {
-    return (
-      <Panel>
-        <div className="flex flex-col items-center justify-center py-16 gap-2.5">
-          <TrendingUp size={22} className="text-text-faint/40" />
-          <p className="text-[13px] text-text-faint">Nothing was captured in this range, so there is nothing to chart.</p>
-        </div>
-      </Panel>
-    )
-  }
-
-  const dayData = data.perDay.map(d => ({ ...d, label: format(parseISO(d.date + 'T12:00:00'), 'd MMM') }))
-  const weekData = data.perWeek.map(w => ({ ...w, label: format(parseISO(w.weekStart + 'T12:00:00'), 'd MMM') }))
-  const maxThroughput = Math.max(1, ...data.bySection.map(s => s.kgPerHour ?? 0))
-  const productTotal = data.byProduct.reduce((t, p) => t + p.kg, 0)
-
-  return (
-    <div className="space-y-4">
-      {/* Trend. One series, so no legend — the title names it. An axis genuinely
-          helps here, which is why this is the only place a chart library is used;
-          everywhere else the kit's own marks are lighter and more consistent. */}
-      <Panel>
-        <PanelHead icon={Scale} title="Tons produced per day" meta="bagged output, from mass balance" />
-        <PanelBody>
-          <ResponsiveContainer width="100%" height={200}>
-            <BarChart data={dayData} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
-              <CartesianGrid strokeDasharray="2 4" stroke="var(--color-surface-rule)" vertical={false} />
-              <XAxis dataKey="label" tick={AXIS} axisLine={false} tickLine={false} interval="preserveStartEnd" />
-              <YAxis tick={AXIS} axisLine={false} tickLine={false} width={30} unit="t" />
-              <Tooltip cursor={{ fill: MARK_SOFT }}
-                contentStyle={{ fontSize: 12, borderRadius: 10, border: '1px solid var(--color-surface-rule)', background: 'var(--color-surface-card)' }}
-                formatter={(v: any, _n: any, entry: any) => [`${Number(v).toFixed(2)} t (${entry?.payload?.outputKg?.toLocaleString()} kg)`, 'Out']}
-                labelFormatter={(l: any, payload: any) => {
-                  const d = payload?.[0]?.payload
-                  return d ? `${l} · ${d.sessions} record${d.sessions === 1 ? '' : 's'}${d.yieldPct != null ? ` · ${d.yieldPct}% yield` : ''}` : l
-                }} />
-              <Bar dataKey="tons" fill={MARK} radius={[3, 3, 0, 0]} maxBarSize={26} />
-            </BarChart>
-          </ResponsiveContainer>
-        </PanelBody>
-      </Panel>
-
-      {weekData.length > 1 && (
-        <Panel>
-          <PanelHead icon={Scale} title="Tons produced per week" meta="week commencing Monday" />
-          <PanelBody>
-            <div className="-my-1">
-              {weekData.map(w => (
-                <BarRow key={w.weekStart} label={`w/c ${w.label}`}
-                  sublabel={`${w.sessions} record${w.sessions === 1 ? '' : 's'}${w.yieldPct != null ? ` · ${w.yieldPct}% yield` : ''}`}
-                  value={w.tons} max={Math.max(...weekData.map(x => x.tons), 1)}
-                  display={`${w.tons.toFixed(2)} t`} />
-              ))}
-            </div>
-          </PanelBody>
-        </Panel>
-      )}
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        {/* Throughput. Line name on the axis, so identity never rests on colour. */}
-        <Panel>
-          <PanelHead icon={Gauge} title="Throughput by line" meta="kg out per producing hour" />
-          <PanelBody className="space-y-3">
-            <div className="-my-1">
-              {data.bySection.map(s => (
-                <BarRow key={s.sectionId} label={s.sectionName}
-                  sublabel={s.basis === 'run' ? `ran ${hrs(s.runMinutes)}` : s.basis === 'worked' ? `${hrs(s.workedMinutes)} crew` : 'no basis'}
-                  value={s.kgPerHour ?? 0} max={maxThroughput}
-                  display={s.kgPerHour != null ? `${s.kgPerHour.toLocaleString()} kg/h` : '—'}
-                  badge={s.flagged ? <Pill tone="warn">{s.flagged} flagged</Pill> : undefined} />
-              ))}
-            </div>
-            <p className="text-[11px] text-text-faint">
-              Measured first bag to last where that window is meaningful, otherwise from confirmed crew hours.
-            </p>
-          </PanelBody>
-        </Panel>
-
-        {/* Output produced, by product. */}
-        <Panel>
-          <PanelHead icon={Layers} title="Output by product" meta={`${productTotal.toLocaleString()} kg bagged`} />
-          <PanelBody className="space-y-4">
-            <ShareBar items={data.byProduct.map(pr => ({
-              label: pr.productType, value: pr.kg, display: `${pr.kg.toLocaleString()} kg`,
-            }))} total={productTotal} />
-            <Collapse label="Show which line produced what">
-              <Table head={['Product', 'Bags', 'kg', 'Tons', 'Share', 'From line(s)']}>
-                {data.byProduct.map(pr => (
-                  <Tr key={pr.productType}>
-                    <Td>{pr.productType}</Td>
-                    <Td mono right>{pr.bags}</Td>
-                    <Td mono right>{pr.kg.toLocaleString()}</Td>
-                    <Td mono right>{pr.tons.toFixed(2)}</Td>
-                    <Td mono right>{pr.sharePct != null ? `${pr.sharePct}%` : '—'}</Td>
-                    <Td right>
-                      <span className="flex flex-wrap gap-1 justify-end">
-                        {pr.bySection.map(bs => (
-                          <span key={bs.sectionId} title={`${bs.sectionName} — ${bs.kg.toLocaleString()} kg`}
-                            className="inline-flex items-center gap-1 font-mono text-[10px] px-1.5 py-0.5 rounded bg-surface-dim text-text-muted">
-                            {bs.sectionCode} {bs.kg.toLocaleString()}
-                          </span>
-                        ))}
-                      </span>
-                    </Td>
-                  </Tr>
-                ))}
-              </Table>
-            </Collapse>
-          </PanelBody>
-        </Panel>
-      </div>
-
-      {/* Per line, in full — the exact numbers, on request. */}
-      <Panel>
-        <PanelHead icon={Gauge} title="Per line" meta="yield, throughput and flags" />
-        <PanelBody>
-          <Collapse label="Show the full per-line table" count={data.bySection.length} defaultOpen>
-            <Table head={['Line', 'Records', 'kg in', 'kg out', 'Tons', 'Yield', 'Ran for', 'Crew hours', 'kg / hour', 'Basis', 'Flags']}>
-              {data.bySection.map(s => (
-                <Tr key={s.sectionId}>
-                  <Td>
-                    <span className="inline-flex items-center gap-1.5">
-                      <SectionChip code={s.sectionCode} colorHex={s.colorHex} size={18} />
-                      {s.sectionName}
-                    </span>
-                  </Td>
-                  <Td mono right>{s.sessions}</Td>
-                  <Td mono right>{s.inputKg.toLocaleString()}</Td>
-                  <Td mono right>{s.outputKg.toLocaleString()}</Td>
-                  <Td mono right>{s.tons.toFixed(2)}</Td>
-                  <Td mono right>{s.yieldPct != null ? `${s.yieldPct}%` : '—'}</Td>
-                  <Td mono right>{s.runMinutes ? hrs(s.runMinutes) : '—'}</Td>
-                  <Td mono right>{s.workedMinutes ? hrs(s.workedMinutes) : '—'}</Td>
-                  <Td mono right>{s.kgPerHour != null ? s.kgPerHour.toLocaleString() : '—'}</Td>
-                  <Td right>{s.basis === 'run' ? 'Run time' : s.basis === 'worked' ? 'Crew hours' : '—'}</Td>
-                  <Td mono right tone={s.flagged ? 'warn' : undefined}>{s.flagged || '—'}</Td>
-                </Tr>
-              ))}
-            </Table>
-          </Collapse>
-        </PanelBody>
-      </Panel>
-
-      {data.byVariant.length > 1 && (
-        <Panel>
-          <PanelHead icon={Layers} title="By variant" meta="yield per material variant" />
-          <PanelBody>
-            <div className="-my-1">
-              {data.byVariant.map(v => (
-                <BarRow key={v.variant} label={v.variant}
-                  sublabel={`${v.sessions} record${v.sessions === 1 ? '' : 's'}${v.yieldPct != null ? ` · ${v.yieldPct}% yield` : ''}`}
-                  value={v.tons} max={Math.max(...data.byVariant.map(x => x.tons), 1)}
-                  display={`${v.tons.toFixed(2)} t`} />
-              ))}
-            </div>
-          </PanelBody>
-        </Panel>
-      )}
-    </div>
-  )
-}
-
 // ── Records ──────────────────────────────────────────────────────────────────
 
 function groupByDate(rows: SessionRow[]): { date: string; rows: SessionRow[] }[] {
@@ -720,12 +454,9 @@ function OrderRow({ session: s, canEdit, canDelete, canRequestReopen, returnUrl,
   const { displayName } = useAuth()
   const meta       = sectionMeta(s.section_id)
   const st         = STATUS[s.status] ?? STATUS.new
-  const variance   = s.balance_kg ?? (s.total_input_kg - s.total_output_kg)
-  const withinTol  = Math.abs(variance) <= massBalanceToleranceFor(s.section_id)
   const hasData    = s.bag_count > 0 || s.debag_count > 0 || s.has_raw_data
   const archived   = !!s.deleted_at
   const canManage  = canEdit || canDelete
-  const yieldPct   = calcYieldPct(s.total_output_kg, s.total_input_kg)
 
   const [menuOpen, setMenuOpen] = useState(false)
   const [editing,  setEditing]  = useState(false)
@@ -790,7 +521,6 @@ function OrderRow({ session: s, canEdit, canDelete, canRequestReopen, returnUrl,
             <div className="shrink-0 hidden sm:block w-40">
               <div className="flex items-baseline justify-end gap-2 mb-1">
                 <span className="font-mono text-[12.5px] text-text tabular-nums">{s.total_output_kg.toFixed(0)} kg</span>
-                {yieldPct != null && <span className="font-mono text-[10.5px] text-text-faint">{yieldPct}%</span>}
               </div>
               {/* Output relative to the busiest record that day — the shape of the
                   day without a chart per row. */}
@@ -801,12 +531,6 @@ function OrderRow({ session: s, canEdit, canDelete, canRequestReopen, returnUrl,
           ) : <span className="text-text-faint text-[11px] shrink-0 hidden sm:block">No data</span>}
         </Link>
 
-        {hasData && (
-          <Pill tone={withinTol ? 'ok' : 'warn'}>
-            {!withinTol && <AlertTriangle size={10} />}
-            {variance > 0 ? '+' : ''}{variance.toFixed(1)} kg
-          </Pill>
-        )}
         <Pill tone={st.tone}><st.icon size={10} /> {st.label}</Pill>
 
         {canRequestReopen && !archived && (s.status === 'submitted' || s.status === 'approved') && (
@@ -880,7 +604,6 @@ function OrderRow({ session: s, canEdit, canDelete, canRequestReopen, returnUrl,
           <Package size={11} /> {s.total_input_kg.toFixed(0)} kg
           <ArrowRight size={10} className="text-text-faint" />
           {s.total_output_kg.toFixed(0)} kg
-          {yieldPct != null && <span className="font-mono">{yieldPct}%</span>}
         </div>
       )}
 

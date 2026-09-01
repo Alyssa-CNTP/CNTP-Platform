@@ -5,7 +5,7 @@ import Link from 'next/link'
 import { getDb } from '@/lib/supabase/db'
 import { format } from 'date-fns'
 import { Activity, Package, Scale, CheckCircle2, AlertTriangle, RefreshCw, Layers, ChevronRight } from 'lucide-react'
-import { sectionMeta, SECTION_ORDER, massBalanceToleranceFor } from '@/lib/production/capture-config'
+import { sectionMeta, SECTION_ORDER } from '@/lib/production/capture-config'
 
 /**
  * Live capture KPIs — driven entirely by the structured capture tables
@@ -79,14 +79,12 @@ export function LiveCaptureKPIs() {
   const signed   = rows.filter(r => r.status === 'approved').length
   const totalKg  = rows.reduce((s, r) => s + r.kgOut, 0)
   const totalBags = rows.reduce((s, r) => s + r.bags, 0)
-  const flags    = rows.filter(r => r.kgIn > 0 && Math.abs(r.variance) > massBalanceToleranceFor(r.sectionId)).length
 
   const tiles = [
     { label: 'Capturing now', value: String(active),  icon: Activity,     cls: 'text-warn' },
     { label: 'Signed off',    value: String(signed),  icon: CheckCircle2, cls: 'text-ok' },
     { label: 'Bags today',    value: String(totalBags), icon: Package,    cls: 'text-text' },
     { label: 'kg bagged',     value: Math.round(totalKg).toLocaleString(), icon: Scale, cls: 'text-text' },
-    { label: 'Balance flags', value: String(flags),   icon: AlertTriangle, cls: flags ? 'text-warn' : 'text-text-muted' },
   ]
 
   return (
@@ -98,7 +96,7 @@ export function LiveCaptureKPIs() {
         </button>
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         {tiles.map(t => (
           <div key={t.label} className="bg-surface-card border border-surface-rule rounded-xl p-4">
             <t.icon size={14} className={`${t.cls} mb-2`} />
@@ -113,7 +111,7 @@ export function LiveCaptureKPIs() {
           <table className="w-full">
             <thead>
               <tr className="border-b border-surface-rule bg-surface text-left">
-                {['Section', 'Status', 'kg in', 'kg out', 'Variance', 'Bags', ''].map((h, i) => (
+                {['Section', 'Status', 'kg in', 'kg out', 'Bags', ''].map((h, i) => (
                   <th key={i} className="px-4 py-2.5 font-mono text-[10px] text-text-muted uppercase tracking-wide">{h}</th>
                 ))}
               </tr>
@@ -122,7 +120,6 @@ export function LiveCaptureKPIs() {
               {rows.map(r => {
                 const m = sectionMeta(r.sectionId)
                 const st = (STATUS as any)[r.status] ?? STATUS.none
-                const flag = r.kgIn > 0 && Math.abs(r.variance) > massBalanceToleranceFor(r.sectionId)
                 const href = `/production/capture/${r.sectionId}?date=${today}&shift=${shiftNow}`
                 return (
                   <tr key={r.sectionId} className="hover:bg-surface transition-colors cursor-pointer"
@@ -138,9 +135,6 @@ export function LiveCaptureKPIs() {
                     <td className="px-4 py-3"><span className={`text-[10px] font-medium px-2 py-1 rounded-lg ${st.cls}`}>{st.label}</span></td>
                     <td className="px-4 py-3 font-mono text-[12px] text-text-muted">{r.kgIn ? r.kgIn.toFixed(1) : '—'}</td>
                     <td className="px-4 py-3 font-mono text-[12px] text-text">{r.kgOut ? r.kgOut.toFixed(1) : '—'}</td>
-                    <td className={`px-4 py-3 font-mono text-[12px] ${flag ? 'text-warn font-bold' : 'text-text-muted'}`}>
-                      {r.kgIn ? `${r.variance > 0 ? '+' : ''}${r.variance.toFixed(1)}` : '—'}{flag ? ' ⚠' : ''}
-                    </td>
                     <td className="px-4 py-3 font-mono text-[12px] text-text">{r.bags || '—'}</td>
                     <td className="px-4 py-3 text-right"><Link href={href} onClick={e => e.stopPropagation()} className="inline-flex text-text-muted hover:text-brand"><ChevronRight size={15} /></Link></td>
                   </tr>
