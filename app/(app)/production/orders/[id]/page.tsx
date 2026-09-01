@@ -135,7 +135,7 @@ export default function ProductionOrderDetailPage() {
   if (loading) return <div className="p-12 flex justify-center"><Loader2 className="animate-spin text-text-faint" /></div>
   if (error || !day) return <div className="p-6 text-center text-text-muted">{error ?? 'Production order not found.'}</div>
 
-  const { section_id, date, status, grade, poItems, shifts, bags, bagsOutputKg, rebagRows, freshTopUps, debags, massBalance: mb, timesheets, takeovers, notes, representativeSessionId } = day
+  const { section_id, date, status, grade, poItems, shifts, bags, bagsOutputKg, rebagRows, freshTopUps, debags, debagDuplicatesHidden, massBalance: mb, timesheets, takeovers, notes, representativeSessionId } = day
   const meta = sectionMeta(section_id)
   const st = STATUS[status] ?? STATUS.new
   const operators = Array.from(new Set(shifts.flatMap(s => s.session.operator_names ?? [])))
@@ -234,7 +234,10 @@ export default function ProductionOrderDetailPage() {
 
       {/* Debagging (inputs) — grouped by type with per-type totals */}
       <Panel>
-        <PanelHead title="Debagging — inputs" meta={`${inputRows.length} row${inputRows.length === 1 ? '' : 's'}`} />
+        <PanelHead title="Debagging — inputs"
+          meta={`${inputRows.length} bag${inputRows.length === 1 ? '' : 's'}${
+            debagDuplicatesHidden > 0 ? ` · ${debagDuplicatesHidden} duplicate row${debagDuplicatesHidden === 1 ? '' : 's'} hidden` : ''
+          }`} />
         <PanelBody>
           {inputRows.length === 0 ? <Empty>No inputs recorded.</Empty> : (
             <div className="space-y-4">
