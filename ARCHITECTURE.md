@@ -164,11 +164,35 @@ and `NAV` in `components/layout/Sidebar.tsx`.
 
 ## 8. Testing
 
-- `npm run test` — vitest, unit tests over `lib/core/**`. Core changes require tests.
-- `npm run test:e2e` — Playwright. The operator capture → submit flow is the regression
-  guard; it must stay green.
-- The two-tab concurrent-save spec is the acceptance test for the read-modify-write fix. It
-  is expected to fail until that lands. **Do not delete it to make CI green.**
+**`npm run test`** — vitest over `lib/core/**`. Runs in CI on every PR. Core changes
+require tests. These are characterisation tests: they pin what the code *currently* does,
+so an extraction cannot silently change what a capture screen computes. A failure means
+the refactor changed behaviour — that is the signal, not a test to relax.
+
+**`npm run test:e2e`** — Playwright, against a local dev server or staging:
+
+```bash
+E2E_BASE_URL=https://cntpplatform-staging.rooibostea.co.za npm run test:e2e
+```
+
+The app signs in through Microsoft SSO, which is not automatable and must not be scripted
+with stored credentials. The specs instead reuse a session you capture once yourself:
+
+```bash
+npx playwright open --save-storage=e2e/.auth/user.json http://localhost:3000
+```
+
+Sign in, reach `/home`, close the window. `e2e/.auth/` is gitignored — it holds a live
+token. Without that file the specs **skip** with an explanatory message rather than fail.
+
+This is also why E2E is **not** in the CI workflow: with no session artefact every spec
+would skip, so the job would be a green tick that proved nothing. Run it locally or against
+staging before merging anything that touches capture.
+
+**`e2e/concurrent-save.spec.ts` is the acceptance test for the read-modify-write fix.** It
+is marked `test.fixme` because it is expected to fail against the current save path. Remove
+the `.fixme` only when per-row upsert on a stable id has replaced the delete-then-insert and
+it passes for real. **Do not delete or skip it to make a run clean.**
 
 ---
 

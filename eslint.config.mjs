@@ -76,6 +76,15 @@ const eslintConfig = defineConfig([
     },
   },
 
+  // Playwright fixtures take a callback named `use`, which the React hooks rule
+  // mistakes for a hook call. There is no React in e2e/ at all.
+  {
+    files: ["e2e/**/*.ts", "playwright.config.ts"],
+    rules: {
+      "react-hooks/rules-of-hooks": "off",
+    },
+  },
+
   // A feature is self-contained: other code imports it through its index.ts and
   // nothing else. Deep-importing another feature's internals recreates the
   // tangle this structure removes.
