@@ -10,6 +10,7 @@ import { getDb } from '@/lib/supabase/db'
 import { sectionMeta, SECTION_ORDER, VARIANT_OPTIONS, massBalanceToleranceFor } from '@/lib/production/capture-config'
 import { sastToday } from '@/lib/production/shifts'
 import { HubHeader } from '@/components/supervisor/HubTabs'
+import { yieldPct as calcYieldPct } from '@/lib/core/metrics'
 
 const todayStr = sastToday
 const hrsLabel = (min: number) => { const h = Math.floor(min / 60), m = Math.round(min % 60); return h ? `${h}h ${m}m` : `${m}m` }
@@ -123,7 +124,7 @@ export default function SupervisorAnalytics() {
       const m = mb.get(s.id)
       const inputKg = m ? Number(m.total_input_kg) || 0 : 0
       const outputKg = kgOut(m)
-      const yieldPct = inputKg > 0 ? Math.round((outputKg / inputKg) * 1000) / 10 : null
+      const yieldPct = calcYieldPct(outputKg, inputKg)
       const flagged = inputKg > 0 && Math.abs(inputKg - outputKg) > massBalanceToleranceFor(s.section_id)
       return { id: s.id, date: s.date, section: sectionMeta(s.section_id).name, color: sectionMeta(s.section_id).colorHex, shift: s.shift, variant: s.variant, inputKg, outputKg, yieldPct, flagged }
     }).sort((a, b) => b.date.localeCompare(a.date) || a.section.localeCompare(b.section))

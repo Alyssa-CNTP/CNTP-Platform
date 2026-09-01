@@ -22,6 +22,7 @@ import {
   Collapse, Table, Tr, Td, Empty, Pill, SectionChip, MARK, MARK_SOFT,
   type Action,
 } from '@/components/production/ui/kit'
+import { yieldPct as calcYieldPct } from '@/lib/core/metrics'
 
 // Production Orders — the single home for captured batch records and the KPIs
 // that describe them. Two views over one set of filters: Records and Analytics.
@@ -724,7 +725,7 @@ function OrderRow({ session: s, canEdit, canDelete, canRequestReopen, returnUrl,
   const hasData    = s.bag_count > 0 || s.debag_count > 0 || s.has_raw_data
   const archived   = !!s.deleted_at
   const canManage  = canEdit || canDelete
-  const yieldPct   = s.total_input_kg > 0 ? Math.round((s.total_output_kg / s.total_input_kg) * 1000) / 10 : null
+  const yieldPct   = calcYieldPct(s.total_output_kg, s.total_input_kg)
 
   const [menuOpen, setMenuOpen] = useState(false)
   const [editing,  setEditing]  = useState(false)

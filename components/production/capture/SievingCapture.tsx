@@ -12,6 +12,7 @@ import { BatchKeypadField } from '@/components/production/capture/BatchKeypadFie
 import type { OutputBag, Variant as ShortVariant } from '@/lib/production/live-types'
 import type { ShiftAssignment } from '@/lib/supabase/database.types'
 import { logBucketElevator, outstandingBucketElevator, variantFamily } from '@/lib/production/bucket-elevator'
+import { n } from '@/lib/core/num'
 
 // ── Sieving output serial ─────────────────────────────────────────────────────
 // Format: ST{TYPE}-DDMMYY-NNN  (e.g. Fine Leaf → STFL-120826-003).
@@ -85,9 +86,6 @@ export function emptySievingData(): SievingData {
   }
 }
 
-// Operators on SA devices type the decimal as a COMMA (1200,5). Normalise comma
-// → period so it always parses and is stored in the DB as a proper decimal.
-const n = (v: string) => parseFloat(String(v).replace(',', '.')) || 0
 const nowISO = () => new Date().toISOString()
 // Sieving lot numbers vary more than a single letter+digit shape — plain
 // source lots like GS-0299 or MAT-0270 alongside manual-mix batches like

@@ -56,10 +56,9 @@ import type { Operator, ShiftAssignment } from '@/lib/supabase/database.types'
 import { MessageSquare } from 'lucide-react'
 import { productionShiftNow, SHIFT_LABEL } from '@/lib/production/shifts'
 import { ShiftBagLog } from '@/components/production/capture/ShiftBagLog'
+import { n } from '@/lib/core/num'
 
 type Tab = 'production' | 'checks' | 'cleaning' | 'overview' | 'signoff' | 'messages'
-// Comma decimals (SA devices) normalised to a period so the DB stores a real decimal.
-const n = (v: string) => parseFloat(String(v).replace(',', '.')) || 0
 
 // What the operator copies to IT when a structured row write fails. Postgres puts
 // the constraint name in `message` but the offending key in `details` ("Key

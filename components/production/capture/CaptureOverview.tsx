@@ -18,6 +18,7 @@ import { type BlenderData } from '@/components/production/capture/BlenderCapture
 import { type PasteuriserData } from '@/components/production/capture/PasteuriserCapture'
 import { massBalanceToleranceFor } from '@/lib/production/capture-config'
 import { MassBalanceTable, type BalanceRow } from '@/components/production/capture/MassBalanceTable'
+import { n as num } from '@/lib/core/num'
 
 interface Production {
   id: string; variant: string; grade: string; lot: string
@@ -28,7 +29,6 @@ interface Production {
   shift?: string
 }
 
-const num = (v: any): number => parseFloat(String(v).replace(',', '.')) || 0
 const DEBAG_BLUE  = '#1d4ed8'
 const BAG_ORANGE  = '#d97706'
 

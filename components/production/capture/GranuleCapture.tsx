@@ -44,6 +44,7 @@ import { fetchGranuleQuality, type QualityPoint } from '@/lib/production/granule
 import { logCarryover, outstandingCarryover } from '@/lib/production/carryover'
 import { itemFromCode } from '@/lib/production/bom'
 import type { ShiftAssignment } from '@/lib/supabase/database.types'
+import { n } from '@/lib/core/num'
 
 // ── Dust columns — PR-FM-026/7 pellet-mill-feed columns, each with its own colour ─
 
@@ -158,7 +159,6 @@ export function emptyGranuleData(): GranuleData {
 
 // ── Totals ────────────────────────────────────────────────────────────────────
 
-const n = (v: string) => parseFloat(String(v).replace(',', '.')) || 0
 
 export function granuleColumnTotals(d: GranuleData) {
   const cols: Record<string, number> = {}

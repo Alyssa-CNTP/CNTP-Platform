@@ -21,6 +21,7 @@ import { formatSAST } from '@/lib/production/shifts'
 import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
 import { Panel, PanelHead, PanelBody, Table, Tr, Td, Empty, Pill } from '@/components/production/ui/kit'
+import { yieldPct as calcYieldPct } from '@/lib/core/metrics'
 
 const fmtBagTime = (ts: string | null) =>
   ts ? new Intl.DateTimeFormat('en-GB', { timeZone: 'Africa/Johannesburg', hour: '2-digit', minute: '2-digit' }).format(new Date(ts)) : '—'
@@ -148,7 +149,7 @@ export default function ProductionOrderDetailPage() {
   // elevator carried over. Derived from the ledger, so it always agrees with
   // the Bagging section below instead of the race-prone mass-balance snapshot.
   const totalOutput = bagsOutputKg + bucketCarryOverKg
-  const yieldPct = mb && mb.total_input_kg ? Math.round((totalOutput / num(mb.total_input_kg)) * 1000) / 10 : null
+  const yieldPct = mb ? calcYieldPct(totalOutput, num(mb.total_input_kg)) : null
   const wholeRunBalance = massBalanceInfo(totalOutput, num(mb?.total_input_kg))
 
   return (

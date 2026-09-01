@@ -14,6 +14,7 @@ import { loadAllInventory } from '@/lib/production/inventory'
 import { ItemPicker } from '@/components/production/capture/ItemPicker'
 import { ScanBox, BagScanModal } from '@/components/production/capture/BagScanIn'
 import type { ShiftAssignment, InventoryItem } from '@/lib/supabase/database.types'
+import { n } from '@/lib/core/num'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -66,7 +67,6 @@ export function emptyRefiningData(): RefiningData {
 
 // ── Totals ────────────────────────────────────────────────────────────────────
 
-const n = (v: string) => parseFloat(String(v).replace(',', '.')) || 0
 
 function todayDelivery(): string {
   const d = new Date()
