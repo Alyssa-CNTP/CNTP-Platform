@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useRef, Suspense } from 'react'
+import { useState, useEffect, useRef, useMemo, Suspense } from 'react'
 import Link from 'next/link'
 import { useSearchParams, useRouter, useParams } from 'next/navigation'
 import { format, parseISO, differenceInCalendarDays } from 'date-fns'
@@ -17,6 +17,7 @@ import {
   SievingCapture, emptySievingData, sievingTotals,
   type SievingData, type Shift,
 } from '@/components/production/capture/SievingCapture'
+import { debagRowKey } from '@/lib/production/debag-reconcile'
 import { MassBalanceTable, BalanceBadge, type BalanceRow } from '@/components/production/capture/MassBalanceTable'
 import {
   RefiningCapture, emptyRefiningData, refiningTotals,
@@ -1773,6 +1774,25 @@ function CaptureScreen() {
   }
 
   const locked = status === 'approved'
+  // What the session's OTHER batches already hold, for SievingCapture's self-heal.
+  // prod_debagging and bag_tags are keyed on session_id alone — no batch
+  // discriminator — so a changeover (addProduction) leaves every batch's rows
+  // under one id, and the freshly-mounted empty batch would otherwise read the
+  // whole session as "missing" and restore a copy of it into itself, doubling the
+  // session's inputs on the next save. Only THIS session's batches: the self-heal
+  // queries are session-scoped, so siblings/other shifts are already out of range.
+  //
+  // Guarded on the section kind, never on a field name — `data` is the section
+  // union and only Sieving's arm has these shapes (§4).
+  const otherBatchRows = useMemo(() => {
+    if (kind !== 'sieving') return { debagKeys: [] as string[], outputSerials: [] as string[] }
+    const others = productions.filter((_, i) => i !== activeIdx).map(p => p.data as SievingData)
+    return {
+      debagKeys: others.flatMap(d => (d.debag ?? []).map(r => debagRowKey(r.bag_no, r.lot, r.nett))),
+      outputSerials: others.flatMap(d => (d.outputs ?? []).map(o => o.serial)),
+    }
+  }, [kind, productions, activeIdx])
+
   const at = active ? prodTotals(active) : { totalIn: 0, totalOut: 0, carryOverIn: 0, carryOverOut: 0, balance: 0 }
   const totalIn = at.totalIn   // active batch — only used for the "machine running" cue
   // This shift's own contribution, and the other shift's (each with its own
@@ -2415,6 +2435,8 @@ function CaptureScreen() {
                       />
                     : <SievingCapture
                         key={active.id}
+                        otherBatchDebagKeys={otherBatchRows.debagKeys}
+                        otherBatchOutputSerials={otherBatchRows.outputSerials}
                         assignment={assignment}
                         variantWord={active.variant}
                         gradeLetter={active.grade || 'A'}
