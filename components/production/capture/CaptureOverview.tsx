@@ -16,7 +16,7 @@ import { type RefiningData } from '@/components/production/capture/RefiningCaptu
 import { dustProductType, type GranuleData } from '@/components/production/capture/GranuleCapture'
 import { type BlenderData } from '@/components/production/capture/BlenderCapture'
 import { type PasteuriserData } from '@/components/production/capture/PasteuriserCapture'
-import { massBalanceToleranceFor } from '@/lib/production/capture-config'
+import { massBalanceToleranceKg, withinMassBalanceTolerance } from '@/lib/production/capture-config'
 import { MassBalanceTable, type BalanceRow } from '@/components/production/capture/MassBalanceTable'
 import { n as num } from '@/lib/core/num'
 import { sectionKindFor, assertNever, type SectionKind } from '@/lib/core/types/capture'
@@ -367,8 +367,9 @@ export function CaptureOverview({
   const totalOut      = baggedOnlyKg + bucketOutKg
   const totalBags     = productGroups.reduce((s, g) => s + g.totalCount, 0)
   const variance      = totalOut - totalIncl
-  const balanceTolKg  = massBalanceToleranceFor(sectionId ?? '')
-  const withinTol     = Math.abs(variance) <= balanceTolKg
+  // +/-1% of Total Input, for every section alike.
+  const balanceTolKg  = massBalanceToleranceKg(totalIncl)
+  const withinTol     = withinMassBalanceTolerance(variance, totalIncl)
   const hasData       = debagGroups.length > 0 || productGroups.length > 0
   const poStr         = formatPO(productionOrders)
 
@@ -796,7 +797,7 @@ function YieldStrip({ sectionId, inKg, outKg, bags, variance, withinTol, tolKg, 
     { label: 'tons out',value: (outKg / 1000).toFixed(2) },
     { label: 'bags',    value: String(bags) },
     {
-      label: `balance ±${tolKg}`,
+      label: `balance ±${tolKg.toFixed(1)} (1%)`,
       value: `${balance > 0 ? '+' : ''}${balance.toFixed(1)}`,
       warn: !withinTol,
     },

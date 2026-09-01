@@ -14,10 +14,11 @@ export interface BalanceRow {
   totalIn: number
   totalOut: number
   /**
-   * Material left in the bucket elevator for the next day (Sieving only).
-   * Work in progress, NOT product — so it is deliberately absent from
-   * totalOut and shown in its own column, and the variance subtracts it.
-   * Without that it would read as an unexplained shortfall every afternoon.
+   * Material held in the line for the next day: Sieving's bucket elevator, or
+   * the Granule Line's leftover SG/SF dust. Work in progress, NOT product — so
+   * it is deliberately absent from totalOut and shown in its own column, and
+   * the variance subtracts it. Without that it reads as an unexplained
+   * shortfall on every shift that legitimately leaves material behind.
    */
   carryOverOut?: number
 }
@@ -49,11 +50,17 @@ export function BalanceBadge({ variance, tolerance, className }: { variance: num
 }
 
 export function MassBalanceTable({
-  rows, tolerance, note,
+  rows, tolerance, note, carryOverLabel = 'carried over',
 }: {
   rows: BalanceRow[]
   tolerance: number
   note?: string
+  /**
+   * What the carry-over column is called on this section — "left in elevator"
+   * for Sieving, "dust for tomorrow" on the Granule Line. Naming it generically
+   * would leave an operator guessing which pile the column is about.
+   */
+  carryOverLabel?: string
 }) {
   const totalIn  = rows.reduce((s, r) => s + r.totalIn, 0)
   const totalOut = rows.reduce((s, r) => s + r.totalOut, 0)
@@ -80,7 +87,7 @@ export function MassBalanceTable({
               <th className="text-left  px-3 py-2 font-semibold">Shift</th>
               <th className="text-right px-3 py-2 font-semibold">kg in</th>
               <th className="text-right px-3 py-2 font-semibold">kg out</th>
-              {showCarry && <th className="text-right px-3 py-2 font-semibold">left in elevator</th>}
+              {showCarry && <th className="text-right px-3 py-2 font-semibold">{carryOverLabel}</th>}
               <th className="text-right px-3 py-2 font-semibold">variance</th>
             </tr>
           </thead>

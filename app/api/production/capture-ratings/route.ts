@@ -21,7 +21,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getCallerPermissions, getAdminClient } from '@/lib/auth/server-helpers'
 import { shiftValuesFor } from '@/lib/production/shifts'
-import { massBalanceToleranceFor } from '@/lib/production/capture-config'
+import { massBalanceToleranceKg } from '@/lib/production/capture-config'
 
 export const runtime = 'nodejs'
 
@@ -157,7 +157,12 @@ export async function GET(req: NextRequest) {
         if (!signals.sectionIds.includes(s.section_id)) signals.sectionIds.push(s.section_id)
         let score = 100
         const m = mbBySession.get(s.id)
-        const tol = m ? (num(m.tolerance_kg) || massBalanceToleranceFor(s.section_id)) : massBalanceToleranceFor(s.section_id)
+        // +/-1% of Total Input, computed live rather than read from the
+        // persisted tolerance_kg. Rows written before the change carry a flat
+        // 15 kg (100 for refining2), so preferring the stored value would leave
+        // two tolerance regimes side by side on the same screen -- an operator
+        // could not tell why two similar sessions flagged differently.
+        const tol = massBalanceToleranceKg(m ? num(m.total_input_kg) : 0)
         if (m && m.balance_kg !== null && Math.abs(num(m.balance_kg)) > tol) { score -= 25; signals.balanceFlags++ }
         if (s.status === 'draft') { score -= 15; signals.notSubmitted++ }
         const failed = failedBySection.get(s.section_id) ?? 0

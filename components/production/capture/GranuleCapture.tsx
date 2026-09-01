@@ -42,6 +42,7 @@ import { getAcumaticaCode } from '@/lib/production/acumatica-codes'
 import ScanCameraButton from '@/components/shared/ScanCameraButton'
 import { fetchGranuleQuality, type QualityPoint } from '@/lib/production/granule-quality'
 import { logCarryover, outstandingCarryover } from '@/lib/production/carryover'
+import { variantFamily } from '@/lib/production/bucket-elevator'
 import { itemFromCode } from '@/lib/production/bom'
 import type { ShiftAssignment } from '@/lib/supabase/database.types'
 import { n } from '@/lib/core/num'
@@ -58,6 +59,7 @@ const DUST_META: Record<string, DustMeta> = {
   leaf:       { label: 'Leaf Dust',              productType: 'Leaf Dust',       color: '#15803d' },
   alt:        { label: 'ALT Dust',               productType: 'ALT Dust',        color: '#7c3aed' },
   sg:         { label: 'SG Dust',                productType: 'SG Dust',         color: '#0d9488' },
+  sf:         { label: 'SF Dust',                productType: 'SF Dust',         color: '#0e7490' },
   extraction: { label: 'Dust Extraction (Powder)', productType: 'Dust Extraction', color: '#475569' },
   other:      { label: 'Other',                  productType: 'Other',           color: '#a16207' },
 }
@@ -79,6 +81,12 @@ const GRANULE_OUTPUT_ITEMS = ['SG Granules', 'SF Granules', 'Export Granules']
 // Blend tab) keys on the exact same dust-type string as everywhere else —
 // SG and SF are never summed together because they're different item_keys.
 export function dustForItem(item: string): string { return item.startsWith('SF') ? 'SF Dust' : 'SG Dust' }
+/**
+ * The dust COLUMN a leftover belongs in. Carry-over used to be added under
+ * 'other', which hid it from the column it actually is — the balance was right
+ * but the operator could not see which pool the material came from.
+ */
+export function dustKeyForItem(item: string): string { return item.startsWith('SF') ? 'sf' : 'sg' }
 const DEFAULT_TARGET_KG = '500'
 
 // ── Types ───────────────────────────────────────────────────────────────────
@@ -146,6 +154,12 @@ export interface GranuleData {
   coarseNotFed: string   // E — coarse granules not yet fed to maize master
   meterStart: string     // Y
   meterStop: string      // Z
+  // Leftover dust confirmed at shutdown as carrying over to tomorrow's blend.
+  // Written here as well as to production.dust_carryover_log so the balance
+  // survives a reload — without it the screen showed the carry-over as an
+  // unexplained shortfall again the moment the page was reopened, and the
+  // operator could confirm the same leftover a second time.
+  dustCarryOverKg: string
 }
 
 export function emptyGranuleData(): GranuleData {
@@ -156,7 +170,7 @@ export function emptyGranuleData(): GranuleData {
     item: '',
     blends: [{ id: crypto.randomUUID(), blendNo: '1', rows: [], water: '', done: false }],
     outputs: [], dustOutputs: [], waste: [],
-    dustNotRefed: '', coarseNotFed: '', meterStart: '', meterStop: '',
+    dustNotRefed: '', coarseNotFed: '', meterStart: '', meterStop: '', dustCarryOverKg: '',
   }
 }
 
@@ -782,16 +796,27 @@ export function GranuleCapture({
   const [availableCarryover, setAvailableCarryover] = useState(0)
   useEffect(() => {
     let cancelled = false
-    outstandingCarryover(sectionId, dustForItem(item)).then(kg => { if (!cancelled) setAvailableCarryover(kg) })
+    // Matched on dust type AND variant family: conventional and organic are
+    // separate physical pools, and offering one to the other is a
+    // certification failure rather than a rounding error.
+    outstandingCarryover(sectionId, dustForItem(item), variantFamily(variantWord))
+      .then(kg => { if (!cancelled) setAvailableCarryover(kg) })
     return () => { cancelled = true }
-  }, [sectionId, item, carryoverLogged])
+  }, [sectionId, item, variantWord, carryoverLogged])
 
   async function confirmCarryover() {
-    const kg = n(carryoverKg)
+    const kg = n(carryoverKg || String(t.balance.toFixed(1)))
     if (kg <= 0) return
     setCarryoverSaving(true)
     try {
-      await logCarryover('generated', { sectionId, itemKey: dustForItem(item), kg, date, shift, sessionId })
+      await logCarryover('generated', {
+        sectionId, itemKey: dustForItem(item), variantFamily: variantFamily(variantWord),
+        kg, date, shift, sessionId,
+      })
+      // Record it on the capture data too, so the mass balance treats it as
+      // work in progress rather than a shortfall — on this render and on every
+      // later reload.
+      patch({ dustCarryOverKg: String(kg) })
       setCarryoverLogged(true)
     } finally { setCarryoverSaving(false) }
   }
@@ -802,11 +827,14 @@ export function GranuleCapture({
     if (availableCarryover <= 0) return
     const kg = availableCarryover
     const row: GranuleInputRow = {
-      id: crypto.randomUUID(), dustKey: 'other', serial: `CARRYOVER-${date}`, variant: variantWord || '',
+      id: crypto.randomUUID(), dustKey: dustKeyForItem(item), serial: `CARRYOVER-${date}`, variant: variantWord || '',
       weight: String(kg), lot: '', inputMode: 'manual', secured: true, logged_at: nowISO(), fromCarryover: true,
     }
     updateBlend(openBlend.id, { ...openBlend, rows: [...openBlend.rows, row] })
-    await logCarryover('consumed', { sectionId, itemKey: dustForItem(item), kg, date, shift, sessionId })
+    await logCarryover('consumed', {
+      sectionId, itemKey: dustForItem(item), variantFamily: variantFamily(variantWord),
+      kg, date, shift, sessionId,
+    })
     setAvailableCarryover(0)
   }
 
@@ -1203,10 +1231,16 @@ export function GranuleCapture({
               SUGGESTION (auto-computed, never auto-written) for what carries
               over to tomorrow's blend as this exact dust type. */}
           {shift === 'afternoon' && !locked && (
-            carryoverLogged ? (
+            // Derived from the captured data, not only from this render's
+            // state, so reopening the page shows "logged" rather than offering
+            // the same leftover to be confirmed a second time.
+            (carryoverLogged || n(value.dustCarryOverKg) > 0) ? (
               <div className="flex items-center gap-3 px-4 py-3 bg-ok/8 border border-ok/30 rounded-2xl">
                 <CheckCircle2 size={16} className="text-ok shrink-0" />
-                <span className="text-[12px] text-ok font-medium">Carry-over logged — it'll be offered on the Blend tab next time this dust type is used.</span>
+                <span className="text-[12px] text-ok font-medium">
+                  {n(value.dustCarryOverKg) > 0 ? `${n(value.dustCarryOverKg).toFixed(1)} kg ` : ''}
+                  Carry-over logged — held out of Total Output as work in progress, and offered on the Blend tab next time this dust type runs on {variantFamily(variantWord)}.
+                </span>
               </div>
             ) : t.balance > 0.5 && (
               <div className="px-4 py-3 bg-amber-50 border border-amber-200 rounded-2xl space-y-2">

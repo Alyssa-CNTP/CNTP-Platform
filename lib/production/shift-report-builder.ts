@@ -9,7 +9,7 @@
 // functions; behavior for the browser is unchanged.
 
 import { getAdminClient } from '@/lib/auth/server-helpers'
-import { sectionMeta, SECTION_ORDER, massBalanceToleranceFor } from '@/lib/production/capture-config'
+import { sectionMeta, SECTION_ORDER, massBalanceToleranceKg } from '@/lib/production/capture-config'
 import { SHIFT_LABEL, shiftValuesFor } from '@/lib/production/shifts'
 import { SHIFT_WINDOW, tons } from '@/lib/production/shift-report'
 import type {
@@ -230,7 +230,12 @@ export async function buildShiftReport(date: string, shift: Shift): Promise<Shif
       const outputKg = m ? num(m.total_output_b_kg) + num(m.total_output_c_kg) + num(m.total_output_d_kg) : 0
       const bags = bagsBySession.get(s.id) ?? []
       const debags = debagsBySession.get(s.id) ?? []
-      const tolerance = m ? num(m.tolerance_kg) || massBalanceToleranceFor(s.section_id) : massBalanceToleranceFor(s.section_id)
+      // +/-1% of Total Input, computed live rather than read from the
+      // persisted tolerance_kg. Rows written before the change carry a flat
+      // 15 kg (100 for refining2), so preferring the stored value would leave
+      // two tolerance regimes side by side on the same screen -- an operator
+      // could not tell why two similar sessions flagged differently.
+      const tolerance = massBalanceToleranceKg(inputKg)
       const balance = m && m.balance_kg !== null ? num(m.balance_kg) : null
       const stamps = bags.map(b => b.created_at).filter(Boolean).sort()
       return {
