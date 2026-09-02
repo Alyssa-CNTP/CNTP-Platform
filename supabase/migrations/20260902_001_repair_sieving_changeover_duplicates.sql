@@ -47,19 +47,43 @@
 -- it back.
 --
 --
--- HOW TO RUN
--- ----------
--- Steps 1 and 2 are read-only: run them first and read the output. Steps 3 and
--- 4 change data, and step 4 must not be skipped. Step 6 verifies.
---
--- START WITH STEP 1a: confirm you are on the PRODUCTION database. Run this
--- against staging and every step comes back clean, which looks exactly like
--- "already fixed". Then 1b -- steps 1, 2a and 2c filter to product_type in
--- ('Farm Bag','500kg Farm Bag'), while 1b assumes nothing and shows where the
--- rows actually are, so a repair cannot come back clean merely because it was
--- looking in the wrong place. 1c finds the duplicated session without its id.
---
+-- RUNBOOK -- do these in this order
+-- ---------------------------------
 -- Run ONE STEP AT A TIME. Do not paste the whole file in at once.
+-- Everything numbered "READ ONLY" is safe to run at any point, repeatedly.
+--
+--   0.  Step 0            create the backup table            (writes: empty table)
+--   1.  Step 4's function create dedupe_sieving_draft        (writes: a function)
+--   2.  20260902_002_repair_parse_check.sql
+--                         proves every statement below is valid against THIS
+--                         database before any of them touches data. Executes
+--                         nothing. If it errors, stop and fix that first.
+--   3.  Step 1a           confirm you are on PRODUCTION, not staging  READ ONLY
+--   4.  Step 2c           safety check -- MUST return no rows         READ ONLY
+--   5.  Step 2d           the bags that survive; check against the
+--                         floor's sheet before deleting anything      READ ONLY
+--   6.  Step 3            delete the duplicate rows          WRITES, backed up
+--   7.  Step 4b           deduplicate draft_data             WRITES, backed up
+--                         NOT OPTIONAL -- see below
+--   8.  Step 6a           verify: re-run Step 1, expect no rows       READ ONLY
+--   9.  Step 8a           why the QC queue is not clearing            READ ONLY
+--  10.  Step 8b           relink the forced matches          WRITES, backed up
+--  11.  Step 8a, 8c       what is left for a person to decide         READ ONLY
+--
+-- Steps 1, 1b, 1c, 1d, 2a, 2b, 7a, 7b, 7c are diagnostics. Run them whenever
+-- you want more detail; none of them change anything.
+--
+-- ALSO REQUIRED, AND NOT IN THIS FILE: the code fix (PR #872) has to be on
+-- main and deployed, or the duplicates come straight back. This script cleans
+-- up what the fault already wrote; the fault itself is fixed in
+-- SievingCapture + lib/production/self-heal-reconcile.ts. Deploy first, repair
+-- second -- in that order nothing can re-duplicate between the two.
+--
+-- Why Step 1a matters: run this against staging and every step comes back
+-- clean, which looks exactly like "already fixed".
+-- Why Step 4 matters: prod_debagging and prod_bagging are REBUILT from
+-- draft_data on every save, so Step 3 without Step 4 undoes itself the moment
+-- an operator next opens the session.
 -- ============================================================================
 
 
@@ -454,7 +478,8 @@ begin
   for p in select value from jsonb_array_elements(prods) loop
 
     new_debag := '[]'::jsonb;
-    for r in select value from jsonb_array_elements(coalesce(p -> 'data' -> 'debag', '[]'::jsonb)) loop
+    for r in select value from jsonb_array_elements(case when jsonb_typeof(p -> 'data' -> 'debag') = 'array'
+                                        then p -> 'data' -> 'debag' else '[]'::jsonb end) loop
       -- A farm bag is a physical object debagged ONCE, so (lot, bag label) is
       -- its identity. A row with a BLANK label is never deduplicated: two
       -- different unlabelled bags would collapse into one and UNDER-count,
@@ -470,7 +495,8 @@ begin
     end loop;
 
     new_outputs := '[]'::jsonb;
-    for r in select value from jsonb_array_elements(coalesce(p -> 'data' -> 'outputs', '[]'::jsonb)) loop
+    for r in select value from jsonb_array_elements(case when jsonb_typeof(p -> 'data' -> 'outputs') = 'array'
+                                        then p -> 'data' -> 'outputs' else '[]'::jsonb end) loop
       -- An output bag's serial is unique to one physical bag.
       k := btrim(coalesce(r ->> 'serial', ''));
       if k = '' then
@@ -501,19 +527,23 @@ comment on function production.dedupe_sieving_draft(jsonb) is
 select s.id, s.date, s.shift,
        (select count(*)
           from jsonb_array_elements(s.draft_data -> 'productions') pr,
-               jsonb_array_elements(coalesce(pr.value -> 'data' -> 'debag', '[]'::jsonb))
+               jsonb_array_elements(case when jsonb_typeof(pr.value -> 'data' -> 'debag') = 'array'
+                                          then pr.value -> 'data' -> 'debag' else '[]'::jsonb end)
        ) as debag_before,
        (select count(*)
           from jsonb_array_elements(production.dedupe_sieving_draft(s.draft_data) -> 'productions') pr,
-               jsonb_array_elements(coalesce(pr.value -> 'data' -> 'debag', '[]'::jsonb))
+               jsonb_array_elements(case when jsonb_typeof(pr.value -> 'data' -> 'debag') = 'array'
+                                          then pr.value -> 'data' -> 'debag' else '[]'::jsonb end)
        ) as debag_after,
        (select count(*)
           from jsonb_array_elements(s.draft_data -> 'productions') pr,
-               jsonb_array_elements(coalesce(pr.value -> 'data' -> 'outputs', '[]'::jsonb))
+               jsonb_array_elements(case when jsonb_typeof(pr.value -> 'data' -> 'outputs') = 'array'
+                                          then pr.value -> 'data' -> 'outputs' else '[]'::jsonb end)
        ) as outputs_before,
        (select count(*)
           from jsonb_array_elements(production.dedupe_sieving_draft(s.draft_data) -> 'productions') pr,
-               jsonb_array_elements(coalesce(pr.value -> 'data' -> 'outputs', '[]'::jsonb))
+               jsonb_array_elements(case when jsonb_typeof(pr.value -> 'data' -> 'outputs') = 'array'
+                                          then pr.value -> 'data' -> 'outputs' else '[]'::jsonb end)
        ) as outputs_after
 from production.prod_sessions s
 where s.section_id = 'sieving'
@@ -647,13 +677,14 @@ from (
   group by 1, 2
 ) d
 left join (
-  select fr.date as day, fr.product,
+  -- sd_runs.date is TEXT; keep the comparison in text on both sides.
+  select fr.date as day_text, fr.product,
          count(*) as final_runs,
          count(*) filter (where coalesce(btrim(fr.serial_number), '') = '') as final_runs_without_serial
   from qms.sd_runs fr
   where fr.run_type = 'final'
   group by 1, 2
-) f on f.day = d.day and f.product = d.product
+) f on f.day_text = to_char(d.day, 'YYYY-MM-DD') and f.product = d.product
 order by d.day, d.product;
 
 
@@ -707,7 +738,8 @@ from qms.v_pending_bag_qc v
 left join qms.sd_runs fr
        on fr.run_type = 'final'
       and fr.product  = v.product
-      and fr.date     = v.bagged_at::date
+      -- sd_runs.date is TEXT; compare as text, never cast the stored value.
+      and fr.date     = to_char(v.bagged_at::date, 'YYYY-MM-DD')
       and qms.norm_lot(fr.lot_number) = v.lot_key
 where coalesce(btrim(v.bag_serial_no), '') <> ''
 group by 1, 2, 3, 4
@@ -735,7 +767,7 @@ with pending as (
 ),
 -- Final runs that currently clear no bag at all.
 stuck as (
-  select fr.id, fr.product, fr.date as day, qms.norm_lot(fr.lot_number) as lot_key
+  select fr.id, fr.product, fr.date as day_text, qms.norm_lot(fr.lot_number) as lot_key
   from qms.sd_runs fr
   where fr.run_type = 'final'
     and not exists (
@@ -746,13 +778,18 @@ stuck as (
     )
 ),
 forced as (
+  -- (array_agg(distinct ...))[1], not min(): there is no min() for uuid. The
+  -- HAVING below guarantees one distinct value per group, so the first element
+  -- IS the value.
   select p.lot_key, p.product, p.day,
-         min(p.bagging_id)     as bagging_id,
-         min(p.bag_serial_no)  as bag_serial_no,
-         min(st.id)            as run_id
+         (array_agg(distinct p.bagging_id))[1]    as bagging_id,
+         (array_agg(distinct p.bag_serial_no))[1] as bag_serial_no,
+         (array_agg(distinct st.id))[1]           as run_id
   from pending p
   join stuck st
-    on st.lot_key = p.lot_key and st.product = p.product and st.day = p.day
+    on st.lot_key = p.lot_key
+   and st.product = p.product
+   and st.day_text = to_char(p.day, 'YYYY-MM-DD')
   group by p.lot_key, p.product, p.day
   having count(distinct p.bagging_id) = 1
      and count(distinct st.id)        = 1
