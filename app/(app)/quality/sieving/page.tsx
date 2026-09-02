@@ -1155,6 +1155,12 @@ export default function SievingPage() {
   // Pending Final QC bags — one per Fine Leaf / Coarse Leaf bagging that has
   // not been sampled yet. Indent Sticks and Rooibos Blocks are excluded by the
   // view (they get bags and labels but never a QC stamp).
+  // Rows in the pending queue with no serial — see loadPendingBags below. Kept,
+  // not discarded: they are out of the actionable list but still viewable, so
+  // nothing the queue returned is unreachable from the screen.
+  const [unidentifiedBags, setUnidentifiedBags] = useState<any[]>([])
+  const [showUnidentified, setShowUnidentified] = useState(false)
+  const unidentifiedBagCount = unidentifiedBags.length
   const loadPendingBags = useCallback(async () => {
     setPendingLoading(true)
     const { data, error } = await db.schema('qms').from('v_pending_bag_qc')
@@ -1165,7 +1171,24 @@ export default function SievingPage() {
     // live site while production had bags waiting, and nothing said otherwise.
     setPendingError(error ? (error.message || 'Could not load the pending bag list.') : '')
     if (error) { setPendingLoading(false); return pendingBagsRef.current }
-    const rows = data ?? []
+    const all = data ?? []
+    // ── Serial-less rows cannot be sampled, and never clear ───────────────────
+    // A changeover copied a Sieving session's output rows into another batch of
+    // the same session. persist() spots the repeated serial, nulls it to get past
+    // prod_bagging_session_serial_uniq, and KEEPS the row — and this queue reads
+    // prod_bagging (20260813_007 switched the bag-event source to it). So each
+    // copy arrives here as a card reading "(no serial)".
+    //
+    // They are not actionable: openBagAlert() matches on bagging_id, which is a
+    // prod_bagging id and therefore not stable across persist()'s rewrite, then
+    // falls back to the serial — which is null. And this panel deliberately keeps
+    // a card up until its bag is linked to a Final QC, so they would sit there
+    // forever, burying the real ones. 20 of them were live on 2026-09-01.
+    //
+    // Held aside rather than dropped: the count is shown on the panel, so Quality
+    // can see there are unidentifiable rows instead of them silently vanishing.
+    const rows = all.filter((r: any) => String(r.bag_serial_no ?? '').trim())
+    setUnidentifiedBags(all.filter((r: any) => !String(r.bag_serial_no ?? '').trim()))
     setPendingBags(rows)
     setPendingLoading(false)
     // No pruning needed: the awaiting-QC cards are derived from this list, so
@@ -1826,15 +1849,41 @@ export default function SievingPage() {
           phone, where it's most of the screen, the page underneath could not
           be scrolled at all. Height is capped too, so it can never own the
           full viewport even when expanded. */}
-      {bagAlerts.length > 0 && (
+      {/* Also render when every pending row was unidentifiable — otherwise the
+          panel disappears and hides the fact that anything was held back. */}
+      {(bagAlerts.length > 0 || unidentifiedBagCount > 0) && (
         <div style={{position:'fixed',top:70,right:16,zIndex:5000,display:'flex',flexDirection:'column',gap:8,maxWidth:340,maxHeight:'min(60vh, calc(100vh - 90px))',pointerEvents:'none'}}>
           <button onClick={()=>setAlertsCollapsed(c=>!c)}
             style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,background:'#166534',border:'none',borderRadius:10,padding:'9px 12px',color:'#fff',fontSize:12,fontWeight:700,cursor:'pointer',boxShadow:'0 12px 30px rgba(0,0,0,.15)',pointerEvents:'auto',flexShrink:0}}>
-            <span>📦 {bagAlerts.length} bag{bagAlerts.length>1?'s':''} awaiting QC</span>
+            <span>📦 {bagAlerts.length} bag{bagAlerts.length>1?'s':''} awaiting QC{unidentifiedBagCount > 0 ? ` · ${unidentifiedBagCount} unidentified hidden` : ''}</span>
             <span style={{opacity:.85}}>{alertsCollapsed?'▲':'▼'}</span>
           </button>
           {!alertsCollapsed && (
             <div style={{display:'flex',flexDirection:'column',gap:8,overflowY:'auto',pointerEvents:'auto'}}>
+              {unidentifiedBagCount > 0 && (
+                <div style={{background:'#fff',border:'1px solid #d6d3d1',borderLeft:'4px solid #a8a29e',borderRadius:10,boxShadow:'0 12px 30px rgba(0,0,0,.15)',padding:'12px 14px'}}>
+                  <button onClick={()=>setShowUnidentified(v=>!v)}
+                    style={{display:'flex',justifyContent:'space-between',alignItems:'center',width:'100%',background:'none',border:'none',padding:0,cursor:'pointer',fontWeight:700,fontSize:12,color:'#57534e'}}>
+                    <span>❔ {unidentifiedBagCount} unidentified row{unidentifiedBagCount>1?'s':''}</span>
+                    <span style={{opacity:.7}}>{showUnidentified?'▲':'▼'}</span>
+                  </button>
+                  <div style={{fontSize:11,color:'#6b7280',marginTop:4}}>
+                    No serial, so they cannot be sampled or linked to a Final QC. Almost certainly
+                    duplicate prod_bagging rows left by the changeover fault — kept here rather than
+                    dropped so nothing is out of reach.
+                  </div>
+                  {showUnidentified && (
+                    <div style={{marginTop:8,display:'flex',flexDirection:'column',gap:6}}>
+                      {unidentifiedBags.map((u:any,i:number)=>(
+                        <div key={u.bagging_id ?? i} style={{fontSize:11,color:'#374151',borderTop:'1px solid #f5f5f4',paddingTop:6}}>
+                          {u.product || '—'} · lot {u.lot_number || '—'} · {u.kg ?? u.weight_kg ?? '—'} kg
+                          {u.bagged_at ? <><br/><span style={{color:'#6b7280'}}>Bagged {String(u.bagged_at).slice(0,10)} {String(u.bagged_at).slice(11,16)}</span></> : null}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
               {bagAlerts.map(a=>(
                 <div key={a.bagging_id} style={{background:'#fff',border:'1px solid #86efac',borderLeft:`4px solid ${a.inprocess_out_of_spec?'#991b1b':'#166534'}`,borderRadius:10,boxShadow:'0 12px 30px rgba(0,0,0,.15)',padding:'12px 14px'}}>
                   <div style={{fontWeight:700,fontSize:12,color:a.inprocess_out_of_spec?'#991b1b':'#166534'}}>

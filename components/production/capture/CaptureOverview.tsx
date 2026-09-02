@@ -65,8 +65,12 @@ export interface BlenderRatioGroup {
 
 // ── Grouping functions ────────────────────────────────────────────────────────
 
-function buildDebagLotGroups(prods: Production[]): { groups: DebagLotGroup[]; bucketInKg: number; bucketOutKg: number; machineKg: number } {
+function buildDebagLotGroups(prods: Production[]): { groups: DebagLotGroup[]; bucketInKg: number; bucketOutKg: number; machineKg: number; duplicatesHidden: number } {
   const map = new Map<string, DebagLotGroup>()
+  // Spans every production, so a copy sitting in batch 6 is recognised against
+  // the original in batch 1 — the copies live in OTHER batches, not this one.
+  const seenSievingBag = new Set<string>()
+  let duplicatesHidden = 0
   let bucketInKg = 0
   let bucketOutKg = 0
   let machineKg = 0
@@ -143,17 +147,36 @@ function buildDebagLotGroups(prods: Production[]): { groups: DebagLotGroup[]; bu
         if (i === 0) { if (p.shift === 'afternoon') bucketOutKg += num(r.kg); else bucketInKg += num(r.kg) }
         else         machineKg += num(r.kg)
       })
+      // A changeover (and a page reload) copied a session's debagging rows into
+      // its other batches, and this Overview sums EVERY batch — so the same
+      // physical bag was counted once per copy: GS-0314 read 32 bags / 11 200 kg
+      // for one bag, and the panel totalled 95 900 kg against ~6 t debagged.
+      //
+      // A farm bag is a physical object debagged ONCE, so (lot, bag label) is its
+      // identity and a repeat is a copy. Confirmed against the floor's paper
+      // sheet for 31-08-2026: 41 bags, 41 distinct pairs.
+      //
+      // A row with a BLANK bag label is never deduplicated — two different bags
+      // both captured without one would collapse into a single bag and
+      // UNDER-count, which is worse than showing the copy. Those fall back to a
+      // positional placeholder, which is unique per row anyway.
       ;(d.debag ?? []).forEach((r: any, i: number) => {
         if (num(r.nett) === 0) return
         const lot = (r.lot || p.lot || '—').trim()
-        const row: DebagRow = { bagNo: r.bag_no || `Bulk bag ${i + 1}`, kg: num(r.nett), variant: p.variant, loggedAt: r.logged_at }
+        const label = String(r.bag_no ?? '').trim()
+        if (label) {
+          const identity = `${lot}|${label}`
+          if (seenSievingBag.has(identity)) { duplicatesHidden++; return }
+          seenSievingBag.add(identity)
+        }
+        const row: DebagRow = { bagNo: label || `Bulk bag ${i + 1}`, kg: num(r.nett), variant: p.variant, loggedAt: r.logged_at }
         const g = map.get(lot)
         if (g) { g.rows.push(row); g.totalKg += num(r.nett) }
         else map.set(lot, { lot, rows: [row], totalKg: num(r.nett) })
       })
     }
   })
-  return { groups: Array.from(map.values()), bucketInKg, bucketOutKg, machineKg }
+  return { groups: Array.from(map.values()), bucketInKg, bucketOutKg, machineKg, duplicatesHidden }
 }
 
 function buildProductGroups(prods: Production[]): ProductGroup[] {
@@ -262,7 +285,7 @@ export function CaptureOverview({
   const [filterGrade,   setFilterGrade]   = useState('')
   const [showFilters,   setShowFilters]   = useState(false)
 
-  const { groups: debagGroups, bucketInKg, bucketOutKg, machineKg } = useMemo(() => buildDebagLotGroups(productions), [productions])
+  const { groups: debagGroups, bucketInKg, bucketOutKg, machineKg, duplicatesHidden } = useMemo(() => buildDebagLotGroups(productions), [productions])
   const productGroups = useMemo(() => buildProductGroups(productions), [productions])
 
   const debagOnlyKg   = debagGroups.reduce((s, g) => s + g.totalKg, 0)
@@ -419,6 +442,11 @@ export function CaptureOverview({
                 <div className="flex items-center justify-between px-3 py-2" style={{ background: DEBAG_BLUE + '12' }}>
                   <span className="inline-flex items-center gap-1.5 text-[12px] font-bold" style={{ color: DEBAG_BLUE }}>
                     <Package size={14} /> Debagging — in
+                    {duplicatesHidden > 0 && (
+                      <span className="font-normal normal-case tracking-normal text-[10px] text-stone-400">
+                        · {duplicatesHidden} duplicate row{duplicatesHidden === 1 ? '' : 's'} hidden
+                      </span>
+                    )}
                   </span>
                   <span className="font-mono font-bold text-[13px]" style={{ color: DEBAG_BLUE }}>{totalIncl.toFixed(1)} kg</span>
                 </div>
