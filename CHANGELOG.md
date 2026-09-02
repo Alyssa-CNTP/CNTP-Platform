@@ -2,6 +2,14 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-02 — Alyssa (Acumatica lot details: OAuth2 REST client + stock-on-hand sync)
+
+**Files changed:** `lib/acumatica/rest.ts` (new), `lib/acumatica/lot-sync.ts` (new), `app/api/acumatica/sync-lots/route.ts` (new), `supabase/migrations/20260902_002_acumatica_lot_details.sql` (new)
+
+Adds the first **contract-based REST + OAuth2** path to Acumatica (client-credentials token, cached in memory + auto-refreshed on expiry/401) — reusable for the production-order push later. `syncLotDetails()` pulls the `LotDetail` endpoint (BHW warehouse) and full-replaces the new typed table `acumatica.lot_details` (qty on hand/available by lot × item × grade, plus harvest year for ageing and tea court), via a `SECURITY DEFINER` replace RPC with the empty-fetch guard — same pattern as `sales_lines`. Trigger endpoint gated by session or `x-sync-secret` (for n8n). Feeds live stock-on-hand + ageing + the grade-balance metric.
+
+**Deploy notes:** run migration `20260902_002` in Supabase + `NOTIFY pgrst,'reload schema'`; set `ACUMATICA_CLIENT_ID` / `ACUMATICA_CLIENT_SECRET` in the env. Read-only against Acumatica.
+
 ## 2026-09-02 — Alyssa (Capture resolves Acumatica items, behind a flag)
 
 **Files changed:** `lib/production/use-item-codes.ts` (new), `lib/production/inventory.suggest.test.ts` (new), `lib/production/inventory.ts`, `lib/config/flags.ts`, `features/acumatica-items/index.ts`, `app/(app)/production/live/capture/page.tsx`, `components/production/capture/{Granule,Refining}Capture.tsx`, `components/production/capture/OutputPicker.tsx`
