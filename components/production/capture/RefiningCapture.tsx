@@ -140,7 +140,9 @@ function useSystemBags(sectionId: string, variantWord: string): SystemBag[] {
     const cfg = SECTION_CONFIG[sectionId]
     if (!cfg) return
     const types = cfg.inputTypes
-    // Also accept the sieving-era names for the same items
+    // Stored spellings, not display names: this builds a bag_tags .in() filter,
+    // so it has to list every value the column actually holds. The DISPLAY name
+    // for all of these is canonicalProductType() — see lib/core/product-names.ts.
     const aliases: Record<string, string[]> = {
       'Sticks': ['Rolsiev Sticks', 'Sticks (RS)', 'Sticks'],
       'Indent Sticks': ['Indent Sticks'],

@@ -3,6 +3,7 @@
  * All lookup functions take (productType, variant, grade) and return the
  * Acumatica inventory ID + description.
  */
+import { canonicalProductType } from '@/lib/core/product-names'
 
 export interface AcumaticaCode {
   inventoryId: string   // e.g. '10LGEF-C'
@@ -72,12 +73,17 @@ function variantLongName(v: string): string {
  * Returns null for waste streams that have no Acumatica code.
  */
 export function getAcumaticaCode(
-  productType: string,
+  productTypeRaw: string,
   variant: string,
   grade: string,
 ): AcumaticaCode | null {
   const vs   = variantSuffix(variant)
   const vln  = variantLongName(variant)
+  // Every branch below matches an exact display string, so a row stored under
+  // an older name for the same material would fall through to `return null` and
+  // ship a bag with no Acumatica code. Fold the name first — see
+  // lib/core/product-names.ts.
+  const productType = canonicalProductType(productTypeRaw)
 
   // ── Blender outputs ──────────────────────────────────────────────────────
   if (productType === 'Blended Batch') {
@@ -120,7 +126,9 @@ export function getAcumaticaCode(
     }
   }
 
-  if (productType === 'Rolsiev Sticks') {
+  // Acumatica calls this 'Sticks' (15IGST). The platform used to call it
+  // 'Rolsiev Sticks'; canonicalProductType above folds the old name onto this.
+  if (productType === 'Sticks') {
     return {
       inventoryId: `15IGST${vs}`,
       description: `Sticks - ${vln}`,

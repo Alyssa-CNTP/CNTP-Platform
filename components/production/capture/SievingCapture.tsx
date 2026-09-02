@@ -14,6 +14,7 @@ import type { ShiftAssignment } from '@/lib/supabase/database.types'
 import { logBucketElevator, outstandingBucketElevator, variantFamily } from '@/lib/production/bucket-elevator'
 import { n } from '@/lib/core/num'
 import { resolveTypeCode } from '@/lib/core/serials'
+import { canonicalProductType } from '@/lib/core/product-names'
 import { allocateBagSerial } from '@/lib/production/serial-allocator'
 import { legacySievingSerial } from '@/lib/production/serial-legacy'
 import { usesDbSerials } from '@/lib/config/flags'
@@ -100,10 +101,13 @@ const groupColor = (i: number) => GROUP_COLORS[i % GROUP_COLORS.length]
 // that bags Sticks before Fine Leaf shouldn't reorder the groups on screen.
 // Anything not in this list (Dust, a free-text search result, etc.) sorts
 // after, in the order it was first bagged.
-const OUTPUT_GROUP_ORDER = ['Fine Leaf', 'Coarse Leaf', 'Indent Sticks', 'Rolsiev Sticks', 'RB Blocks']
+const OUTPUT_GROUP_ORDER = ['Fine Leaf', 'Coarse Leaf', 'Indent Sticks', 'Sticks', 'RB Blocks']
 function sortOutputGroups(types: string[]): string[] {
+  // Ordered by canonical name so a session left open across the Sticks rename
+  // does not drop its 'Rolsiev Sticks' group to the bottom of the list.
   return [...types].sort((a, b) => {
-    const ia = OUTPUT_GROUP_ORDER.indexOf(a), ib = OUTPUT_GROUP_ORDER.indexOf(b)
+    const ia = OUTPUT_GROUP_ORDER.indexOf(canonicalProductType(a))
+    const ib = OUTPUT_GROUP_ORDER.indexOf(canonicalProductType(b))
     if (ia === -1 && ib === -1) return 0
     if (ia === -1) return 1
     if (ib === -1) return -1

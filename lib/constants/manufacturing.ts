@@ -212,9 +212,14 @@ export const SECTIONS = {
 
 export type SectionId = keyof typeof SECTIONS
 
-// ── ACUMATICA INVENTORY ID PATTERNS ──────────────────────────────────────────
-// Maps section + output type to the correct Acumatica inventory ID prefix.
-// Used when building bag_tags.acumatica_id on save.
+// ── ACUMATICA INVENTORY ID PATTERNS ─────────────────────────────
+// DEAD CODE, and a trap. Nothing imports ACUMATICA_IDS — the comment below is
+// stale, bag_tags.acumatica_id is built by lib/production/acumatica-codes.ts.
+// This is a SECOND hard-coded copy of the same ID templates, so the two can
+// drift silently and the next person to reach for one has a 50% chance of
+// picking the wrong one. Both are being replaced by resolution against the
+// synced master inventory (features/acumatica-items); delete this const then,
+// or sooner — it has no consumers to break.
 
 export const ACUMATICA_IDS = {
   // Sieving Tower outputs (phantom items — production order targets)
@@ -228,7 +233,7 @@ export const ACUMATICA_IDS = {
   fine_leaf_export:               (variant: Variant) => `10LGEF-${variantSuffix(variant)}`,
   // Sticks
   indent_sticks:                  (variant: Variant) => `15IGIS-${variantSuffix(variant)}`,
-  rolsiev_sticks:                 (variant: Variant) => `15IGST-${variantSuffix(variant)}`,
+  sticks:                         (variant: Variant) => `15IGST-${variantSuffix(variant)}`,
   blocks_clean:                   (variant: Variant) => `15IGBL-C-${variantSuffix(variant)}`,
   // Dusts
   brown_dust:                     (variant: Variant) => `15IGDB-${variantSuffix(variant)}`,

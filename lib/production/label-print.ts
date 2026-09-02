@@ -8,6 +8,7 @@
 import type { OutputBag } from './live-types'
 import { GRADE_LABELS } from './live-types'
 import { encodeCode128, getCode128Width } from '@/lib/production/code128'
+import { canonicalProductType } from '@/lib/core/product-names'
 
 const GRADE_FULL: Record<string, string> = {
   'A': 'Export',
@@ -142,7 +143,7 @@ export function buildLabelHtml(bag: OutputBag, opts: { embed?: boolean } = {}): 
 <body>
   <div class="header">
     <div class="header-left">
-      <div class="product-name">${bag.product_type}</div>
+      <div class="product-name">${canonicalProductType(bag.product_type)}</div>
       <div class="section-name">${bag.section_name}</div>
     </div>
     <div class="type-grade-badge">${badgeText}</div>
