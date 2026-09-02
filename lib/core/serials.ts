@@ -361,7 +361,13 @@ export function serialScope(parts: Omit<BagSerialParts, 'seq'>): string {
     case 'SB':
       // Blend + which run of the day. No type code: the blend type and number
       // are what the Pasteuriser consumes and what the order is raised against.
-      return `${wc}-${String(qualifier).trim()}-${ddmmyyyy(date)}/${runNo ?? 1}`
+      //
+      // The run separator is '-', NOT '/'. A serial goes into a URL path at
+      // /api/production/live/bag/[serial] and in the Bag Tracking deep links,
+      // and a '/' splits the route param — the Blender's previous format chose
+      // '-' for exactly this reason and said so. ARCHITECTURE.md §5 originally
+      // wrote this as '{DDMMYYYY}/{run}'; the slash was wrong.
+      return `${wc}-${String(qualifier).trim()}-${ddmmyyyy(date)}-${runNo ?? 1}`
     default:
       return assertNeverWorkCentre(wc)
   }
@@ -476,9 +482,10 @@ export function parseBagSerial(serial: string): ParsedBagSerial | null {
   })
 
   if (wc === 'BL' || wc === 'SB') {
-    // {WC}-{BLEND}-{DDMMYYYY}/{run}. The blend code may contain '-' and '/',
-    // so the date and run are taken off the END, not by splitting.
-    const m = body.match(/^(?:BL|SB)-(.*)-(\d{6}|\d{8})\/(\d+)$/)
+    // {WC}-{BLEND}-{DDMMYYYY}-{run}. The blend code itself may contain '-',
+    // so the date and run are taken off the END, not by splitting. The greedy
+    // (.*) anchors to the LAST date-then-run, which is what makes that safe.
+    const m = body.match(/^(?:BL|SB)-(.*)-(\d{6}|\d{8})-(\d+)$/)
     if (!m) return null
     return mk('', m[2], m[1], parseInt(m[3], 10))
   }

@@ -2307,6 +2307,7 @@ function CaptureScreen() {
                         onChange={updateActiveData}
                         genSerial={genSerial}
                         operatorId={verifiedOp?.user_id ?? user?.id ?? null}
+                        date={dateParam}
                       />
                     : isBlenderSection(sectionId)
                     ? <BlenderCapture

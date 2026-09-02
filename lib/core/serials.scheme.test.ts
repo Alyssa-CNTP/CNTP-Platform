@@ -30,14 +30,14 @@ describe('work centre', () => {
 })
 
 describe('Small Blender', () => {
-  const base = { workCentre: 'SB' as WorkCentre, qualifier: 'SFCKUN25/C', date: '2026-09-01', runNo: 1 }
+  const base = { workCentre: 'SB' as WorkCentre, qualifier: 'SFCKUN25', date: '2026-09-01', runNo: 1 }
 
   it('formats and round-trips like the Blender, under its own prefix', () => {
     const s = formatBagSerial({ ...base, seq: 2 })
-    expect(s).toBe('SB-SFCKUN25/C-01092026/1-002')
+    expect(s).toBe('SB-SFCKUN25-01092026-1-002')
     const p = parseBagSerial(s)!
     expect(p.workCentre).toBe('SB')
-    expect(p.qualifier).toBe('SFCKUN25/C')
+    expect(p.qualifier).toBe('SFCKUN25')
     expect(p.runNo).toBe(1)
     expect(p.seq).toBe(2)
   })
@@ -123,8 +123,8 @@ describe('formats, one per section', () => {
   })
 
   it('Blender: no type code, blend and run instead', () => {
-    expect(formatBagSerial({ workCentre: 'BL', qualifier: 'SFCKUN25/C', date, runNo: 1, seq: 1 }))
-      .toBe('BL-SFCKUN25/C-01092026/1-001')
+    expect(formatBagSerial({ workCentre: 'BL', qualifier: 'SFCKUN25', date, runNo: 1, seq: 1 }))
+      .toBe('BL-SFCKUN25-01092026-1-001')
   })
 })
 
@@ -154,7 +154,7 @@ describe('counting scope', () => {
   })
 
   it('separates Blender runs within one production day', () => {
-    const base = { workCentre: 'BL' as WorkCentre, qualifier: 'SFCKUN25/C', date: '2026-09-01' }
+    const base = { workCentre: 'BL' as WorkCentre, qualifier: 'SFCKUN25', date: '2026-09-01' }
     expect(serialScope({ ...base, runNo: 1 })).not.toBe(serialScope({ ...base, runNo: 2 }))
   })
 
@@ -162,7 +162,7 @@ describe('counting scope', () => {
     for (const p of [
       { workCentre: 'ST' as WorkCentre, typeCode: 'FL', date: '2026-09-01', seq: 3 },
       { workCentre: 'R2' as WorkCentre, typeCode: 'CHSC', date: '2026-09-01', seq: 3 },
-      { workCentre: 'BL' as WorkCentre, qualifier: 'X/C', date: '2026-09-01', runNo: 2, seq: 3 },
+      { workCentre: 'BL' as WorkCentre, qualifier: 'X-C', date: '2026-09-01', runNo: 2, seq: 3 },
       { workCentre: 'GL' as WorkCentre, typeCode: 'SG', qualifier: 'L-1', date: '2026-09-01', seq: 3 },
     ]) {
       expect(formatBagSerial(p).startsWith(serialScope(p)), formatBagSerial(p)).toBe(true)
@@ -177,7 +177,7 @@ describe('parsing, anchored from both ends', () => {
       { workCentre: 'R1' as WorkCentre, typeCode: 'ID', date: '2026-09-01', seq: 42 },
       { workCentre: 'R2' as WorkCentre, typeCode: 'CHSF', date: '2026-12-31', seq: 7 },
       { workCentre: 'GL' as WorkCentre, typeCode: 'EXP', qualifier: 'RSGG-05626', date: '2026-09-01', seq: 9 },
-      { workCentre: 'BL' as WorkCentre, qualifier: 'SFCKUN25/C', date: '2026-09-01', runNo: 3, seq: 5 },
+      { workCentre: 'BL' as WorkCentre, qualifier: 'SFCKUN25', date: '2026-09-01', runNo: 3, seq: 5 },
     ]
     for (const c of cases) {
       const s = formatBagSerial(c)
@@ -207,9 +207,9 @@ describe('parsing, anchored from both ends', () => {
     expect(naive[2]).toBe('05626')
   })
 
-  it('reads a blend code containing both a slash and a hyphen', () => {
-    const p = parseBagSerial('BL-SF-CKUN25/C-01092026/2-014')!
-    expect(p.qualifier).toBe('SF-CKUN25/C')
+  it('reads a blend code containing a hyphen', () => {
+    const p = parseBagSerial('BL-SF-CKUN25-01092026-2-014')!
+    expect(p.qualifier).toBe('SF-CKUN25')
     expect(p.runNo).toBe(2)
     expect(p.date).toBe('2026-09-01')
     expect(p.seq).toBe(14)
@@ -326,5 +326,23 @@ describe('Granule dust vs granules', () => {
     const p = parseBagSerial(s)!
     expect(p.typeCode).toBe('SGD')
     expect(p.qualifier).toBe('RSGG-05626')
+  })
+})
+
+// A serial is used as a URL path segment (/api/production/live/bag/[serial] and
+// the Bag Tracking deep links). A '/' inside it splits the route param — the
+// Blender's previous format chose '-' for this reason and said so in a comment.
+// ARCHITECTURE.md §5 first wrote the run separator as '/', which was wrong.
+describe('serials stay URL-safe', () => {
+  it('never emits a slash', () => {
+    const built = [
+      formatBagSerial({ workCentre: 'ST', typeCode: 'FL', date: '2026-09-02', seq: 1 }),
+      formatBagSerial({ workCentre: 'R2', typeCode: 'CHSF', date: '2026-09-02', seq: 1 }),
+      formatBagSerial({ workCentre: 'GL', typeCode: 'SGD', qualifier: 'RSGG-05626', date: '2026-09-02', seq: 1 }),
+      formatBagSerial({ workCentre: 'BL', qualifier: 'SFCKUN25', date: '2026-09-02', runNo: 2, seq: 1 }),
+      formatBagSerial({ workCentre: 'SB', qualifier: 'SFCKUN25', date: '2026-09-02', runNo: 2, seq: 1 }),
+    ]
+    for (const s of built) expect(s, s).not.toContain('/')
+    for (const s of built) expect(encodeURIComponent(s), s).toBe(s.replace(/\//g, '%2F'))
   })
 })
