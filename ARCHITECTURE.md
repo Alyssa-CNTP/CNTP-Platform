@@ -173,15 +173,38 @@ unambiguous; the fixed 2-character work centre and the anchored parse are.
 | Refining 1 | `R1{TT}-{DDMMYYYY}-{NNN}` | `R1WD-01092026-001` |
 | Refining 2 | `R2{TTTT}-{DDMMYYYY}-{NNN}` | `R2CHSF-01092026-001` |
 | Granule | `GL{TT}-{LOT}-{DDMMYYYY}-{NNN}` | `GLSG-RSGG-05626-01092026-001` |
-| Blender | `BL-{BLEND}-{DDMMYYYY}/{n}-{NNN}` | `BL-SFCKUN25/C-01092026/1-001` |
+| Blender | `BL-{BLEND}-{DDMMYYYY}-{n}-{NNN}` | `BL-SFCKUN25-01092026-1-001` |
+| Small Blender | `SB-{BLEND}-{DDMMYYYY}-{n}-{NNN}` | `SB-SFCKUN25-01092026-1-001` |
 
-Type codes — Sieving `FL CL RB BD PD IS HS`; Refining 1 `ID WD PD`; Refining 2 `CHSF CHSC WD
-PD`; Granule `SG SF EXP`. Anything else takes its description and naming convention from the
-Acumatica master inventory rather than being invented at the capture screen.
+Type codes — Sieving `FL CL RB BD PD IS HS BE`; Refining 1 `ID WD PD`; Refining 2 `CHSF CHSC
+WD PD HS`; Granule `SG SF EXP` for granules plus `SGD SFD BD WD ID LD AD DE` for the dusts the
+line also bags.
+
+Two of those are not in the original product list and were added because the lines bag them:
+Sieving's **`BE`** (bucket-elevator spillage) and Granule's **dust codes**. The Granule dust
+codes are `SGD`/`SFD`, not `SG`/`SF`, because dust and granules of the same lot must not share
+a counter or an indistinguishable serial — and the matcher must test dust BEFORE granules,
+since "SG Dust" contains the token that identifies SG granules.
+
+A product that reaches a capture screen without a mapping — routine, since the picker searches
+the Acumatica master inventory — still bags. `typeCodeFor()` returns null for callers that need
+certainty; `resolveTypeCode()` derives a code from the product name and reports
+`configured: false`, and the capture screen says so, because a guessed code is
+indistinguishable from a real one once it is printed on a bag.
 
 **Blender carries no type code.** It is identified by blend type and blend number, because
 that is what the Pasteuriser consumes and what the order is raised against — a product-type
 code there would be a second name for the same thing.
+
+**No serial contains a `/`.** An earlier draft of this section wrote the Blender's run
+separator as `{DDMMYYYY}/{n}`. That was wrong: a serial is used as a URL path segment at
+`/api/production/live/bag/[serial]` and in the Bag Tracking deep links, and a slash splits
+the route param. The Blender's previous format had already chosen `-` for this reason and
+said so in a comment. A test asserts no builder emits a slash.
+
+**The Small Blender is its own work centre (`SB`), not an alias of the Blender.** It shares
+`SectionKind 'blender'` because the capture shape is the same, but it is a different
+physical line — one counter for both would interleave two lines' bags in one sequence.
 
 **Granule puts the lot before the date, and it is the only section that does.** Everywhere
 else the date is the counting scope, so it sits immediately after the type and

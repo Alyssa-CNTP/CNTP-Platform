@@ -22,6 +22,7 @@ import { printQcLabelAuto, buildQcLabelHtml } from '@/lib/quality/qc-label-print
 import { useDraftAutosave, readDraft, clearDraft } from '@/lib/hooks/useDraftAutosave'
 import QCNameField from '@/components/shared/QCNameField'
 import DraftRecoveryBanner from '@/components/shared/DraftRecoveryBanner'
+import { serialOrderKey as coreSerialOrderKey } from '@/lib/core/serials'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -254,19 +255,18 @@ function serialTabMismatch(serial: string | null | undefined, activeProduct: str
     ? `${String(serial).trim()} is a ${p} bag — it can't be used on the ${activeProduct} tab. Switch to the ${p} tab, or pick a ${activeProduct} serial.`
     : null
 }
-// A sortable "when was this bag made" key for a production serial
-// (ST{TYPE}-DDMMYY-NNN), used only to order bags of ONE product against each
-// other — never compared across products, since each product's sequence
-// counts independently (see nextSievingSerial() in SievingCapture.tsx). The
-// DDMMYY on the serial reorders to YYMMDD so it sorts chronologically across
-// month/year boundaries, not just within one day. Returns null for anything
-// that doesn't match — legacy hand-typed serials predate this format and
-// can't be placed in a sequence, so they're excluded rather than guessed at.
+// A sortable "when was this bag made" key, used only to order bags of ONE
+// product against each other — never across products, since each product's
+// sequence counts independently.
+//
+// Ordering lives in lib/core/serials.ts so it reads BOTH the legacy six-digit
+// date stem and the current eight-digit one. The regex that used to live here
+// required exactly six digits, so every current-format bag returned null — and
+// a null key makes the out-of-order reminder short-circuit to "nothing earlier
+// is pending". QC done out of bagging order would simply stop being flagged,
+// with no error and nothing visibly different on screen.
 function serialOrderKey(serial: string | null | undefined): string | null {
-  const m = String(serial || '').trim().toUpperCase().match(/^ST[A-Z]{2}-(\d{2})(\d{2})(\d{2})-(\d{1,4})$/)
-  if (!m) return null
-  const [, dd, mm, yy, seq] = m
-  return `${yy}${mm}${dd}-${seq.padStart(6, '0')}`
+  return coreSerialOrderKey(serial)
 }
 function sdGetMesh(product: string, variant: string): string[] {
   const s = SIEVING_SPECS_DB[product]; if (!s) return []

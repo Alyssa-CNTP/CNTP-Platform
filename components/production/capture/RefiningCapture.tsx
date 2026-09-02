@@ -15,6 +15,9 @@ import { ItemPicker } from '@/components/production/capture/ItemPicker'
 import { ScanBox, BagScanModal } from '@/components/production/capture/BagScanIn'
 import type { ShiftAssignment, InventoryItem } from '@/lib/supabase/database.types'
 import { n } from '@/lib/core/num'
+import { resolveTypeCode, workCentreFor } from '@/lib/core/serials'
+import { allocateBagSerial } from '@/lib/production/serial-allocator'
+import { usesDbSerials } from '@/lib/config/flags'
 import { refiningTotals } from '@/lib/core/mass-balance/refining'
 export { refiningTotals }
 
@@ -521,7 +524,7 @@ function OutputWeightGroup({
 // ── Main component ────────────────────────────────────────────────────────────
 
 export function RefiningCapture({
-  sectionId, assignment, variantWord, locked, value, onChange, genSerial, operatorId,
+  sectionId, assignment, variantWord, locked, value, onChange, genSerial, operatorId, date,
 }: {
   sectionId: string
   assignment: ShiftAssignment | null
@@ -531,8 +534,14 @@ export function RefiningCapture({
   onChange: (d: RefiningData) => void
   genSerial: () => string
   operatorId?: string | null
+  // The SESSION's date (YYYY-MM-DD), never the device clock. The afternoon
+  // shift runs to 01h00, so wall-clock time would roll the serial's date stem
+  // to tomorrow mid-run and restart the sequence inside one production day.
+  date: string
 }) {
   const [tab, setTab] = useState<'debag' | 'bag'>('debag')
+  // Degraded-path notice: a derived type code, or a locally allocated number.
+  const [serialNotice, setSerialNotice] = useState<string | null>(null)
   const [addMode, setAddMode] = useState<RefiningInputBag['inputMode']>('scan')
   const [showSystemPick, setShowSystemPick] = useState(false)
   // Scan-first debagging state (see ScanBox / BagScanModal)
@@ -665,7 +674,32 @@ export function RefiningCapture({
 
   async function addOutputBag(groupKey: 'outputA' | 'outputB' | 'outputC' | 'outputD', productType: string, weight: string, leaveOpen = false) {
     if (n(weight) <= 0 || isImplausibleWeight(n(weight))) return
-    const serial = genSerial()
+    // Was genSerial() — ONE counter for the whole section, so Indent and White
+    // Dust shared a sequence and neither number counted its own product. Now
+    // per product type, per production day, allocated by the database.
+    //
+    // The work centre comes from the section id, not the kind: Refining 1 and
+    // Refining 2 are both kind 'refining' but are different work centres with
+    // different type codes, and sharing a counter would put R2's bought-in
+    // material under R1's numbering.
+    // Rolled out per section, and R1/R2 roll out separately — they are
+    // different work centres, so one can be proven before the other moves.
+    const wc = usesDbSerials(sectionId) ? workCentreFor(sectionId) : null
+    let serial: string
+    if (!wc) {
+      serial = genSerial()
+    } else {
+      const { code: typeCode, configured } = resolveTypeCode(wc, productType)
+      const localSerials = (['outputA', 'outputB', 'outputC', 'outputD'] as const)
+        .flatMap(k => (value[k]?.bags ?? []).map(bg => bg.serial))
+      const alloc = await allocateBagSerial({ workCentre: wc, typeCode, date }, localSerials)
+      serial = alloc.serial
+      if (!configured) {
+        setSerialNotice(`"${productType}" has no serial code configured — ${typeCode} was derived from its name. Tell IT so it gets a proper one.`)
+      } else if (alloc.source === 'local') {
+        setSerialNotice('Offline — this bag was numbered locally. Check for a duplicate serial once the tablet reconnects.')
+      }
+    }
     const now = nowISO()
     const acCode = getAcumaticaCode(productType, variantShort, 'A')
     const bag: OutputBag = {
@@ -897,6 +931,14 @@ export function RefiningCapture({
       {/* ── BAGGING TAB ──────────────────────────────────────────────────── */}
       {tab === 'bag' && (
         <>
+          {serialNotice && (
+            <div className="flex items-start gap-2 px-3 py-2.5 bg-amber-50 border border-amber-200 rounded-xl text-[12px] text-amber-900">
+              <AlertTriangle size={14} className="shrink-0 mt-0.5" />
+              <span className="flex-1">{serialNotice}</span>
+              <button type="button" onClick={() => setSerialNotice(null)}
+                className="shrink-0 text-amber-700 underline">Dismiss</button>
+            </div>
+          )}
           <p className="text-[12px] text-stone-500 px-1">
             Enter each output bag weight — the system generates the serial automatically.
           </p>
