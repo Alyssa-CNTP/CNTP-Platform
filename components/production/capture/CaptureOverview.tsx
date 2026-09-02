@@ -57,20 +57,56 @@ export interface BlenderRatioGroup {
   rows: { label: string; kg: number; actualPct: number; targetPct: number }[]
 }
 
-// One half-bag top-up, as a line under the product it went into. Carries the
-// same facts as the "Half-bag top-ups this shift" card so a reader never has to
-// cross-reference two panels to find out what the +kg on the total was.
-function TopUpLine({ t }: { t: { serial: string; kg: number; productType: string | null; variant: string | null; batch: string | null; at: string | null } }) {
+export interface TopUpRow {
+  serial: string; kg: number
+  productType: string | null; variant: string | null; batch: string | null
+  at: string | null
+  // Every top-up this bag has ever had, oldest first, from its scan_events
+  // rows. Those rows are the log and are never rewritten.
+  history: { kg: number; at: string | null }[]
+  startKg: number | null    // the bag's weight when it was first bagged
+  currentKg: number | null  // what it weighs now (bag_tags.weight_kg)
+}
+
+// One half-bag top-up, as a line under the product it went into, with the whole
+// story of the bag under it.
+//
+// The point of the second line is that only TODAY's increment is in the total
+// above. A bag topped up three times over three days has all three on its
+// record, and each one counted on the day it was added -- so seeing "+22.0
+// today" next to "15.0 on 28 Aug" is what stops the earlier increments looking
+// missing. Without it the figure invites exactly the wrong correction.
+function TopUpLine({ t }: { t: TopUpRow }) {
+  const earlier = t.history.filter(h => h.at !== t.at)
   return (
-    <div className="flex items-center gap-2 pl-8 pr-3 py-2 text-[12px]" style={{ background: '#7c3aed08' }}>
-      <Scale size={12} className="text-violet-500 shrink-0" />
-      <span className="font-mono text-[11.5px] text-violet-800 shrink-0">{t.serial}</span>
-      <span className="text-stone-400 truncate flex-1">
-        {[t.productType, t.variant, t.batch].filter(Boolean).join(' · ')}
-      </span>
-      <span className="text-[10px] text-violet-500 shrink-0 hidden sm:inline">top-up</span>
-      {t.at && <span className="font-mono text-[10px] text-stone-400 shrink-0">{fmtTime(t.at)}</span>}
-      <span className="font-mono text-violet-700 shrink-0 w-16 text-right">+{t.kg.toFixed(1)} kg</span>
+    <div className="pl-8 pr-3 py-2" style={{ background: '#7c3aed08' }}>
+      <div className="flex items-center gap-2 text-[12px]">
+        <Scale size={12} className="text-violet-500 shrink-0" />
+        <span className="font-mono text-[11.5px] text-violet-800 shrink-0">{t.serial}</span>
+        <span className="text-stone-400 truncate flex-1">
+          {[t.productType, t.variant, t.batch].filter(Boolean).join(' · ')}
+        </span>
+        <span className="text-[10px] text-violet-500 shrink-0 hidden sm:inline">top-up</span>
+        {t.at && <span className="font-mono text-[10px] text-stone-400 shrink-0">{fmtTime(t.at)}</span>}
+        <span className="font-mono text-violet-700 shrink-0 w-16 text-right">+{t.kg.toFixed(1)} kg</span>
+      </div>
+      <div className="mt-1 text-[10.5px] text-stone-400 leading-relaxed">
+        <span className="text-violet-600">+{t.kg.toFixed(1)} kg counted in today&apos;s output.</span>
+        {t.startKg != null && t.currentKg != null && (
+          <> This bag was bagged at {t.startKg.toFixed(1)} kg and now weighs {t.currentKg.toFixed(1)} kg.</>
+        )}
+        {earlier.length > 0 && (
+          <> Topped up {t.history.length} time{t.history.length === 1 ? '' : 's'} in total
+            {' — '}
+            {earlier.map((h, i) => (
+              <span key={i}>
+                {i > 0 ? ', ' : ''}{h.kg.toFixed(1)} kg on {fmtDay(h.at)}
+              </span>
+            ))}
+            , each counted on the day it was added, not today.
+          </>
+        )}
+      </div>
     </div>
   )
 }
@@ -278,6 +314,11 @@ function formatPO(po: any): string {
   return JSON.stringify(po)
 }
 
+// "28 Aug" — the day an earlier increment was added, in SAST like everything
+// else on this screen.
+const fmtDay = (iso?: string | null) =>
+  iso ? new Intl.DateTimeFormat('en-GB', { timeZone: 'Africa/Johannesburg', day: 'numeric', month: 'short' }).format(new Date(iso)) : '—'
+
 const fmtTime = (iso?: string) =>
   iso ? new Intl.DateTimeFormat('en-GB', { timeZone: 'Africa/Johannesburg', hour: '2-digit', minute: '2-digit' }).format(new Date(iso)) : ''
 
@@ -322,8 +363,7 @@ export function CaptureOverview({
   // Carries what the activity card carries -- product, variant, batch and the
   // time -- because a top-up folded silently into a total is exactly what made
   // the output figure unexplainable. Shown as its own line under its product.
-  interface TopUp { serial: string; kg: number; productType: string | null; variant: string | null; batch: string | null; at: string | null }
-  const [topUpRows, setTopUpRows] = useState<TopUp[]>([])
+  const [topUpRows, setTopUpRows] = useState<TopUpRow[]>([])
   const [dayTopUpKg, setDayTopUpKg] = useState(0)
   useEffect(() => {
     if (!sectionId) { setTopUpRows([]); setDayTopUpKg(0); return }
@@ -344,23 +384,51 @@ export function CaptureOverview({
       if (cancelled) return
       const all = ((data as any[]) ?? []).filter(r => String(r.notes ?? '').startsWith('HALF_BAG_TOPUP'))
 
-      // Product and variant come from the bag that was topped up.
+      // Product, variant and the bag's CURRENT weight come from the bag itself.
       const serials = Array.from(new Set(all.map(r => String(r.serial_number))))
       const tagBySerial = new Map<string, any>()
       if (serials.length) {
         const { data: tags } = await db.from('bag_tags')
-          .select('serial_number, product_type, variant').in('serial_number', serials)
+          .select('serial_number, product_type, variant, weight_kg').in('serial_number', serials)
         for (const t of ((tags as any[]) ?? [])) tagBySerial.set(t.serial_number, t)
+      }
+
+      // Every event these bags have ever had, ANY day and any session -- the
+      // full top-up history plus the bag's starting weight. scan_events rows
+      // are never rewritten, so this is the record; it is shown to explain the
+      // total, never added to it.
+      const historyBySerial = new Map<string, { kg: number; at: string | null }[]>()
+      const startBySerial = new Map<string, number | null>()
+      if (serials.length) {
+        const { data: allEv } = await db.from('scan_events')
+          .select('serial_number, weight_kg, notes, scanned_at')
+          .in('serial_number', serials)
+          .order('scanned_at', { ascending: true })
+        for (const ev of ((allEv as any[]) ?? [])) {
+          const sn = String(ev.serial_number)
+          if (String(ev.notes ?? '').startsWith('HALF_BAG_TOPUP')) {
+            const h = historyBySerial.get(sn) ?? []
+            h.push({ kg: Number(ev.weight_kg) || 0, at: ev.scanned_at ?? null })
+            historyBySerial.set(sn, h)
+          } else if (!startBySerial.has(sn)) {
+            // The earliest non-top-up event is the bag's own bagging.
+            startBySerial.set(sn, ev.weight_kg == null ? null : Number(ev.weight_kg))
+          }
+        }
       }
       if (cancelled) return
 
-      const shape = (r: any): TopUp => {
-        const tag = tagBySerial.get(String(r.serial_number))
+      const shape = (r: any): TopUpRow => {
+        const sn = String(r.serial_number)
+        const tag = tagBySerial.get(sn)
         const m = /^HALF_BAG_TOPUP:\s*(.+)$/.exec(String(r.notes ?? '').trim())
         return {
-          serial: String(r.serial_number), kg: Number(r.weight_kg) || 0,
+          serial: sn, kg: Number(r.weight_kg) || 0,
           productType: tag?.product_type ?? null, variant: tag?.variant ?? null,
           batch: m ? m[1] : null, at: r.scanned_at ?? null,
+          history: historyBySerial.get(sn) ?? [],
+          startKg: startBySerial.get(sn) ?? null,
+          currentKg: tag?.weight_kg == null ? null : Number(tag.weight_kg),
         }
       }
       setTopUpRows(sessionId ? all.filter(r => r.session_id === sessionId).map(shape) : [])
@@ -393,7 +461,7 @@ export function CaptureOverview({
   // under that product's own heading in the bagging list instead of only
   // appearing as an unexplained "+22.0 kg" on the total.
   const topUpsByProduct = useMemo(() => {
-    const m = new Map<string, TopUp[]>()
+    const m = new Map<string, TopUpRow[]>()
     for (const r of freshTopUps) {
       const k = (r.productType || 'Other').trim()
       const cur = m.get(k)
