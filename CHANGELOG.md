@@ -60,6 +60,13 @@ Monday 31-08 ran Export, then Export Blend after the changeover, and the order s
 - **Neither table showed a grade at all.** `prod_debagging.grade` was already correct per row and simply was not rendered; output bags had no grade because `bag_tags.destination` was never selected. Both tables now carry a **Grade** column, and a group holding more than one grade shows the per-grade kg split on its header. A single-grade run gains no noise.
 - Confirmed against the floor's sheet for 31-08: **13 Export, 8 Export Blend**, matching the stored grades exactly. The data was right; only the display was missing.
 
+### Capture Overview — one balance for the whole day, and top-ups shown where they land
+
+- **The mass balance now covers both shifts.** New `dayProductions` prop, used for the balance and nothing else: the debagging and bagging tables stay this record's own capture so they still match the Capture tab bag for bag. The panel header says which scope it is (`full day, both shifts` vs `this shift`) and the note underneath says outright that the tables above are smaller and why — the two disagreeing silently is what caused the earlier confusion.
+- Each shift's productions are tagged with their own shift, so Sieving's bucket elevator is read in the right direction on both sides of the day (morning consumes yesterday's, afternoon leaves tomorrow's).
+- **Half-bag top-ups now appear under the product they went into**, as a line carrying the same facts as the "Half-bag top-ups this shift" card — serial, product, variant, batch, time, kg. The product's own heading shows `+N top-up` beside its bagged weight, so the group explains its own figure instead of the weight only surfacing as an unexplained `+22.0 kg` on Total output.
+- A top-up into a product **nothing was bagged of today** gets its own heading rather than vanishing from the list while still counting toward the total.
+
 ### Batch numbers, and per-batch totals
 
 - **Debagging now opens with a `Per batch` table** — batch number, bag count, kg — above the per-type tables, which still list every bag. "How much of each batch went in" is now read, not counted by eye.
