@@ -51,7 +51,7 @@ export const ROOIBOS_SECTIONS: Section[] = [
       { uid: 's-db',          base: '15IGDB',       name: 'Dust: Brown',                    g: 'dust',   v: V4 },
       { uid: 's-dpow',        base: '15IGDPOWDR',   name: 'Dust: Powder',                   g: 'dust',   v: V4 },
       { uid: 's-is',          base: '15IGIS',       name: 'Indent Sticks',                  g: 'stick',  v: V4 },
-      { uid: 's-st',          base: '15IGST',       name: 'Sticks (RS)',                    g: 'stick',  v: V4 },
+      { uid: 's-st',          base: '15IGST',       name: 'Heavy Sticks',                   g: 'stick',  v: V4 },
       { uid: 's-bl',          base: '15IGBL-C',     name: 'Blocks: Clean',                  g: 'stick',  v: V4 },
       { uid: 's-1c',          base: '15IG1C',       name: '1st Cut',                        g: 'stick',  v: V4 },
       { uid: 's-alt',         base: '15IGDALT',     name: 'ALT Dust',                       g: 'simple', v: [V4[0], V4[1], V4[3]] },
@@ -65,7 +65,7 @@ export const ROOIBOS_SECTIONS: Section[] = [
     id: 'ref1', color: 'bg-blue-700', tk: 's2t', hk: 's2h',
     items: [
       { uid: 'r1-is',          base: '15IGIS',    name: 'Indent Sticks',      g: 'stick',  v: V4 },
-      { uid: 'r1-st',          base: '15IGST',    name: 'Sticks',              g: 'stick',  v: V4 },
+      { uid: 'r1-st',          base: '15IGST',    name: 'Heavy Sticks',        g: 'stick',  v: V4 },
       { uid: 'r1-bl',          base: '15IGBL-C',  name: 'Blocks: Clean',       g: 'stick',  v: V4 },
       { uid: 'r1-1c',          base: '15IG1C',    name: '1st Cut',             g: 'stick',  v: V4 },
       { uid: 'r1-dis',         base: '15IGDIS',   name: 'Dust: Indent',        g: 'dust',   v: V4 },

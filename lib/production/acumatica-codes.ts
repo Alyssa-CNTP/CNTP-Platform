@@ -18,7 +18,15 @@ export interface AcumaticaCode {
 
 /**
  * Maps variant short name to its inventory-ID suffix.
- * CON → -C | ORG → -O | RA CON → -RC | RA ORG → -RO
+ * CON → -C | ORG → -O | RA CON → -RC | RA ORG → -RO | FT CON → -FC | FT ORG → -FO
+ *
+ * The default arm is a fallback that produces a malformed id (e.g. '-FT CON',
+ * with a space). It only ever fired for Fairtrade, which variantToShort() used
+ * to fold away before it got here; now that FT is passed through, both codes
+ * are mapped properly. Note that Fairtrade items exist in the master inventory
+ * for raw material (05RMD*-FC) but NOT for the sieving outputs, so an FT run
+ * will produce output ids that Acumatica does not have — which
+ * features/acumatica-items reports as `not-stocked` instead of emitting.
  */
 function variantSuffix(v: string): string {
   switch (v) {
@@ -26,6 +34,8 @@ function variantSuffix(v: string): string {
     case 'ORG':    return '-O'
     case 'RA CON': return '-RC'
     case 'RA ORG': return '-RO'
+    case 'FT CON': return '-FC'
+    case 'FT ORG': return '-FO'
     default:       return `-${v}`
   }
 }
@@ -60,6 +70,8 @@ function variantLongName(v: string): string {
     case 'ORG':    return 'Organic'
     case 'RA CON': return 'RA Conventional'
     case 'RA ORG': return 'RA Organic'
+    case 'FT CON': return 'Fairtrade Conventional'
+    case 'FT ORG': return 'Fairtrade Organic'
     default:       return v
   }
 }
@@ -126,9 +138,11 @@ export function getAcumaticaCode(
     }
   }
 
-  // Acumatica calls this 'Sticks' (15IGST). The platform used to call it
-  // 'Rolsiev Sticks'; canonicalProductType above folds the old name onto this.
-  if (productType === 'Sticks') {
+  // The floor calls this Heavy Sticks; Acumatica calls the same item 15IGST
+  // "Sticks". Both names are correct for their own layer — canonicalProductType
+  // above folds 'Rolsiev Sticks', 'Sticks' and 'RS' onto the floor name, and the
+  // Acumatica name is what goes out in inventoryId/description.
+  if (productType === 'Heavy Sticks') {
     return {
       inventoryId: `15IGST${vs}`,
       description: `Sticks - ${vln}`,

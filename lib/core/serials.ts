@@ -236,22 +236,15 @@ export const TYPE_CODES: Readonly<Record<WorkCentre, readonly string[]>> = {
  * Floor name → type code, per work centre. First match wins, so order matters:
  * 'Coarse Leaf' must not be caught by a looser /leaf/ rule above it.
  *
- * STICKS is one material that has been called four things — 'Sticks' (what the
- * platform, the printed tag and Acumatica 15IGST all say as of the rename),
- * 'Rolsiev Sticks' and 'Heavy Sticks' (what it said before, and what rows in
- * the database still say), and 'RS' (the code its historic serials carry). All
- * four map to HS, on Refining 2 as well as Sieving. Accept every spelling on
- * input, write the canonical one going forward, rewrite no history. The name
- * itself is folded by lib/core/product-names.ts; this layer only decides the
- * two letters that go in the serial.
- *
- * The code stays HS while the floor name is now 'Sticks', which is a deliberate
- * choice and the one remaining place the two layers differ. A type code is an
- * app-local abbreviation, not the Acumatica id (none of FL/CL/IS/RB/BD/PD are
- * either) — but an abbreviation that no longer abbreviates the name is a small
- * standing cost. Changing it to ST is free ONLY until the first section is
- * switched on in NEXT_PUBLIC_FF_DB_SERIAL_ALLOCATION, because after that the
- * code is printed on physical bags and cannot be revised by editing code.
+ * HEAVY STICKS is one material that has been called four things — 'Heavy
+ * Sticks' (the floor name, and what the picker and the printed tag now say),
+ * 'Rolsiev Sticks' and 'Sticks' (what the platform said before, what rows in
+ * the database still say, and what Acumatica calls item 15IGST), and 'RS' (the
+ * code its historic serials carry). All four map to HS, on Refining 2 as well
+ * as Sieving. Accept every spelling on input, write the canonical one going
+ * forward, rewrite no history. The name itself is folded by
+ * lib/core/product-names.ts; this layer only decides the two letters that go in
+ * the serial, and HS abbreviates the floor name exactly.
  */
 const TYPE_MATCHERS: Readonly<Record<WorkCentre, ReadonlyArray<readonly [RegExp, string]>>> = {
   ST: [

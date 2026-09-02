@@ -144,7 +144,7 @@ function useSystemBags(sectionId: string, variantWord: string): SystemBag[] {
     // so it has to list every value the column actually holds. The DISPLAY name
     // for all of these is canonicalProductType() — see lib/core/product-names.ts.
     const aliases: Record<string, string[]> = {
-      'Sticks': ['Rolsiev Sticks', 'Sticks (RS)', 'Sticks'],
+      'Heavy Sticks': ['Rolsiev Sticks', 'Sticks (RS)', 'Sticks', 'Heavy Sticks'],
       'Indent Sticks': ['Indent Sticks'],
       'Blocks: Clean': ['RB Blocks', 'Blocks: Clean'],
       '1st Cut': ['1st Cut'],

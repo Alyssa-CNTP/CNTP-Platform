@@ -1974,7 +1974,7 @@ function CaptureScreen() {
               ) : (
                 <>
                   <p className="text-[13px] text-text-muted">
-                    This carries into the new batch — leftover raw material is still part of the same run and can be bagged out as Blocks / Sticks / Indent Sticks under the new grade.
+                    This carries into the new batch — leftover raw material is still part of the same run and can be bagged out as Blocks / Heavy Sticks / Indent Sticks under the new grade.
                   </p>
                 </>
               )}

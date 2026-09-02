@@ -170,7 +170,7 @@ function SievingSummary({ d, date, shift }: { d: any; date: string; shift: strin
           <SectionHdr>Other outputs — total kg only (Acumatica)</SectionHdr>
           {totalRB   > 0 && <Row label="RB Blocks"           value={`${totalRB.toFixed(1)} kg`}   green/>}
           {totalDust > 0 && <Row label="Dust"                value={`${totalDust.toFixed(1)} kg`}  green/>}
-          {totalRS   > 0 && <Row label="Sticks"              value={`${totalRS.toFixed(1)} kg`}    green/>}
+          {totalRS   > 0 && <Row label="Heavy Sticks"        value={`${totalRS.toFixed(1)} kg`}    green/>}
           {totalIS   > 0 && <Row label="Indent Sticks"       value={`${totalIS.toFixed(1)} kg`}    green/>}
           {bucketOut > 0 && <Row label="Bucket Elevator out" value={`${bucketOut.toFixed(1)} kg`}  warn sub="carry-over to tomorrow"/>}
         </div>

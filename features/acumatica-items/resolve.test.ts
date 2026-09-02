@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildCatalogue, variantCodeOf, stemOf, type InventoryRow } from './catalogue'
+import { buildCatalogue, variantCodeOf, variantCodeForWord, stemOf, type InventoryRow } from './catalogue'
 import { resolveItem, resolveInputItem, explain, resolvedId } from './resolve'
 
 /**
@@ -14,7 +14,8 @@ const ROWS: InventoryRow[] = [
   { inventory_id: '10LGEC-C',  description: 'Sieved Coarse Leaf: Export - Conventional', product_group: 'Leaf', variant: 'Conventional' },
   { inventory_id: '10LGDC-C',  description: 'Sieved Coarse Leaf Domestic - Conventional', product_group: 'Leaf', variant: 'Conventional' },
   { inventory_id: 'S10LGE-C',  description: 'Sieved Leaf: Export - Conventional',        product_group: 'Leaf', variant: 'Conventional' },
-  // Sticks — the rename target. Acumatica calls it 'Sticks'.
+  // The floor calls this Heavy Sticks; Acumatica calls the item 'Sticks'.
+  // ('Sticks' is also the product_group name, which is a different thing again.)
   { inventory_id: '15IGST-C',  description: 'Sticks - Conventional',    product_group: 'Sticks', variant: 'Conventional' },
   { inventory_id: '15IGST-O',  description: 'Sticks - Organic',         product_group: 'Sticks', variant: 'Organic' },
   { inventory_id: '15IGST-RC', description: 'Sticks - RA Conventional', product_group: 'Sticks', variant: 'RA-Conventional' },
@@ -73,16 +74,20 @@ describe('catalogue', () => {
 })
 
 describe('resolveItem', () => {
-  it('resolves Sticks under every name it has ever had', () => {
-    for (const name of ['Sticks', 'Rolsiev Sticks', 'Heavy Sticks', 'RS']) {
+  it('resolves Heavy Sticks under every name it has ever had', () => {
+    // Floor name 'Heavy Sticks' resolves to the Acumatica item called 'Sticks'.
+    for (const name of ['Heavy Sticks', 'Sticks', 'Rolsiev Sticks', 'RS']) {
       const r = resolveItem(cat, { productType: name, variant: 'CON', grade: 'A' })
       expect(r.kind, name).toBe('resolved')
       expect(resolvedId(r), name).toBe('15IGST-C')
     }
   })
 
-  it('gives Sticks the description Acumatica uses, not one the app made up', () => {
-    const r = resolveItem(cat, { productType: 'Rolsiev Sticks', variant: 'ORG', grade: 'A' })
+  it('gives the Acumatica description, not the floor name and not one the app made up', () => {
+    // The operator sees "Heavy Sticks"; the import must carry Acumatica's own
+    // wording. Both are right, and this is where they meet.
+    const r = resolveItem(cat, { productType: 'Heavy Sticks', variant: 'ORG', grade: 'A' })
+    expect(r.kind === 'resolved' && r.item.inventoryId).toBe('15IGST-O')
     expect(r.kind === 'resolved' && r.item.description).toBe('Sticks - Organic')
   })
 
@@ -140,16 +145,16 @@ describe('resolveItem', () => {
   })
 
   it('rejects a variant or grade it does not know instead of guessing', () => {
-    const badVariant = resolveItem(cat, { productType: 'Sticks', variant: 'PURPLE', grade: 'A' })
+    const badVariant = resolveItem(cat, { productType: 'Heavy Sticks', variant: 'PURPLE', grade: 'A' })
     expect(badVariant.kind).toBe('bad-input')
     const badGrade = resolveItem(cat, { productType: 'Fine Leaf', variant: 'CON', grade: 'Z' })
     expect(badGrade.kind).toBe('bad-input')
     // A grade is only required by the items that are graded.
-    expect(resolveItem(cat, { productType: 'Sticks', variant: 'CON', grade: '' }).kind).toBe('resolved')
+    expect(resolveItem(cat, { productType: 'Heavy Sticks', variant: 'CON', grade: '' }).kind).toBe('resolved')
   })
 
   it('explains every outcome in one actionable line', () => {
-    expect(explain(resolveItem(cat, { productType: 'Sticks', variant: 'CON', grade: 'A' })))
+    expect(explain(resolveItem(cat, { productType: 'Heavy Sticks', variant: 'CON', grade: 'A' })))
       .toBe('15IGST-C — Sticks - Conventional')
     expect(explain(resolveItem(cat, { productType: 'Export Granules', variant: 'RA CON', grade: 'A' })))
       .toContain('It exists in Conventional, Organic.')
@@ -162,16 +167,50 @@ describe('resolveInputItem', () => {
   })
 
   it('keeps Fairtrade on its own certified item', () => {
-    // 05RMDE-FC is real. variantToShort() in capture-config.ts currently folds
-    // FT-CON to CON before this is ever called, which books certified
-    // Fairtrade material against the plain conventional item — a wrong code
-    // that imports cleanly, which is worse than a blank one. The resolver is
-    // ready for the fold to be removed.
+    // variantToShort() used to fold FT-CON onto CON before this was ever
+    // called, booking certified Fairtrade material against the plain
+    // conventional item — a wrong code that imports cleanly, which is worse
+    // than a blank one. 05RMDE-FC is a real, separate item.
     expect(resolvedId(resolveInputItem(cat, 'A', 'FT CON'))).toBe('05RMDE-FC')
     expect(resolvedId(resolveInputItem(cat, 'A', 'CON'))).toBe('05RMDE-C')
   })
 
+  it('accepts Fairtrade in any of the three vocabularies', () => {
+    for (const v of ['FT CON', 'FT-CON', 'FT-Conventional']) {
+      expect(resolvedId(resolveInputItem(cat, 'A', v)), v).toBe('05RMDE-FC')
+    }
+  })
+
   it('reports a grade it does not know', () => {
     expect(resolveInputItem(cat, 'Z', 'CON').kind).toBe('bad-input')
+  })
+})
+
+describe('variantCodeForWord', () => {
+  it('maps all three vocabularies onto one code', () => {
+    // inventory_items.variant | app DbVariant | short UI label
+    expect(['Conventional', 'CON'].map(variantCodeForWord)).toEqual(['C', 'C'])
+    expect(['Organic', 'ORG'].map(variantCodeForWord)).toEqual(['O', 'O'])
+    expect(['RA-Conventional', 'RA CON'].map(variantCodeForWord)).toEqual(['RC', 'RC'])
+    expect(['RA-Organic', 'RA ORG'].map(variantCodeForWord)).toEqual(['RO', 'RO'])
+  })
+
+  it('reconciles the two spellings of Fairtrade', () => {
+    // This is the pair that made a direct string comparison impossible:
+    // inventory_items says 'FT-Organic', the app's DbVariant says 'FT-ORG'.
+    expect(['FT-Organic', 'FT-ORG', 'FT ORG'].map(variantCodeForWord)).toEqual(['FO', 'FO', 'FO'])
+    expect(['FT-Conventional', 'FT-CON', 'FT CON'].map(variantCodeForWord)).toEqual(['FC', 'FC', 'FC'])
+  })
+
+  it('agrees with the code read off an item id', () => {
+    // The whole point: a row and a variant word have to land on the same code.
+    expect(variantCodeForWord('Organic')).toBe(variantCodeOf('15IGBL-C-O'))
+    expect(variantCodeForWord('RA-Organic')).toBe(variantCodeOf('15IGBL-C-RO'))
+  })
+
+  it('returns null for something it does not know, rather than a default', () => {
+    expect(variantCodeForWord('Purple')).toBe(null)
+    expect(variantCodeForWord('')).toBe(null)
+    expect(variantCodeForWord(null)).toBe(null)
   })
 })

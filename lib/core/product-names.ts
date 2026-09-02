@@ -1,8 +1,8 @@
 /**
  * One owner for what a material is CALLED.
  *
- * The floor, the platform and Acumatica had drifted into three names for the
- * same thing. Sticks was the worst case — four names for one material:
+ * The floor, the platform and Acumatica had drifted into several names for the
+ * same thing. Heavy Sticks was the worst case — four names for one material:
  *
  *     Acumatica  15IGST-C   "Sticks"          <- what the BOM and the import use
  *     Sieving    "Rolsiev Sticks"             <- what the operator picked
@@ -13,8 +13,18 @@
  * Acumatica as "Sticks". Nobody could line those up by eye, which is the whole
  * problem: the operator, the tag and the import have to agree.
  *
- * Canonical = whatever Acumatica calls it. Acumatica is the system the data
- * ends up in, and it is the one name we do not control.
+ * ── Canonical here is the FLOOR name, not the Acumatica one ─────────────────
+ *
+ * These two layers are allowed to differ, and for Heavy Sticks they do:
+ *
+ *     floor / tag / this module     "Heavy Sticks"   <- what an operator says
+ *     Acumatica item                15IGST "Sticks"  <- what the import needs
+ *
+ * The operator is the one who has to recognise the material in a picker and on
+ * a printed tag at the machine, so the floor name wins here. The Acumatica name
+ * is not lost — it is resolved separately, from the item id, by
+ * features/acumatica-items. One material, one floor name, one item id, and an
+ * explicit mapping between them instead of four names and no mapping.
  *
  * ── Why an exact-match table and not regexes ────────────────────────────────
  *
@@ -59,7 +69,7 @@ export function stripVariantSuffix(name: string): string {
 }
 
 /**
- * Every name a material has been called => the one Acumatica calls it.
+ * Every name a material has been called => its canonical FLOOR name.
  *
  * Keys are compared case-insensitively with whitespace collapsed. Add a row
  * here when a name changes; never rewrite the history rows that still hold the
@@ -67,14 +77,16 @@ export function stripVariantSuffix(name: string): string {
  * bag's identity and the record has to keep matching the sticker.
  */
 const CANONICAL_BY_ALIAS: Readonly<Record<string, string>> = {
-  // Sticks — Acumatica 15IGST, "Sticks". Renamed in the UI so the operator, the
-  // printed tag and the Acumatica import finally read the same word.
-  'rolsiev sticks': 'Sticks',
-  'rolsiev e sticks': 'Sticks',
-  'heavy sticks': 'Sticks',
-  'heavy stick': 'Sticks',
-  'sticks (rs)': 'Sticks',
-  'rs': 'Sticks',
+  // Heavy Sticks. Acumatica knows this item as 15IGST / "Sticks"; the floor
+  // calls it Heavy Sticks, and so now do the picker and the printed tag.
+  // 'Sticks' on its own is an alias, not the canonical name — it is what
+  // Acumatica and the older Refining input lists call it.
+  'rolsiev sticks': 'Heavy Sticks',
+  'rolsiev e sticks': 'Heavy Sticks',
+  'sticks': 'Heavy Sticks',
+  'sticks (rs)': 'Heavy Sticks',
+  'heavy stick': 'Heavy Sticks',
+  'rs': 'Heavy Sticks',
 
   // NOT aliased, on purpose:
   //   'Indent Sticks'  — Acumatica 15IGIS, a different item with its own code.

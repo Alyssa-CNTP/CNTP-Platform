@@ -2,6 +2,101 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-02 — Alyssa (Heavy Sticks named throughout; variant-matching fixed; Fairtrade unfolded)
+
+**Files changed:** `lib/core/product-names.ts`, `lib/core/product-names.test.ts`, `lib/core/serials.ts`, `features/acumatica-items/{catalogue,resolve,stems,index}.ts`, `features/acumatica-items/resolve.test.ts`, `lib/production/{inventory,capture-config,acumatica-codes,live-types}.ts`, `lib/constants/manufacturing.ts`, `lib/data/sections.ts`, `components/production/capture/{Sieving,Refining}Capture.tsx`, `components/production/capture/OutputPicker.tsx`, `components/production/AcumaticaSummary.tsx`, `app/(app)/production/capture/[section]/page.tsx`
+
+### 1. The floor name is Heavy Sticks
+
+Correcting the previous entry, which made the canonical name **Sticks** (the
+Acumatica wording). The operator-facing name is **Heavy Sticks**; Acumatica keeps
+its own name for the same item, `15IGST` "Sticks". Those two layers are allowed
+to differ and now do so explicitly:
+
+    floor / picker / printed tag     "Heavy Sticks"
+    Acumatica item + description     15IGST-C, "Sticks - Conventional"
+
+`RS`, `Rolsiev Sticks`, `Sticks` and `Heavy Sticks` are all the same material.
+All of them fold to **Heavy Sticks** for display and grouping, and all of them
+resolve to `15IGST-{variant}` for the import.
+
+Renamed in the Sieving output picker and group heading, the Refining 1 and 2
+input lists, the Acumatica summary row, the changeover note on the capture page,
+the monthly stock-count catalogue (both the Sieving and Refining 1 entries, which
+said "Sticks (RS)" and "Sticks"), and on the **printed bag tag**.
+
+The serial type code `HS` now abbreviates the floor name exactly, so the earlier
+open question about renaming it to `ST` falls away — no change, and nothing is
+blocked by the serial rollout.
+
+Two places keep the old spellings on purpose: the `bag_tags` query in
+`RefiningCapture` (it is a `.in()` filter and must list every value the column
+actually holds), and `SECTION_OUTPUT_GROUPS` in `capture-config.ts`, where
+"Sticks" is an Acumatica **product_group** — a bucket containing Indent Sticks,
+Blocks and the cut heavy sticks — not a product name.
+
+### 2. Variant matching now uses the item id, not the variant column
+
+**The bug:** `sectionOutputItems()` filtered the output picker on
+`inventory_items.variant`. Eight synced rows disagree with their own id, three of
+them the clean Blocks family. Measured against the live master inventory:
+
+| Sieving run | Blocks offered BEFORE | AFTER |
+|---|---|---|
+| Conventional | `15IGBL-C-C`, **`-O`, `-RC`, `-RO`** | `15IGBL-C-C` |
+| Organic | **none** | `15IGBL-C-O` |
+| RA Conventional | **none** | `15IGBL-C-RC` |
+| RA Organic | **none** | `15IGBL-C-RO` |
+
+So Organic and RA runs could not bag clean Blocks at all, **and** a Conventional
+run could pick the Organic block item — a segregation breach in the data, not
+merely a missing option.
+
+Fixed in the app (`sectionOutputItems`, `productionOrderItems`,
+`filterInventory`) by matching on the variant CODE carried by the inventory id.
+There were in fact **three** vocabularies for the same six variants:
+
+    inventory_items.variant   'Conventional' … 'FT-Conventional', 'FT-Organic'
+    app DbVariant             'Conventional' … 'FT-CON', 'FT-ORG'
+    short UI labels           'CON', 'ORG', 'RA CON', 'RA ORG', 'FT CON', 'FT ORG'
+
+They agree on the four common variants and diverge on Fairtrade, so a direct
+string comparison could never have matched an FT item even without the drift.
+`variantCodeForWord()` maps all three onto one code.
+
+The eight drifted rows are still wrong in Acumatica and worth correcting there:
+`15IGBL-C-O`, `15IGBL-C-RC`, `15IGBL-C-RO`, `01CP-RMD-O`, `01CP-RMD-RC`,
+`01CP-RMG-O`, `01CP-RMG-RC`, `40SDCP-001-O` — all filed as Conventional.
+
+### 3. Fairtrade no longer folds onto Conventional / Organic
+
+`variantToShort()` mapped `FT-CON`→CON and `FT-ORG`→ORG, so certified Fairtrade
+material was booked against the plain conventional or organic Acumatica item.
+`05RMDE-FC` ("Raw Material Dry: Export Fairtrade Conventional") is a real,
+separate item, and Fairtrade carries the same segregation requirement that
+`ORGANIC_VARIANTS` already exists to protect. A wrong code imports cleanly, which
+makes it worse than a blank one.
+
+FT now passes through, `variantSuffix()` maps it to `-FC` / `-FO` (it previously
+fell to a default arm producing the malformed `-FT CON`, with a space), and the
+`Variant` type was widened from four values to six. Widening surfaced exactly one
+real gap: `VARIANT_LABELS` had no FT entries and would have rendered `undefined`.
+
+**No Fairtrade has ever been captured** — zero rows in `bag_tags`,
+`prod_bagging`, `prod_debagging` and `prod_sessions` — so this changes no
+existing data and is forward-looking only.
+
+**Still needed on the Acumatica side:** FT items exist for raw material but not
+for any sieving output, so an FT run would have no output item to book against.
+`features/acumatica-items` reports that as `not-stocked` rather than emitting an
+id that does not exist.
+
+**Verification:** 191 unit tests (up from 186), boundary lint clean, 36 type
+errors (unchanged from staging), `next build` compiles. Blocks visibility
+measured against the live staging master inventory, before and after.
+
+---
+
 ## 2026-09-02 — Alyssa (Sticks renamed everywhere; Acumatica items resolved, not guessed)
 
 **Files changed:** `lib/core/product-names.ts` (new), `lib/core/product-names.test.ts` (new), `features/acumatica-items/{catalogue,stems,resolve,index}.ts` (new), `features/acumatica-items/resolve.test.ts` (new), `lib/production/acumatica-codes.ts`, `lib/production/live-types.ts`, `lib/production/label-pplb.ts`, `lib/production/label-print.ts`, `lib/constants/manufacturing.ts`, `components/production/capture/{Sieving,Refining}Capture.tsx`, `components/production/capture/OutputPicker.tsx`, `components/production/AcumaticaSummary.tsx`, `app/(app)/production/capture/[section]/page.tsx`, `lib/core/serials.ts`
