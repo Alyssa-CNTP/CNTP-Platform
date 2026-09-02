@@ -105,6 +105,22 @@ export default function CustomerSpecsPage() {
   const [err,setErr]=useState('')
   const [filterFam,setFilterFam]=useState('')
   const [filterCust,setFilterCust]=useState('')
+
+  // Deep-link support (?tab=sieve&family=…&customer=…) so a Pasteuriser run can
+  // send you straight to the spec it is measured against, already filtered,
+  // instead of "go to Customer Specs and find it yourself".
+  //
+  // Applied in an effect rather than as useState initialisers on purpose: this
+  // is a client component, but Next still server-renders it, and the server has
+  // no URL query to read — seeding state from window.location during render
+  // would make the first client render differ from the server's HTML and
+  // trip a hydration mismatch. After mount these are ordinary filters.
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search)
+    if (q.get('tab') === 'sieve') setTab('sieve')
+    const fam = q.get('family'); if (fam) setFilterFam(fam)
+    const cust = q.get('customer'); if (cust) setFilterCust(cust)
+  }, [])
   const [showAdd,setShowAdd]=useState(false)
   const [addForm,setAddForm]=useState<any>(EMPTY())
   const [addSaving,setAddSaving]=useState(false)
