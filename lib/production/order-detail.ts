@@ -70,6 +70,10 @@ export interface OrderBagRow {
   // `bags` and in the separate `rebagRows` list.
   bornViaRebag: boolean
   rebagSourceSerial: string | null
+  // The batch (lot) this bag was bagged under. Fine Leaf and Coarse Leaf are
+  // both bagged against a batch number, and without it a bag on the report is
+  // a serial and a weight with nothing tying it to the material it came from.
+  lot_number: string | null
   // The grade this bag was TAGGED for -- bag_tags.destination, resolved from
   // the A/B/C letter to the words on the label ('Export', 'Export Blend',
   // 'Domestic/Local'). Per bag, not per day: a run that changed over mid-shift
@@ -312,6 +316,7 @@ function mergeOutputBags(
       session_id: t.session_id,
       bornViaRebag,
       rebagSourceSerial: bornViaRebag ? (fe?.related_serial_number ?? null) : null,
+      lot_number: t.lot_number ?? pb?.lot_number ?? null,
       grade: gradeLabel(t.destination),
     })
   }
@@ -323,6 +328,7 @@ function mergeOutputBags(
       variant: pb.variant ?? null, acumatica_id: null,
       kg: Number(pb.kg) || 0, bagging_time: pb.bagging_time ?? null,
       session_id: pb.session_id, bornViaRebag: false, rebagSourceSerial: null,
+      lot_number: pb.lot_number ?? null,
       grade: null,
     })
   }
@@ -353,6 +359,7 @@ function mergeOutputBags(
       variant: pb.variant ?? null, acumatica_id: null,
       kg: Number(pb.kg) || 0, bagging_time: pb.bagging_time ?? null,
       session_id: pb.session_id, bornViaRebag: false, rebagSourceSerial: null,
+      lot_number: pb.lot_number ?? null,
       grade: null,
     })
   }
@@ -413,7 +420,7 @@ export async function loadOrderDay(sessionId: string): Promise<OrderDay | null> 
 
   const [mbRes, tagsRes, bagsRes, debagsRes, sigRes, reopenRes, notesRes, checksRes, tsRes, takeoverRes, invRes] = await Promise.all([
     db.from('prod_mass_balance').select('*').in('session_id', ids),
-    db.from('bag_tags').select('session_id,serial_number,product_type,variant,acumatica_id,weight_kg,printed_at,status,destination').in('session_id', ids),
+    db.from('bag_tags').select('session_id,serial_number,product_type,variant,acumatica_id,weight_kg,printed_at,status,destination,lot_number').in('session_id', ids),
     db.from('prod_bagging').select('*').in('session_id', ids),
     db.from('prod_debagging').select('*').in('session_id', ids).order('bag_no'),
     db.from('session_signatures').select('*').in('session_id', ids),
@@ -449,7 +456,7 @@ export async function loadOrderDay(sessionId: string): Promise<OrderDay | null> 
   }
   if (serialToSession.size) {
     const { data: strandedTags } = await db.from('bag_tags')
-      .select('session_id,serial_number,product_type,variant,acumatica_id,weight_kg,printed_at,status,destination')
+      .select('session_id,serial_number,product_type,variant,acumatica_id,weight_kg,printed_at,status,destination,lot_number')
       .in('serial_number', Array.from(serialToSession.keys()))
     for (const t of ((strandedTags as any[]) ?? [])) {
       if (!t.session_id) t.session_id = serialToSession.get(t.serial_number) ?? null
@@ -511,6 +518,7 @@ export async function loadOrderDay(sessionId: string): Promise<OrderDay | null> 
             acumatica_id: out.code || null, kg: Number(out.weight) || 0,
             bagging_time: out.logged_at || null, session_id: s.id, shift: s.shift ?? '',
             bornViaRebag: false, rebagSourceSerial: null,
+            lot_number: out.batch || prod.lot || null,
             // draft_data carries the operator's destination letter per bag,
             // so a bag that never reached bag_tags still reports its grade.
             grade: gradeLabel(out.destination ?? prod.grade),

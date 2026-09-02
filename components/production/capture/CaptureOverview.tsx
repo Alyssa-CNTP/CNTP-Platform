@@ -16,6 +16,7 @@ import { dustProductType, type GranuleData } from '@/components/production/captu
 import { type BlenderData } from '@/components/production/capture/BlenderCapture'
 import { type PasteuriserData } from '@/components/production/capture/PasteuriserCapture'
 import { getDb } from '@/lib/supabase/db'
+import { GRADE_TO_LOCAL_EXPORT } from '@/lib/production/capture-config'
 import { normalizeLot } from '@/lib/production/self-heal-reconcile'
 
 interface Production {
@@ -345,6 +346,43 @@ export function CaptureOverview({
   // Read as out − in, so the normal case (moisture, dust, spillage) is a
   // NEGATIVE number that says "material lost" at a glance. Flagged outside ±1%
   // of total input — the tolerance a real run is expected to close within.
+  // ── One mass balance per shift, unless a changeover happened ─────────────
+  // Normally a shift runs one grade and one balance is the whole story. A
+  // changeover splits the shift into two products under one record, and a
+  // single pair of totals then hides which is which -- exactly what made the
+  // 31-08 production order unreadable.
+  //
+  // Split only when this record actually holds more than one grade. Input and
+  // output are captured per bag so both are real per grade; the bucket elevator
+  // and machine spillage are not attributable to one grade (the elevator
+  // carries material across the changeover), so they sit on their own line and
+  // the split still adds up to the totals.
+  const gradeOf = (p: Production) => GRADE_TO_LOCAL_EXPORT[p.grade] ?? (p.grade || '').trim()
+  const gradeTotals = useMemo(() => {
+    const m = new Map<string, { grade: string; inKg: number; outKg: number; bags: number }>()
+    const bump = (g: string, patch: Partial<{ inKg: number; outKg: number; bags: number }>) => {
+      const cur = m.get(g) ?? { grade: g, inKg: 0, outKg: 0, bags: 0 }
+      cur.inKg  += patch.inKg  ?? 0
+      cur.outKg += patch.outKg ?? 0
+      cur.bags  += patch.bags  ?? 0
+      m.set(g, cur)
+    }
+    productions.forEach(p => {
+      const g = gradeOf(p)
+      if (!g) return
+      const d = p.data as any
+      // Sieving only: the other sections have one grade per record, so this
+      // whole block collapses to a single row for them anyway.
+      ;(d.debag ?? []).forEach((r: any) => { if (num(r.nett) > 0) bump(g, { inKg: num(r.nett) }) })
+      ;(d.outputs ?? []).forEach((b: any) => {
+        if (num(b.weight) === 0) return
+        bump(g, { outKg: num(b.weight), bags: 1 })
+      })
+    })
+    return Array.from(m.values()).sort((a, b) => a.grade.localeCompare(b.grade))
+  }, [productions])
+  const showGradeSplit = gradeTotals.length > 1
+
   const mbInputKg  = debagOnlyKg + bucketInKg + machineKg
   const mbOutputKg = baggedOnlyKg + topUpKg
   const balanceKg  = mbOutputKg - mbInputKg
@@ -723,6 +761,41 @@ export function CaptureOverview({
                     </div>
                   ))}
                 </div>
+                {/* Which of those kilograms are which grade. Only on a
+                    changeover record -- one grade, one balance, no extra table. */}
+                {showGradeSplit && (
+                  <div className="border-t border-stone-100 divide-y divide-stone-100">
+                    <div className="px-3 py-1.5 bg-stone-50 text-[10px] font-semibold text-stone-500 uppercase tracking-wide">
+                      By grade — this shift changed over
+                    </div>
+                    {gradeTotals.map(g => (
+                      <div key={g.grade} className="flex items-center justify-between gap-3 px-3 py-2 text-[12px]">
+                        <span className="font-medium text-stone-700">{g.grade}</span>
+                        <span className="flex items-center gap-4 font-mono text-stone-600 tabular-nums">
+                          <span>in {g.inKg.toFixed(1)}</span>
+                          <span>out {g.outKg.toFixed(1)}</span>
+                          <span className="text-stone-400">{g.bags} bag{g.bags === 1 ? '' : 's'}</span>
+                        </span>
+                      </div>
+                    ))}
+                    {(bucketInKg > 0 || machineKg > 0 || bucketOutKg > 0 || topUpKg > 0) && (
+                      <div className="flex items-start justify-between gap-3 px-3 py-2 text-[11.5px] text-stone-500">
+                        <span>Not attributable to one grade
+                          <span className="block text-[10.5px] text-stone-400">bucket elevator across the changeover, machine spillage, half-bag top-ups</span>
+                        </span>
+                        <span className="font-mono tabular-nums shrink-0">
+                          in {(bucketInKg + machineKg).toFixed(1)} · out {topUpKg.toFixed(1)}
+                        </span>
+                      </div>
+                    )}
+                    <p className="px-3 py-2 bg-stone-50/60 text-[11px] text-stone-500 leading-relaxed">
+                      No balance per grade: the tower is one stream, so the elevator carries material
+                      across the changeover and what went in as one grade can come out as the other.
+                      The figures above are captured per bag and are real; a balance per grade would
+                      not be.
+                    </p>
+                  </div>
+                )}
                 <p className="px-3 py-2.5 border-t border-stone-100 bg-stone-50/60 text-[11.5px] text-stone-500 leading-relaxed">
                   Input is everything debagged plus machine spillage
                   {bucketInKg > 0 && <>, plus the {bucketInKg.toFixed(1)} kg of bucket elevator carried in from yesterday (always this run&apos;s own variant — the carry-over ledger keeps conventional and organic apart)</>}.

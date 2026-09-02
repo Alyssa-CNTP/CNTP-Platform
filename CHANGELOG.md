@@ -60,6 +60,15 @@ Monday 31-08 ran Export, then Export Blend after the changeover, and the order s
 - **Neither table showed a grade at all.** `prod_debagging.grade` was already correct per row and simply was not rendered; output bags had no grade because `bag_tags.destination` was never selected. Both tables now carry a **Grade** column, and a group holding more than one grade shows the per-grade kg split on its header. A single-grade run gains no noise.
 - Confirmed against the floor's sheet for 31-08: **13 Export, 8 Export Blend**, matching the stored grades exactly. The data was right; only the display was missing.
 
+### Batch numbers, and per-batch totals
+
+- **Debagging now opens with a `Per batch` table** — batch number, bag count, kg — above the per-type tables, which still list every bag. "How much of each batch went in" is now read, not counted by eye.
+- **Every output bag shows its batch number.** `OrderBagRow` never carried `lot_number` and `bag_tags.lot_number` was never selected, so a Fine Leaf or Coarse Leaf bag on the report was a serial and a weight with nothing tying it to its material. Both fixed, and a product group holding more than one batch shows the per-batch kg and bag count on a strip above its bags.
+
+### Capture Overview — one balance per shift, split only on a changeover
+
+One grade, one mass balance, no extra table. When the record holds **more than one grade**, a `By grade` block appears under the balance with input kg, output kg and bag count per grade. Same rule as the production order: no balance per grade, because the elevator carries material across the changeover and what went in as one grade can come out as the other. Unattributable weight (elevator, spillage, top-ups) gets its own line so the split adds up.
+
 ### The production order summary splits by grade
 
 The printed order for 31-08 read `Conventional · Grade A`, one raw grade letter, over `TOTAL INPUT 14 385.0 kg` / `TOTAL OUTPUT 14 103.0 kg`. Correct to the kilogram and misleading: the day ran Export and Export Blend, and nothing on the report distinguished them.

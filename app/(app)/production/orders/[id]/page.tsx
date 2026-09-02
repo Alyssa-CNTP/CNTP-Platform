@@ -384,6 +384,10 @@ export default function ProductionOrderDetailPage() {
         <PanelBody>
           {inputRows.length === 0 ? <Empty>No inputs recorded.</Empty> : (
             <div className="space-y-4">
+              {/* Per batch first, because that is the question actually asked of
+                  this panel: how much of each batch went in. The per-type
+                  tables below still list every bag; this is the total. */}
+              <BatchTotals rows={inputRows} />
               {groupBy(inputRows, inputType).map(g => (
                 <InputTypeGroup key={g.type} type={g.type} rows={g.rows} multiShift={shifts.length > 1} />
               ))}
@@ -604,6 +608,55 @@ function InputTypeGroup({ type, rows, multiShift }: { type: string; rows: OrderD
   )
 }
 
+// Totals per batch number, biggest first. Blank lots collapse into one
+// "no batch" line rather than being dropped, so the figures still add up.
+function batchTotals(rows: { lot: string | null; kg: number }[]): { lot: string; kg: number; n: number }[] {
+  const m = new Map<string, { lot: string; kg: number; n: number }>()
+  for (const r of rows) {
+    const lot = (r.lot || '').trim() || '(no batch)'
+    const cur = m.get(lot)
+    if (cur) { cur.kg += r.kg; cur.n++ }
+    else m.set(lot, { lot, kg: r.kg, n: 1 })
+  }
+  return Array.from(m.values()).sort((a, b) => b.kg - a.kg)
+}
+
+// Debagging, totalled per batch number. The per-type tables below it list every
+// bag; this answers "how much of each batch went in" without counting by eye.
+function BatchTotals({ rows }: { rows: OrderDebagRow[] }) {
+  const batches = batchTotals(rows.map(r => ({ lot: r.lot_number, kg: Number(r.kg_nett) || 0 })))
+  if (batches.length === 0) return null
+  const total = batches.reduce((s, b) => s + b.kg, 0)
+  return (
+    <div className="rounded-xl border border-surface-rule overflow-hidden">
+      <div className="flex items-center justify-between gap-2 px-3 py-2 bg-surface-dim">
+        <span className="text-[12.5px] font-semibold text-text">Per batch</span>
+        <span className="font-mono text-[11px] text-text-muted whitespace-nowrap">
+          {batches.length} batch{batches.length === 1 ? '' : 'es'} · {total.toFixed(1)} kg
+        </span>
+      </div>
+      <table className="w-full text-left border-collapse">
+        <thead>
+          <tr>
+            {['Batch', 'Bags', 'kg'].map((h, i) => (
+              <th key={h} className={`px-3 py-1.5 font-mono text-[9px] font-semibold text-text-faint uppercase tracking-[0.06em] whitespace-nowrap ${i > 0 ? 'text-right' : ''}`}>{h}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-surface-rule/60">
+          {batches.map(b => (
+            <tr key={b.lot}>
+              <td className="px-3 py-1.5 text-[12.5px] font-medium text-text whitespace-nowrap">{b.lot}</td>
+              <td className="px-3 py-1.5 font-mono text-[12px] text-text-muted text-right tabular-nums">{b.n}</td>
+              <td className="px-3 py-1.5 font-mono text-[12px] text-text text-right tabular-nums">{b.kg.toFixed(1)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
 // "Export 4550 · Export Blend 2800" -- null when there is only one grade (or
 // none recorded), so a single-grade run gains no noise.
 function gradeSplit(rows: { grade: string | null; kg: number }[]): string | null {
@@ -625,6 +678,9 @@ function OutputTypeGroup({ type, rows, multiShift }: { type: string; rows: Order
   const kg = rows.reduce((s, r) => s + (r.kg || 0), 0)
   // Per-grade split, shown only on a mixed group -- see gradeSplit.
   const byGrade = gradeSplit(rows.map(r => ({ grade: r.grade, kg: r.kg || 0 })))
+  // Per batch, for this product. Fine Leaf and Coarse Leaf are each bagged
+  // against a batch number and the per-batch total is what gets reconciled.
+  const batches = batchTotals(rows.map(r => ({ lot: r.lot_number, kg: r.kg || 0 })))
   return (
     <div className="rounded-xl border border-surface-rule overflow-hidden">
       <div className="flex items-center justify-between gap-2 px-3 py-2 bg-surface-dim">
@@ -634,11 +690,25 @@ function OutputTypeGroup({ type, rows, multiShift }: { type: string; rows: Order
           {rows.length} bag{rows.length === 1 ? '' : 's'} · {kg.toFixed(1)} kg
         </span>
       </div>
+      {batches.length > 1 && (
+        <div className="px-3 py-2 border-b border-surface-rule/60 bg-surface-dim/40 flex flex-wrap gap-x-4 gap-y-1">
+          {batches.map(b => (
+            <span key={b.lot} className="text-[11.5px] text-text-muted whitespace-nowrap">
+              {b.lot} <span className="font-mono text-text tabular-nums">{b.kg.toFixed(1)} kg</span>
+              <span className="text-text-faint"> · {b.n} bag{b.n === 1 ? '' : 's'}</span>
+            </span>
+          ))}
+        </div>
+      )}
       <ul className="divide-y divide-surface-rule/60">
         {rows.map((b, i) => (
           <li key={b.id} className="flex items-center gap-2 px-3 py-1.5 text-[12px]">
             <span className="font-mono text-text-faint w-6 shrink-0 text-right">{i + 1}</span>
             <span className="font-mono text-text flex-1 min-w-0 truncate">{b.bag_serial_no || '—'}</span>
+            {/* The batch this bag was bagged under. Fine Leaf and Coarse Leaf
+                are both bagged against a batch number, and a serial alone does
+                not say which material it came from. */}
+            <span className="text-[11px] text-text-muted shrink-0 whitespace-nowrap">{b.lot_number || '—'}</span>
             {/* The grade this bag was TAGGED for. On a changeover run this is
                 the only thing that says which bag is Export and which is
                 Export Blend -- the order header cannot, it covers both. */}
