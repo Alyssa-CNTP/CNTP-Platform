@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useRef, Suspense } from 'react'
+import { useState, useEffect, useRef, useMemo, Suspense } from 'react'
 import Link from 'next/link'
 import { useSearchParams, useRouter, useParams } from 'next/navigation'
 import { format, parseISO, differenceInCalendarDays } from 'date-fns'
@@ -45,6 +45,7 @@ import { HourlyVsdPrompt } from '@/components/production/capture/HourlyVsdPrompt
 import { CaptureOverview, type BlenderRatioGroup } from '@/components/production/capture/CaptureOverview'
 import { getBlendComponents, groupComponentsByItem, type BlendIngredientGroup } from '@/lib/production/bom'
 import { normalizeBatch } from '@/lib/production/batch-key'
+import { debagRowKey } from '@/lib/production/self-heal-reconcile'
 import { ensureCheckRecord, appendCheckEvent, loadCheckRecord } from '@/lib/production/checks-db'
 import { machineChecksFor } from '@/lib/production/checks-config'
 import { cleanersOnDuty } from '@/lib/production/cleaner-roster'
@@ -313,6 +314,27 @@ function CaptureScreen() {
   const active = productions[activeIdx]
   const updateActiveData = (d: SievingData | RefiningData | GranuleData | BlenderData | PasteuriserData) =>
     setProductions(ps => ps.map((p, i) => i === activeIdx ? { ...p, data: d } : p))
+
+  // ── What the OTHER batches of this session are already holding ────────────
+  // A capture screen is mounted for ONE batch (key={active.id}) but its
+  // self-heal reads the ledger for the whole SESSION, and persist() writes the
+  // mounted batch's array back to those same session-scoped rows. So a batch
+  // that can't see its siblings' rows treats every one of them as "missing"
+  // and adopts it — which is precisely how the 2026-08-31 changeover doubled
+  // the debagging rows on every page load (8 → 16 → 32 → … → 258 rows for 41
+  // physical bags). Handing each batch its siblings' row identities is what
+  // makes the restore idempotent. See lib/production/self-heal-reconcile.ts.
+  const siblingBatchKeys = useMemo(() => {
+    const debagKeys: string[] = []
+    const outputSerials: string[] = []
+    productions.forEach((p, i) => {
+      if (i === activeIdx) return
+      const d = p.data as SievingData | undefined
+      ;(d?.debag ?? []).forEach(r => debagKeys.push(debagRowKey(r.bag_no, r.lot, n(r.nett))))
+      ;(d?.outputs ?? []).forEach(b => { if (b.serial) outputSerials.push(b.serial) })
+    })
+    return { debagKeys, outputSerials }
+  }, [productions, activeIdx])
 
   // Sieving: once any bulk bag has been locked ("Done — lock this bag") under
   // this batch's variant/grade, that choice is what's on record for it — the
@@ -2353,6 +2375,8 @@ function CaptureScreen() {
                         date={dateParam}
                         sectionId={sectionId}
                         sessionId={sessionId}
+                        otherBatchDebagKeys={siblingBatchKeys.debagKeys}
+                        otherBatchOutputSerials={siblingBatchKeys.outputSerials}
                       />
                   }
                   {!locked && !isPasteuriser(sectionId) && (
@@ -2427,6 +2451,7 @@ function CaptureScreen() {
                   productions.map(p => ({ ...p, shift: shiftBal }))
                 }
                 sectionId={sectionId}
+                sessionId={sessionId}
                 sectionName={meta.name}
                 sectionColor={meta.colorHex}
                 date={dateParam}
@@ -2434,8 +2459,6 @@ function CaptureScreen() {
                 showSerials={isIT}
                 productionOrders={assignment?.production_orders}
                 locked={locked}
-                balanceRows={balanceRows}
-                balanceNote={balanceNote}
                 blenderRatios={blenderRatios}
               />
               <HalfBagTopUpActivity sectionId={sectionId} sessionId={sessionId} />
