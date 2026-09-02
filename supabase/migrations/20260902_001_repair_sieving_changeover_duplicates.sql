@@ -655,3 +655,127 @@ left join (
   group by 1, 2
 ) f on f.day = d.day and f.product = d.product
 order by d.day, d.product;
+
+
+-- ===========================================================================
+-- Step 8. Clearing the awaiting-QC notifications
+-- ===========================================================================
+-- The floor's account: QC DID sample these bags. The duplicates aside, the
+-- queue is showing work that is already done.
+--
+-- So the fix is to RESTORE THE LINK between each bag and the final run that
+-- was captured for it. It is not to delete the pending bags: those rows are
+-- the bags themselves, and the sd_runs are the QC record for them. Deleting
+-- either to clear a screen destroys the traceability that the sampling was
+-- done at all.
+--
+-- Two separate causes, two separate fixes:
+--   * the serial-less duplicates       -> Step 3b deletes them. Not real bags.
+--   * a real bag whose link broke      -> Step 8 below.
+--
+-- Why a link breaks. qms.v_pending_bag_qc clears a bag when a final sd_run
+-- matches on bagging_id OR on serial_number. bagging_id is prod_bagging.id,
+-- and persist() delete-then-inserts those rows on EVERY save -- so the id a
+-- run was signed off against stops existing the next time the session is
+-- touched. That leaves serial_number as the only surviving link, and it works
+-- only if the run carries the same serial the bag now carries.
+
+
+-- 8a. READ ONLY. Per bag: is there a final run for it, and why is it not
+--     matching? Run this before anything in 8b.
+--
+-- Reading the result:
+--   runs_matching_this_serial > 0   -> should already be clearing; if the bag
+--       is still pending, look at the bag's own serial, not the run's.
+--   final_runs_same_lot_day > 0 and runs_matching_this_serial = 0
+--       -> sampled, but the run does not carry this bag's serial. run_serials
+--          shows what it does carry -- '(no serial)' means nothing can ever
+--          match it by serial and the stale bagging_id was its only link.
+--   final_runs_same_lot_day = 0     -> no final run for that lot that day.
+--       Genuinely not sampled, or captured under a different lot.
+select v.bagged_at::date  as bagged_on,
+       v.product,
+       v.bag_serial_no,
+       v.lot_number,
+       count(fr.id)       as final_runs_same_lot_day,
+       count(*) filter (
+         where upper(btrim(coalesce(fr.serial_number, ''))) = upper(btrim(v.bag_serial_no))
+       )                  as runs_matching_this_serial,
+       array_agg(distinct coalesce(nullif(btrim(fr.serial_number), ''), '(no serial)'))
+         filter (where fr.id is not null) as run_serials
+from qms.v_pending_bag_qc v
+left join qms.sd_runs fr
+       on fr.run_type = 'final'
+      and fr.product  = v.product
+      and fr.date     = v.bagged_at::date
+      and qms.norm_lot(fr.lot_number) = v.lot_key
+where coalesce(btrim(v.bag_serial_no), '') <> ''
+group by 1, 2, 3, 4
+order by 1, 2, 3;
+
+
+-- 8b. WRITES. Relink ONLY where the pairing is forced, never guessed.
+-- ---------------------------------------------------------------------------
+-- A final run is relinked to a bag only when, for one (lot, product, day),
+-- there is EXACTLY ONE pending bag and EXACTLY ONE final run that currently
+-- clears nothing. Then there is only one bag that run can belong to and the
+-- pairing is not a choice.
+--
+-- Anything with two or more of either is left alone and listed by 8c. Pairing
+-- those by position would attach one bag's needle count and leaf shade to a
+-- different bag -- a traceability error, not a tidy-up.
+--
+-- The run's serial_number is set as well as its bagging_id, so the link
+-- survives the next persist() rewrite instead of breaking again.
+-- Every row is backed up first.
+with pending as (
+  select v.bagging_id, v.bag_serial_no, v.lot_key, v.product, v.bagged_at::date as day
+  from qms.v_pending_bag_qc v
+  where coalesce(btrim(v.bag_serial_no), '') <> ''
+),
+-- Final runs that currently clear no bag at all.
+stuck as (
+  select fr.id, fr.product, fr.date as day, qms.norm_lot(fr.lot_number) as lot_key
+  from qms.sd_runs fr
+  where fr.run_type = 'final'
+    and not exists (
+      select 1 from qms.v_bag_events be
+      where fr.bagging_id = be.bagging_id
+         or (be.bag_serial_no is not null
+             and upper(btrim(fr.serial_number)) = upper(btrim(be.bag_serial_no)))
+    )
+),
+forced as (
+  select p.lot_key, p.product, p.day,
+         min(p.bagging_id)     as bagging_id,
+         min(p.bag_serial_no)  as bag_serial_no,
+         min(st.id)            as run_id
+  from pending p
+  join stuck st
+    on st.lot_key = p.lot_key and st.product = p.product and st.day = p.day
+  group by p.lot_key, p.product, p.day
+  having count(distinct p.bagging_id) = 1
+     and count(distinct st.id)        = 1
+),
+saved as (
+  insert into production.repair_20260902_backup (source, row_id, payload)
+  select 'qms.sd_runs', fr.id::text, to_jsonb(fr)
+  from qms.sd_runs fr join forced f on f.run_id = fr.id
+  returning 1
+)
+update qms.sd_runs fr
+set bagging_id    = f.bagging_id,
+    serial_number = f.bag_serial_no
+from forced f
+where fr.id = f.run_id;
+
+
+-- 8c. READ ONLY. What 8b deliberately did not touch.
+-- Re-run 8a after 8b; whatever is still listed needs a person to decide which
+-- run belongs to which bag, or to sample the bag.
+select v.bagged_at::date as bagged_on, v.product, v.lot_number,
+       count(*) as bags_still_pending
+from qms.v_pending_bag_qc v
+where coalesce(btrim(v.bag_serial_no), '') <> ''
+group by 1, 2, 3
+order by 1, 2;
