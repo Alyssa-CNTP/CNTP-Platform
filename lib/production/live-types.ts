@@ -81,7 +81,7 @@ export const SECTION_CONFIG: Record<string, {
     colorHex: '#0d9488', colorClass: 'bg-teal-600',
     inputMode: 'register',
     inputTypes: ['Farm Bag'],
-    outputTypes: ['Fine Leaf','Coarse Leaf','RB Blocks','Rolsiev Sticks','Indent Sticks','Brown Dust','Powder Dust','Bucket Elevator Spillage'],
+    outputTypes: ['Fine Leaf','Coarse Leaf','RB Blocks','Sticks','Indent Sticks','Brown Dust','Powder Dust','Bucket Elevator Spillage'],
   },
   refining1: {
     name: 'Refining 1', code: 'R1',

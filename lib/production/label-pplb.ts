@@ -1,4 +1,5 @@
 import type { OutputBag } from './live-types'
+import { canonicalProductType } from '@/lib/core/product-names'
 
 const GRADE_SHORT: Record<string, string> = {
   A: 'Export',
@@ -78,7 +79,10 @@ export function buildLabelPplb(bag: OutputBag): string {
   const weightValue  = `${bag.weight_kg} KG`
   // Shorter cap than before — the header font is now much larger (see below),
   // so it can't fit as many characters across the available width.
-  const productName  = clean(bag.product_type).slice(0, 18).toUpperCase()
+  // Canonical, not raw: the sticker has to read the same word the operator
+  // picked and the same word Acumatica imports. A bag stored under an older
+  // name would otherwise re-print under that older name forever.
+  const productName  = clean(canonicalProductType(bag.product_type)).slice(0, 18).toUpperCase()
   const sectionName  = clean(bag.section_name).slice(0, 30).toUpperCase()
   const serial       = clean(bag.serial_number).toUpperCase()
   const variantShort = clean(VARIANT_SHORT[bag.variant] ?? bag.variant).toUpperCase()

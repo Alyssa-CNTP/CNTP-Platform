@@ -2,6 +2,89 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-02 — Alyssa (Sticks renamed everywhere; Acumatica items resolved, not guessed)
+
+**Files changed:** `lib/core/product-names.ts` (new), `lib/core/product-names.test.ts` (new), `features/acumatica-items/{catalogue,stems,resolve,index}.ts` (new), `features/acumatica-items/resolve.test.ts` (new), `lib/production/acumatica-codes.ts`, `lib/production/live-types.ts`, `lib/production/label-pplb.ts`, `lib/production/label-print.ts`, `lib/constants/manufacturing.ts`, `components/production/capture/{Sieving,Refining}Capture.tsx`, `components/production/capture/OutputPicker.tsx`, `components/production/AcumaticaSummary.tsx`, `app/(app)/production/capture/[section]/page.tsx`, `lib/core/serials.ts`
+
+### 1. Sticks is now called Sticks
+
+One material had four names: Acumatica `15IGST` "Sticks", the Sieving picker
+"Rolsiev Sticks", Refining "Sticks" (aliased back), and the serial code RS/HS. A
+bag could be tagged ROLSIEV STICKS, carry an HS serial and import as Sticks, and
+nobody could line those up by eye.
+
+The floor name is now **Sticks** — the picker, the group heading, the Acumatica
+summary row and, importantly, the **printed tag**. Both label renderers
+(PPLB/thermal and browser) print the canonical name, so re-printing an old bag
+also gives the new word rather than perpetuating the old one.
+
+**`lib/core/product-names.ts`** is the one owner of what a material is called.
+`canonicalProductType()` folds every historic spelling; a name it does not
+recognise passes through **unchanged**, so a product added next year is merely
+unaliased rather than silently mislabelled. It matches whole names, never
+substrings — "Indent Sticks" and "Cut Heavy Stick Fine" both contain "stick" and
+are both their own Acumatica items.
+
+No history was rewritten. The 8 `bag_tags` and 6 `prod_bagging` rows that still
+say "Rolsiev Sticks" keep saying it — a serial already printed on a bag in the
+warehouse is that bag's identity — and now group and display as Sticks.
+
+**One layer deliberately not renamed:** the serial type code is still `HS`, not
+`ST`. A type code is an app-local abbreviation, not the Acumatica id (nor are
+FL/CL/IS/RB). Changing it is free **only until the first section is switched on
+in `NEXT_PUBLIC_FF_DB_SERIAL_ALLOCATION`** — after that it is printed on bags.
+
+### 2. Acumatica items: resolved against the master inventory, not constructed
+
+`getAcumaticaCode()` does not look anything up. It builds an id from a template
+keyed on an exact display string. For a system whose master inventory and BOMs
+sync from Acumatica continuously, that is backwards — the app guesses at an
+answer it could ask for. Audited against the real 630 rows on staging:
+
+- **It returns ids that do not exist.** `Export Granules` in RA Conventional
+  yields `20BGGE-001-RC`; there is no such item (only `20BGGE-002-RC`). Six
+  combinations, and the bag ships a code Acumatica rejects with nothing on
+  screen to say so.
+- **`SG Granules 002` returns `20BGGSG-001`** — the same id as `SG Granules`.
+  Two different recipes, one code. `20BGGSG-002` does not exist at all.
+- **65 descriptions no longer match Acumatica's** (double spaces, a dropped
+  colon, and the granule recipes that Acumatica now carries in the text).
+- **It cannot tell "no code" from "wrong name"** — both return `null`.
+- **532 of the 630 items are unreachable** through it.
+
+**`features/acumatica-items`** resolves instead. It never emits an id that is
+not in the catalogue; when one is missing it says which was looked for and which
+variants **do** exist. Every outcome is a variant of one discriminated union
+(`resolved` / `not-stocked` / `no-item` / `unknown-product` / `bad-input`), so a
+caller that forgets a case fails to compile rather than blanking a field at a
+printer. Against the full catalogue: **234 combinations resolve cleanly, 22 are
+genuine data gaps, 0 are unmapped.**
+
+It also reads the variant from the **item id, not the `variant` column**. Eight
+synced rows disagree with their own id — `15IGBL-C-O` ("Blocks: Clean - Organic")
+is filed as Conventional, as are its RA siblings. `sectionOutputItems()` filters
+on that column, so **Blocks is missing from the Organic and RA output pickers
+today**. The id is what Acumatica matches on, so the id wins.
+
+**Two findings for the data side, not fixed here:**
+
+- `variantToShort()` folds `FT-CON`→CON and `FT-ORG`→ORG, so Fairtrade raw
+  material books against the plain conventional item. `05RMDE-FC` is real and
+  Fairtrade is a certification with segregation requirements — this is a *wrong*
+  code that imports cleanly, which is worse than a blank one. The resolver
+  handles FT correctly and is ready for the fold to be removed.
+- `ACUMATICA_IDS` in `lib/constants/manufacturing.ts` is a **second, dead** copy
+  of the same templates with zero importers. Marked for deletion.
+
+**Not yet wired.** `acumatica-codes.ts` remains the live path; the resolver ships
+alongside so the two can be compared on real data before anything switches over.
+The only behaviour change in this commit is the rename.
+
+**Verification:** 186 unit tests (up from 167), boundary lint clean, 36 type
+errors (unchanged from staging), `next build` compiles.
+
+---
+
 ## 2026-09-02 — Alyssa (Serial scheme goes behind a per-section rollout flag)
 
 **Files changed:** `lib/config/flags.ts`, `lib/config/flags.test.ts` (new), `lib/production/serial-legacy.ts` (new), `components/production/capture/{Sieving,Granule,Refining,Blender}Capture.tsx`
