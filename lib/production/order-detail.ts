@@ -74,6 +74,16 @@ export interface OrderBagRow {
   // both bagged against a batch number, and without it a bag on the report is
   // a serial and a weight with nothing tying it to the material it came from.
   lot_number: string | null
+  // How `grade` was arrived at:
+  //   'tag'       the operator's own destination choice on the bag
+  //   'lot'       taken from the lot's grade at debagging, because the tag
+  //               disagreed with it -- see resolveGradeFromLot below
+  //   'ambiguous' the lot was debagged under more than one grade that day, so
+  //               nothing can be inferred and the tag stands
+  gradeSource: 'tag' | 'lot' | 'ambiguous'
+  // What the bag was actually tagged as, kept whenever `grade` overrides it, so
+  // the override is visible rather than silent.
+  gradeTagged: string | null
   // The grade this bag was TAGGED for -- bag_tags.destination, resolved from
   // the A/B/C letter to the words on the label ('Export', 'Export Blend',
   // 'Domestic/Local'). Per bag, not per day: a run that changed over mid-shift
@@ -326,6 +336,7 @@ function mergeOutputBags(
       rebagSourceSerial: bornViaRebag ? (fe?.related_serial_number ?? null) : null,
       lot_number: t.lot_number ?? pb?.lot_number ?? null,
       grade: gradeLabel(t.destination),
+      gradeSource: 'tag', gradeTagged: gradeLabel(t.destination),
     })
   }
   for (const pb of pbBySerial.values()) {
@@ -337,7 +348,7 @@ function mergeOutputBags(
       kg: Number(pb.kg) || 0, bagging_time: pb.bagging_time ?? null,
       session_id: pb.session_id, bornViaRebag: false, rebagSourceSerial: null,
       lot_number: pb.lot_number ?? null,
-      grade: null,
+      grade: null, gradeSource: 'tag', gradeTagged: null,
     })
   }
   // A serial-less prod_bagging row that mirrors a bag already on the spine is a
@@ -368,7 +379,7 @@ function mergeOutputBags(
       kg: Number(pb.kg) || 0, bagging_time: pb.bagging_time ?? null,
       session_id: pb.session_id, bornViaRebag: false, rebagSourceSerial: null,
       lot_number: pb.lot_number ?? null,
-      grade: null,
+      grade: null, gradeSource: 'tag', gradeTagged: null,
     })
   }
 
@@ -578,6 +589,7 @@ export async function loadOrderDay(sessionId: string): Promise<OrderDay | null> 
             // draft_data carries the operator's destination letter per bag,
             // so a bag that never reached bag_tags still reports its grade.
             grade: gradeLabel(out.destination ?? prod.grade),
+            gradeSource: 'tag', gradeTagged: gradeLabel(out.destination ?? prod.grade),
           })
           bagSerials.add(out.serial)
         }
@@ -763,6 +775,48 @@ export async function loadOrderDay(sessionId: string): Promise<OrderDay | null> 
         + (freshKgBySession.get(s.id) ?? 0),
     }
   })
+
+  // ── An output bag's grade follows its LOT ────────────────────────────────
+  // A lot's grade is settled when it is debagged: the operator picks Export or
+  // Export Blend per bulk bag, and everything sieved from that lot is that
+  // grade. An output bag's own grade comes from bag_tags.destination, which
+  // defaults to the batch's grade at the time the bag was added -- so after the
+  // 2026-08-31 changeover misfired, bags sieved from Export Blend lots kept
+  // being tagged Export.
+  //
+  // On that day: GS-22-157 and MAT-0336 were both debagged as Export Blend, and
+  // STFL-310826-010 and -012 came off them and read Export. GS-20-238 happened
+  // to be tagged correctly, which is why one Export Blend bag showed and two
+  // did not.
+  //
+  // So the lot wins, because debagging is where the grade was actually decided
+  // and it is the record the floor's own sheet matches.
+  //
+  // EXCEPT when it cannot: GS-0313 was debagged twice that morning, once as
+  // Export (bag X-1602) and once as Export Blend (bag 1073). A lot debagged
+  // under two grades tells us nothing about a bag sieved from it, so the tag
+  // stands and the row is marked ambiguous rather than guessed at.
+  const gradesByLot = new Map<string, Set<string>>()
+  for (const d of debags) {
+    if (d.is_spillage) continue
+    const lot = normalizeLot(d.lot_number)
+    const g = (d.grade || '').trim()
+    if (!lot || !g) continue
+    const set = gradesByLot.get(lot) ?? new Set<string>()
+    set.add(g)
+    gradesByLot.set(lot, set)
+  }
+  for (const b of bags) {
+    b.gradeTagged = b.grade
+    const lot = normalizeLot(b.lot_number)
+    const set = lot ? gradesByLot.get(lot) : undefined
+    if (!set || set.size === 0) { b.gradeSource = 'tag'; continue }
+    if (set.size > 1) { b.gradeSource = 'ambiguous'; continue }
+    const fromLot = Array.from(set)[0]
+    if (fromLot === b.grade) { b.gradeSource = 'tag'; continue }
+    b.grade = fromLot
+    b.gradeSource = 'lot'
+  }
 
   const representative = sessions.find(s => !s.deleted_at) ?? sessions[0]
 

@@ -403,6 +403,17 @@ export default function ProductionOrderDetailPage() {
             duplicateOutputsHidden > 0 ? ` · ${duplicateOutputsHidden} duplicate row${duplicateOutputsHidden === 1 ? '' : 's'} hidden` : ''
           }`} />
         <PanelBody>
+          {bags.filter(b => b.gradeSource === 'lot').length > 0 && (
+            <p className="mb-3 text-[11.5px] text-text-muted leading-relaxed">
+              {bags.filter(b => b.gradeSource === 'lot').length} bag
+              {bags.filter(b => b.gradeSource === 'lot').length === 1 ? '' : 's'} below take
+              their grade from the lot they were sieved from, not from the bag&apos;s own tag —
+              marked <span className="text-warn font-medium">from lot</span>. A lot&apos;s grade is
+              settled when it is debagged, so a bag off an Export Blend lot is Export Blend even if
+              the tag still said Export. The printed label on those bags is wrong and needs
+              reprinting.
+            </p>
+          )}
           {bags.length === 0 && bucketCarryOverKg === 0 ? <Empty>No output bags recorded.</Empty> : (
             <div className="space-y-4">
               {groupBy(bags, b => b.product_type || 'Other').map(g => (
@@ -709,10 +720,24 @@ function OutputTypeGroup({ type, rows, multiShift }: { type: string; rows: Order
                 are both bagged against a batch number, and a serial alone does
                 not say which material it came from. */}
             <span className="text-[11px] text-text-muted shrink-0 whitespace-nowrap">{b.lot_number || '—'}</span>
-            {/* The grade this bag was TAGGED for. On a changeover run this is
+            {/* The grade, and where it came from. On a changeover run this is
                 the only thing that says which bag is Export and which is
-                Export Blend -- the order header cannot, it covers both. */}
-            <span className="text-[11px] text-text-muted shrink-0 whitespace-nowrap">{b.grade || '—'}</span>
+                Export Blend -- the order header cannot, it covers both.
+                A grade taken from the lot rather than the bag's own tag is
+                marked, with what the tag said, so the override is never
+                silent: someone reading a label that says Export needs to see
+                why the report says Export Blend. */}
+            <span className="text-[11px] shrink-0 whitespace-nowrap">
+              <span className={b.gradeSource === 'lot' ? 'text-warn font-medium' : 'text-text-muted'}>
+                {b.grade || '—'}
+              </span>
+              {b.gradeSource === 'lot' && (
+                <span className="text-[9.5px] text-text-faint"> from lot{b.gradeTagged ? ` (tagged ${b.gradeTagged})` : ''}</span>
+              )}
+              {b.gradeSource === 'ambiguous' && (
+                <span className="text-[9.5px] text-text-faint" title="This lot was debagged under more than one grade, so the bag's own tag stands."> lot mixed</span>
+              )}
+            </span>
             {multiShift && <span className="text-[10px] text-text-faint shrink-0 capitalize">{b.shift}</span>}
             {b.output_group && <span className="font-mono text-[10px] text-text-faint shrink-0">grp {b.output_group}</span>}
             <span className="font-mono text-text-muted shrink-0 tabular-nums w-16 text-right">{b.kg.toFixed(1)} kg</span>
