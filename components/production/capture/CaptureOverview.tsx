@@ -16,6 +16,8 @@ import { dustProductType, type GranuleData } from '@/components/production/captu
 import { type BlenderData } from '@/components/production/capture/BlenderCapture'
 import { type PasteuriserData } from '@/components/production/capture/PasteuriserCapture'
 import { getDb } from '@/lib/supabase/db'
+import { GRADE_TO_LOCAL_EXPORT } from '@/lib/production/capture-config'
+import { normalizeLot } from '@/lib/production/self-heal-reconcile'
 
 interface Production {
   id: string; variant: string; grade: string; lot: string
@@ -53,6 +55,60 @@ interface ProductGroup { product: string; acumaticaCode?: string | null; acumati
 export interface BlenderRatioGroup {
   bomId: string
   rows: { label: string; kg: number; actualPct: number; targetPct: number }[]
+}
+
+export interface TopUpRow {
+  serial: string; kg: number
+  productType: string | null; variant: string | null; batch: string | null
+  at: string | null
+  // Every top-up this bag has ever had, oldest first, from its scan_events
+  // rows. Those rows are the log and are never rewritten.
+  history: { kg: number; at: string | null }[]
+  startKg: number | null    // the bag's weight when it was first bagged
+  currentKg: number | null  // what it weighs now (bag_tags.weight_kg)
+}
+
+// One half-bag top-up, as a line under the product it went into, with the whole
+// story of the bag under it.
+//
+// The point of the second line is that only TODAY's increment is in the total
+// above. A bag topped up three times over three days has all three on its
+// record, and each one counted on the day it was added -- so seeing "+22.0
+// today" next to "15.0 on 28 Aug" is what stops the earlier increments looking
+// missing. Without it the figure invites exactly the wrong correction.
+function TopUpLine({ t }: { t: TopUpRow }) {
+  const earlier = t.history.filter(h => h.at !== t.at)
+  return (
+    <div className="pl-8 pr-3 py-2" style={{ background: '#7c3aed08' }}>
+      <div className="flex items-center gap-2 text-[12px]">
+        <Scale size={12} className="text-violet-500 shrink-0" />
+        <span className="font-mono text-[11.5px] text-violet-800 shrink-0">{t.serial}</span>
+        <span className="text-stone-400 truncate flex-1">
+          {[t.productType, t.variant, t.batch].filter(Boolean).join(' · ')}
+        </span>
+        <span className="text-[10px] text-violet-500 shrink-0 hidden sm:inline">top-up</span>
+        {t.at && <span className="font-mono text-[10px] text-stone-400 shrink-0">{fmtTime(t.at)}</span>}
+        <span className="font-mono text-violet-700 shrink-0 w-16 text-right">+{t.kg.toFixed(1)} kg</span>
+      </div>
+      <div className="mt-1 text-[10.5px] text-stone-400 leading-relaxed">
+        <span className="text-violet-600">+{t.kg.toFixed(1)} kg counted in today&apos;s output.</span>
+        {t.startKg != null && t.currentKg != null && (
+          <> This bag was bagged at {t.startKg.toFixed(1)} kg and now weighs {t.currentKg.toFixed(1)} kg.</>
+        )}
+        {earlier.length > 0 && (
+          <> Topped up {t.history.length} time{t.history.length === 1 ? '' : 's'} in total
+            {' — '}
+            {earlier.map((h, i) => (
+              <span key={i}>
+                {i > 0 ? ', ' : ''}{h.kg.toFixed(1)} kg on {fmtDay(h.at)}
+              </span>
+            ))}
+            , each counted on the day it was added, not today.
+          </>
+        )}
+      </div>
+    </div>
+  )
 }
 
 // ── Grouping functions ────────────────────────────────────────────────────────
@@ -157,7 +213,10 @@ function buildDebagLotGroups(prods: Production[]): { groups: DebagLotGroup[]; bu
         const lot = (r.lot || p.lot || '—').trim()
         const label = String(r.bag_no ?? '').trim()
         if (label) {
-          const identity = `${lot}|${label}`
+          // Lot compared by identity, not by how it was typed: live data holds
+          // `MAT-0375` and `  MAT- 0375` in one session, and a copy either side
+          // of that correction is still a copy.
+          const identity = `${normalizeLot(lot)}|${label}`
           if (seenSievingBag.has(identity)) { duplicatesHidden++; return }
           seenSievingBag.add(identity)
         }
@@ -255,16 +314,28 @@ function formatPO(po: any): string {
   return JSON.stringify(po)
 }
 
+// "28 Aug" — the day an earlier increment was added, in SAST like everything
+// else on this screen.
+const fmtDay = (iso?: string | null) =>
+  iso ? new Intl.DateTimeFormat('en-GB', { timeZone: 'Africa/Johannesburg', day: 'numeric', month: 'short' }).format(new Date(iso)) : '—'
+
 const fmtTime = (iso?: string) =>
   iso ? new Intl.DateTimeFormat('en-GB', { timeZone: 'Africa/Johannesburg', hour: '2-digit', minute: '2-digit' }).format(new Date(iso)) : ''
 
 // ── Main component ────────────────────────────────────────────────────────────
 
 export function CaptureOverview({
-  productions, sectionId, sessionId, sectionName, sectionColor, date, shift, showSerials = false,
+  productions, dayProductions, sectionId, sessionId, sectionName, sectionColor, date, shift, showSerials = false,
   productionOrders, locked = false, blenderRatios,
 }: {
-  productions: Production[]; sectionId?: string; sessionId?: string | null
+  productions: Production[]
+  // Every production for the WHOLE DAY (both shifts). Used for the mass balance
+  // and nothing else: the tables below stay this record's own capture, so they
+  // still match the Capture tab bag for bag, while the balance answers the
+  // question actually asked of it -- did the day close. Omitted by callers that
+  // have only one shift's worth, in which case the balance is this record's.
+  dayProductions?: Production[]
+  sectionId?: string; sessionId?: string | null
   sectionName: string; sectionColor: string; date: string; shift: string; showSerials?: boolean
   productionOrders?: any; locked?: boolean
   blenderRatios?: BlenderRatioGroup[]
@@ -289,21 +360,82 @@ export function CaptureOverview({
   // the weight is genuinely new product. A mode === 'existing' bag-to-bag
   // transfer logs 'topped_up' instead and must NOT be counted — it moves
   // weight already counted as output when its SOURCE bag was bagged.
-  const [topUpRows, setTopUpRows] = useState<{ serial: string; kg: number }[]>([])
+  // Carries what the activity card carries -- product, variant, batch and the
+  // time -- because a top-up folded silently into a total is exactly what made
+  // the output figure unexplainable. Shown as its own line under its product.
+  const [topUpRows, setTopUpRows] = useState<TopUpRow[]>([])
+  const [dayTopUpKg, setDayTopUpKg] = useState(0)
   useEffect(() => {
-    if (!sectionId || !sessionId) { setTopUpRows([]); return }
+    if (!sectionId) { setTopUpRows([]); setDayTopUpKg(0); return }
     let cancelled = false
     ;(async () => {
-      const { data } = await getDb().schema('production').from('scan_events')
-        .select('serial_number, weight_kg, notes')
-        .eq('section_id', sectionId).eq('session_id', sessionId).eq('action', 'bagging_out')
+      const db = getDb().schema('production')
+      // Every session for this section on this date -- the day-wide balance
+      // needs the other shift's top-ups too, and scan_events only knows
+      // session_id.
+      const { data: daySess } = await db.from('prod_sessions')
+        .select('id').eq('section_id', sectionId).eq('date', date)
+      const dayIds = ((daySess as any[]) ?? []).map(r => r.id as string)
+      if (!dayIds.length) { if (!cancelled) { setTopUpRows([]); setDayTopUpKg(0) } ; return }
+
+      const { data } = await db.from('scan_events')
+        .select('serial_number, weight_kg, notes, scanned_at, session_id')
+        .eq('section_id', sectionId).in('session_id', dayIds).eq('action', 'bagging_out')
       if (cancelled) return
-      setTopUpRows(((data as any[]) ?? [])
-        .filter(r => String(r.notes ?? '').startsWith('HALF_BAG_TOPUP'))
-        .map(r => ({ serial: String(r.serial_number), kg: Number(r.weight_kg) || 0 })))
+      const all = ((data as any[]) ?? []).filter(r => String(r.notes ?? '').startsWith('HALF_BAG_TOPUP'))
+
+      // Product, variant and the bag's CURRENT weight come from the bag itself.
+      const serials = Array.from(new Set(all.map(r => String(r.serial_number))))
+      const tagBySerial = new Map<string, any>()
+      if (serials.length) {
+        const { data: tags } = await db.from('bag_tags')
+          .select('serial_number, product_type, variant, weight_kg').in('serial_number', serials)
+        for (const t of ((tags as any[]) ?? [])) tagBySerial.set(t.serial_number, t)
+      }
+
+      // Every event these bags have ever had, ANY day and any session -- the
+      // full top-up history plus the bag's starting weight. scan_events rows
+      // are never rewritten, so this is the record; it is shown to explain the
+      // total, never added to it.
+      const historyBySerial = new Map<string, { kg: number; at: string | null }[]>()
+      const startBySerial = new Map<string, number | null>()
+      if (serials.length) {
+        const { data: allEv } = await db.from('scan_events')
+          .select('serial_number, weight_kg, notes, scanned_at')
+          .in('serial_number', serials)
+          .order('scanned_at', { ascending: true })
+        for (const ev of ((allEv as any[]) ?? [])) {
+          const sn = String(ev.serial_number)
+          if (String(ev.notes ?? '').startsWith('HALF_BAG_TOPUP')) {
+            const h = historyBySerial.get(sn) ?? []
+            h.push({ kg: Number(ev.weight_kg) || 0, at: ev.scanned_at ?? null })
+            historyBySerial.set(sn, h)
+          } else if (!startBySerial.has(sn)) {
+            // The earliest non-top-up event is the bag's own bagging.
+            startBySerial.set(sn, ev.weight_kg == null ? null : Number(ev.weight_kg))
+          }
+        }
+      }
+      if (cancelled) return
+
+      const shape = (r: any): TopUpRow => {
+        const sn = String(r.serial_number)
+        const tag = tagBySerial.get(sn)
+        const m = /^HALF_BAG_TOPUP:\s*(.+)$/.exec(String(r.notes ?? '').trim())
+        return {
+          serial: sn, kg: Number(r.weight_kg) || 0,
+          productType: tag?.product_type ?? null, variant: tag?.variant ?? null,
+          batch: m ? m[1] : null, at: r.scanned_at ?? null,
+          history: historyBySerial.get(sn) ?? [],
+          startKg: startBySerial.get(sn) ?? null,
+          currentKg: tag?.weight_kg == null ? null : Number(tag.weight_kg),
+        }
+      }
+      setTopUpRows(sessionId ? all.filter(r => r.session_id === sessionId).map(shape) : [])
+      setDayTopUpKg(all.reduce((t, r) => t + (Number(r.weight_kg) || 0), 0))
     })()
     return () => { cancelled = true }
-  }, [sectionId, sessionId])
+  }, [sectionId, sessionId, date])
 
   const debagOnlyKg   = debagGroups.reduce((s, g) => s + g.totalKg, 0)
   const baggedOnlyKg  = productGroups.reduce((s, g) => s + g.totalKg, 0)
@@ -311,14 +443,38 @@ export function CaptureOverview({
   const hasData       = debagGroups.length > 0 || productGroups.length > 0
   const poStr         = formatPO(productionOrders)
 
-  // A top-up into a bag one of THESE batches bagged is already inside that
-  // bag's own captured weight — counting it again would double it. In practice
-  // the topped bag is from an earlier day, which is why the total ran short
-  // rather than over.
-  const ownSerials = useMemo(
-    () => new Set(productGroups.flatMap(g => g.lots.flatMap(l => l.bags.map(b => b.serial)))),
-    [productGroups])
-  const topUpKg = topUpRows.filter(r => !ownSerials.has(r.serial)).reduce((t, r) => t + r.kg, 0)
+  // EVERY top-up increment counts, including one into a bag bagged earlier the
+  // same day. HalfBagTopUpModal never touches draft_data (it says so at the top
+  // of that file) -- the increment lives only in bag_tags and scan_events -- so
+  // a bag captured at 300 kg still reads 300 kg in the local array after being
+  // topped up by 22. Excluding same-day tops-ups, as this did, therefore left
+  // the displayed output SHORT by them rather than protecting against a double
+  // count.
+  //
+  // Only the increment, and only today's: that weight was produced today. A
+  // top-up on a later day belongs to that day's total, and the full history of
+  // a bag -- how many times, when, how much -- stays on its scan_events rows,
+  // which are never rewritten.
+  const freshTopUps = topUpRows
+  const topUpKg = freshTopUps.reduce((t, r) => t + r.kg, 0)
+  // Keyed by the product of the bag that was topped up, so each one can sit
+  // under that product's own heading in the bagging list instead of only
+  // appearing as an unexplained "+22.0 kg" on the total.
+  const topUpsByProduct = useMemo(() => {
+    const m = new Map<string, TopUpRow[]>()
+    for (const r of freshTopUps) {
+      const k = (r.productType || 'Other').trim()
+      const cur = m.get(k)
+      if (cur) cur.push(r); else m.set(k, [r])
+    }
+    return m
+  }, [topUpRows])
+  // A top-up into a product nothing was bagged of today has no group to sit
+  // under, so it needs one of its own or it would vanish from the list while
+  // still counting toward the total.
+  const orphanTopUpProducts = useMemo(
+    () => Array.from(topUpsByProduct.keys()).filter(k => !productGroups.some(g => g.product === k)),
+    [topUpsByProduct, productGroups])
 
   // ── Mass balance: Total Output − Total Input ───────────────────────────────
   // One figure, computed one way, from the same rows the tables below show.
@@ -341,8 +497,61 @@ export function CaptureOverview({
   // Read as out − in, so the normal case (moisture, dust, spillage) is a
   // NEGATIVE number that says "material lost" at a glance. Flagged outside ±1%
   // of total input — the tolerance a real run is expected to close within.
-  const mbInputKg  = debagOnlyKg + bucketInKg + machineKg
-  const mbOutputKg = baggedOnlyKg + topUpKg
+  // ── One mass balance per shift, unless a changeover happened ─────────────
+  // Normally a shift runs one grade and one balance is the whole story. A
+  // changeover splits the shift into two products under one record, and a
+  // single pair of totals then hides which is which -- exactly what made the
+  // 31-08 production order unreadable.
+  //
+  // Split only when this record actually holds more than one grade. Input and
+  // output are captured per bag so both are real per grade; the bucket elevator
+  // and machine spillage are not attributable to one grade (the elevator
+  // carries material across the changeover), so they sit on their own line and
+  // the split still adds up to the totals.
+  const gradeOf = (p: Production) => GRADE_TO_LOCAL_EXPORT[p.grade] ?? (p.grade || '').trim()
+  const gradeTotals = useMemo(() => {
+    const m = new Map<string, { grade: string; inKg: number; outKg: number; bags: number }>()
+    const bump = (g: string, patch: Partial<{ inKg: number; outKg: number; bags: number }>) => {
+      const cur = m.get(g) ?? { grade: g, inKg: 0, outKg: 0, bags: 0 }
+      cur.inKg  += patch.inKg  ?? 0
+      cur.outKg += patch.outKg ?? 0
+      cur.bags  += patch.bags  ?? 0
+      m.set(g, cur)
+    }
+    productions.forEach(p => {
+      const g = gradeOf(p)
+      if (!g) return
+      const d = p.data as any
+      // Sieving only: the other sections have one grade per record, so this
+      // whole block collapses to a single row for them anyway.
+      ;(d.debag ?? []).forEach((r: any) => { if (num(r.nett) > 0) bump(g, { inKg: num(r.nett) }) })
+      ;(d.outputs ?? []).forEach((b: any) => {
+        if (num(b.weight) === 0) return
+        bump(g, { outKg: num(b.weight), bags: 1 })
+      })
+    })
+    return Array.from(m.values()).sort((a, b) => a.grade.localeCompare(b.grade))
+  }, [productions])
+  const showGradeSplit = gradeTotals.length > 1
+
+  // The balance is the DAY's, computed from the same builders the tables use so
+  // the two can never drift apart in method -- only in scope, which is stated
+  // on the panel.
+  const spansDay = !!dayProductions && dayProductions.length > productions.length
+  const dayDebag = useMemo(
+    () => buildDebagLotGroups(spansDay ? dayProductions! : productions),
+    [spansDay, dayProductions, productions])
+  const dayProducts = useMemo(
+    () => buildProductGroups(spansDay ? dayProductions! : productions),
+    [spansDay, dayProductions, productions])
+  const dayDebagKg   = dayDebag.groups.reduce((t, g) => t + g.totalKg, 0)
+  const dayBaggedKg  = dayProducts.reduce((t, g) => t + g.totalKg, 0)
+  // Every increment the day recorded, for the same reason as above: none of
+  // them reach draft_data, so none of them are already in dayBaggedKg.
+  const dayTopUpNew = spansDay ? dayTopUpKg : topUpKg
+
+  const mbInputKg  = dayDebagKg + dayDebag.bucketInKg + dayDebag.machineKg
+  const mbOutputKg = dayBaggedKg + Math.max(0, dayTopUpNew)
   const balanceKg  = mbOutputKg - mbInputKg
   const balancePct = mbInputKg > 0 ? (balanceKg / mbInputKg) * 100 : 0
   const withinTol  = mbInputKg > 0 ? Math.abs(balanceKg) <= mbInputKg * MASS_BALANCE_TOLERANCE_PCT : true
@@ -601,12 +810,23 @@ export function CaptureOverview({
                             {Array.from(new Set(pg.lots.map(l => l.variant))).join(', ')}
                             {pg.lots.some(l => l.grade) ? ` · ${Array.from(new Set(pg.lots.map(l => l.grade))).join(', ')}` : ''}
                           </span>
+                          {(topUpsByProduct.get(pg.product)?.length ?? 0) > 0 && (
+                            <span className="font-mono text-[10.5px] font-normal text-violet-600 shrink-0">
+                              +{(topUpsByProduct.get(pg.product) ?? []).reduce((t, r) => t + r.kg, 0).toFixed(1)} top-up
+                            </span>
+                          )}
                           <span className="font-mono font-bold text-stone-700 shrink-0">{pg.totalCount}</span>
                           <span className="font-mono font-bold text-stone-900 shrink-0 w-20 text-right">{pg.totalKg.toFixed(1)} kg</span>
                         </button>
 
                         {isProdOpen && (
                           <div className="divide-y divide-stone-100">
+                            {/* Top-ups first: they are weight added to a bag from an
+                                earlier day, not a bag of this product bagged today,
+                                so they sit apart from the lot hierarchy below. */}
+                            {(topUpsByProduct.get(pg.product) ?? []).map(t => (
+                              <TopUpLine key={t.serial} t={t} />
+                            ))}
                             {pg.lots.map(lg => {
                               const lotKey  = `${pg.product}||${lg.lot}||${lg.variant}||${lg.grade}`
                               const isLotOpen = expandedLots.has(lotKey)
@@ -642,6 +862,34 @@ export function CaptureOverview({
                             })}
                           </div>
                         )}
+                      </div>
+                    )
+                  })}
+                  {/* A top-up into a product nothing was bagged of today: its own
+                      heading, because the weight is in Total output either way and
+                      a figure in the total with no line under it is what made the
+                      output unexplainable in the first place. */}
+                  {orphanTopUpProducts.map(prod => {
+                    const rows = topUpsByProduct.get(prod) ?? []
+                    return (
+                      <div key={`orphan-${prod}`}>
+                        <div className="w-full flex items-center gap-2 px-3 py-2.5 font-semibold"
+                          style={{ background: BAG_ORANGE + '0e' }}>
+                          <span className="w-[13px] shrink-0" />
+                          <span className="font-bold text-[13px] text-stone-900 truncate">{prod}</span>
+                          <span className="font-mono text-[10px] font-normal text-stone-400">top-up only — no bag of this product bagged today</span>
+                          <span className="flex-1" />
+                          <span className="font-mono text-[10.5px] font-normal text-violet-600 shrink-0">
+                            +{rows.reduce((t, r) => t + r.kg, 0).toFixed(1)} top-up
+                          </span>
+                          <span className="font-mono font-bold text-stone-700 shrink-0">0</span>
+                          <span className="font-mono font-bold text-stone-900 shrink-0 w-20 text-right">
+                            {rows.reduce((t, r) => t + r.kg, 0).toFixed(1)} kg
+                          </span>
+                        </div>
+                        <div className="divide-y divide-stone-100">
+                          {rows.map(t => <TopUpLine key={t.serial} t={t} />)}
+                        </div>
                       </div>
                     )
                   })}
@@ -697,7 +945,9 @@ export function CaptureOverview({
                 <div className={`flex items-center justify-between px-3 py-2 ${withinTol ? 'bg-ok/5' : 'bg-warn/5'}`}>
                   <span className="inline-flex items-center gap-1.5 text-[12px] font-bold text-stone-700">
                     <Scale size={14} className="text-stone-500" /> Mass balance
-                    <span className="font-normal text-[10.5px] text-stone-400">output − input</span>
+                    <span className="font-normal text-[10.5px] text-stone-400">
+                      output − input · {spansDay ? 'full day, both shifts' : 'this shift'}
+                    </span>
                   </span>
                   <span className="inline-flex items-center gap-1.5 font-mono font-bold text-[14px]">
                     <span className={withinTol ? 'text-ok' : 'text-warn'}>
@@ -719,13 +969,51 @@ export function CaptureOverview({
                     </div>
                   ))}
                 </div>
+                {/* Which of those kilograms are which grade. Only on a
+                    changeover record -- one grade, one balance, no extra table. */}
+                {showGradeSplit && (
+                  <div className="border-t border-stone-100 divide-y divide-stone-100">
+                    <div className="px-3 py-1.5 bg-stone-50 text-[10px] font-semibold text-stone-500 uppercase tracking-wide">
+                      By grade — this shift changed over
+                    </div>
+                    {gradeTotals.map(g => (
+                      <div key={g.grade} className="flex items-center justify-between gap-3 px-3 py-2 text-[12px]">
+                        <span className="font-medium text-stone-700">{g.grade}</span>
+                        <span className="flex items-center gap-4 font-mono text-stone-600 tabular-nums">
+                          <span>in {g.inKg.toFixed(1)}</span>
+                          <span>out {g.outKg.toFixed(1)}</span>
+                          <span className="text-stone-400">{g.bags} bag{g.bags === 1 ? '' : 's'}</span>
+                        </span>
+                      </div>
+                    ))}
+                    {(bucketInKg > 0 || machineKg > 0 || bucketOutKg > 0 || topUpKg > 0) && (
+                      <div className="flex items-start justify-between gap-3 px-3 py-2 text-[11.5px] text-stone-500">
+                        <span>Not attributable to one grade
+                          <span className="block text-[10.5px] text-stone-400">bucket elevator across the changeover, machine spillage, half-bag top-ups</span>
+                        </span>
+                        <span className="font-mono tabular-nums shrink-0">
+                          in {(bucketInKg + machineKg).toFixed(1)} · out {topUpKg.toFixed(1)}
+                        </span>
+                      </div>
+                    )}
+                    <p className="px-3 py-2 bg-stone-50/60 text-[11px] text-stone-500 leading-relaxed">
+                      No balance per grade: the tower is one stream, so the elevator carries material
+                      across the changeover and what went in as one grade can come out as the other.
+                      The figures above are captured per bag and are real; a balance per grade would
+                      not be.
+                    </p>
+                  </div>
+                )}
                 <p className="px-3 py-2.5 border-t border-stone-100 bg-stone-50/60 text-[11.5px] text-stone-500 leading-relaxed">
                   Input is everything debagged plus machine spillage
                   {bucketInKg > 0 && <>, plus the {bucketInKg.toFixed(1)} kg of bucket elevator carried in from yesterday (always this run&apos;s own variant — the carry-over ledger keeps conventional and organic apart)</>}.
                   {' '}Output is bags bagged out
-                  {topUpKg > 0 && <> plus {topUpKg.toFixed(1)} kg added into older bags by half-bag top-up — the top-up amount only, not those bags&apos; full weight</>}.
+                  {topUpKg > 0 && <> plus the {topUpKg.toFixed(1)} kg added into other bags by half-bag top-up — only the amount added today, never a topped bag&apos;s full weight, and never an increment from another day</>}.
                   {bucketOutKg > 0 && <> The {bucketOutKg.toFixed(1)} kg left in the elevator for tomorrow is work in progress and counts on neither side.</>}
                   {duplicatesHidden > 0 && <> Excludes {duplicatesHidden} duplicate debagging row{duplicatesHidden === 1 ? '' : 's'} left by the changeover fault.</>}
+                  {spansDay && <> These totals are the <strong>whole day, both shifts</strong> — the
+                  debagging and bagging tables above are this record&apos;s own capture, which is why
+                  they are smaller.</>}
                   {' '}Flagged outside ±1% of total input.
                 </p>
               </div>

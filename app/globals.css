@@ -447,4 +447,13 @@ select.input { cursor: pointer; }
   table            { width: 100%; border-collapse: collapse; }
   thead            { display: table-header-group; }   /* repeat headers per page */
   tr               { break-inside: avoid; page-break-inside: avoid; }
+
+  /* A table inside an `overflow-x-auto` wrapper scrolls on screen; on paper
+     there is nothing to scroll, so anything past the wrapper's width is simply
+     cut off — silently, with no scrollbar to hint at it. The production order's
+     input/output tables are exactly this shape, and the column that would go
+     missing is the rightmost one. Let them wrap naturally instead, and drop the
+     min-widths that only exist to keep a scrollable table readable. */
+  .overflow-x-auto { overflow: visible !important; }
+  [class*="min-w-["] { min-width: 0 !important; }
 }

@@ -2450,6 +2450,18 @@ function CaptureScreen() {
                   // and CaptureOverview's debag grouping reads that tag.
                   productions.map(p => ({ ...p, shift: shiftBal }))
                 }
+                dayProductions={
+                  // The MASS BALANCE's scope, and only its scope: this record
+                  // plus the other shift, each tagged with its own shift so
+                  // Sieving's bucket elevator is read in the right direction
+                  // (morning consumes yesterday's, afternoon leaves tomorrow's).
+                  // The tables stay on `productions` above, so they still match
+                  // the Capture tab bag for bag.
+                  [
+                    ...productions.map(p => ({ ...p, shift: shiftBal })),
+                    ...otherShiftProductions.map(p => ({ ...p, shift: otherShiftBal })),
+                  ]
+                }
                 sectionId={sectionId}
                 sessionId={sessionId}
                 sectionName={meta.name}

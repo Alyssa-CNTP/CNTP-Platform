@@ -2,6 +2,32 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-02 — Alyssa (Bag serials generated wrong and skipped: manual database corrections, logged after the fact)
+
+**Files changed:** none — this was done directly in the database, in earlier sessions, with no migration file. Logged here because it happened and nothing recorded it.
+
+Before the serial scheme was rewritten (see the *Serial scheme wired* entry below, and `lib/core/serials.ts`), bag serials were minted by scanning `bag_tags` for the highest number and adding one. That produced **wrong and skipping serials**: numbers allocated to bags that were never printed, sequences jumping, and counters shared across products that should each have had their own. The rewrite fixed the cause; the bad rows it left behind were **removed by hand from the database, across several sessions**, before this one.
+
+### Why this matters and why it is in the log
+
+The removals were correct, but they were done as ad-hoc statements: no migration, no backup table, and no record of which serials went or when. For an FSSC-relevant table that is a traceability gap — the rows are gone and nothing says a person decided that, or why. Worth writing the specifics in below while they are still known.
+
+**Still to fill in — only Alyssa has these:** the dates the corrections ran, which serials were removed, and from which tables (`bag_tags` / `prod_bagging` / `scan_events`). If any of it is recoverable from session history it belongs here rather than in a transcript.
+
+### The consequence found today
+
+Quality's awaiting-QC queue held **42 bags with no Final QC at all** — 2026-08-21 through 2026-09-02. Not a broken link: no final `sd_run` carries any of those 42 serials, and the runs that do exist for the same lot and day belong to bags that already cleared (Step 8a in `20260902_001`). On 26-08 GS-0417 Fine Leaf, three runs exist for bags `013/014/015` and the six still pending are `016`–`021`.
+
+**These are that period's bags.** Their serials came from the faulty allocator, and the sampled counterparts were among the rows removed by hand — so most of them will never have a sample, because the sample record went with the row it pointed at. They are not going to clear by being sampled again.
+
+`qms.bag_qc_waivers` (`20260902_003`) is how they close: an attributable "not sampled, here is who accepted that and why", never a pass. The reason text in that file now names this cause rather than the sampling plan.
+
+### Deferred, deliberately
+
+The queue asks for a Final QC per **bag** while QC samples per **lot**, so bags the sampling plan does not cover will keep arriving in it. That needs `qc_required` to reflect what the plan actually requires, and it is a Quality policy decision, not a data fix. **Agreed to build in a later session** — the waiver clears today's backlog without pretending the policy question is answered.
+
+---
+
 ## 2026-09-02 — Alyssa (Sieving: stop the changeover duplication at source; one mass balance on Capture Overview; repair script for both tables)
 
 **Files changed:** `components/production/capture/SievingCapture.tsx`, `components/production/capture/CaptureOverview.tsx`, `app/(app)/production/capture/[section]/page.tsx`, `lib/production/self-heal-reconcile.ts` (new), `supabase/migrations/20260902_001_repair_sieving_changeover_duplicates.sql` (new — **not applied**, run by hand)
@@ -25,6 +51,75 @@ Closes out the 2026-08-31 changeover incident. Everything before this was displa
 - **The debagging and bagging cards now use the same names and the same arithmetic as the panel** — "Total input", "Total output" — so the balance can be checked against the cards line by line. Previously the bagging card's "Total out" folded the carry-over in while the balance did not, which is exactly the "same figure shown two inconsistent ways" that reads as confusion on the floor.
 - Everything the balance leaves out is named underneath it, in kg: the carry-over, the top-ups, and any duplicate rows still being hidden.
 - **Deleted** the `SHOW_DERIVED_FIGURES` flag and the `YieldStrip` (kg in / kg out / yield / tons / bags / balance tiles + output split) from `CaptureOverview` — the figures it gated are replaced by the single balance, so the dead code goes rather than sitting switched off.
+
+### Production order — the grade per bag
+
+Monday 31-08 ran Export, then Export Blend after the changeover, and the order showed neither split.
+
+- **The order header took the first batch's grade for the whole day**, so a changeover run read as pure Export. It now names every grade the day ran (`Export + Export Blend`) and, when there is more than one, states outright that the Grade column identifies each bag.
+- **Neither table showed a grade at all.** `prod_debagging.grade` was already correct per row and simply was not rendered; output bags had no grade because `bag_tags.destination` was never selected. Both tables now carry a **Grade** column, and a group holding more than one grade shows the per-grade kg split on its header. A single-grade run gains no noise.
+- Confirmed against the floor's sheet for 31-08: **13 Export, 8 Export Blend**, matching the stored grades exactly. The data was right; only the display was missing.
+
+### Each top-up line explains itself
+
+Under every top-up on the Capture Overview, a second line reads the bag's whole story from its `scan_events` rows:
+
+> `+22.0 kg counted in today's output.` This bag was bagged at 300.0 kg and now weighs 337.0 kg. Topped up 3 times in total — 15.0 kg on 28 Aug, 22.0 kg on 31 Aug, each counted on the day it was added, not today.
+
+The reason it earns the space: a bag topped up three times over three days has all three on its record, and each counted on **its own** day. Seeing `+22.0 today` beside `15.0 on 28 Aug` is what stops the earlier increments looking missing — without it the figure invites exactly the wrong correction.
+
+The history is read from `scan_events`, which is the log and is never rewritten. It is shown to explain the total, never added to it.
+
+### Capture screens were SHORT by any same-day top-up
+
+The Sieving capture total and the Capture Overview both excluded a top-up whose bag had been bagged in the same record, on the stated grounds that it was "already inside that bag's captured weight". That premise was wrong: `HalfBagTopUpModal` never touches `draft_data` — it says so at the top of the file — so the increment lives only in `bag_tags` and `scan_events`. A bag captured at 300 kg still reads 300 kg locally after a 22 kg top-up, so excluding the increment left the displayed output **short by it** rather than guarding a double count.
+
+Every increment the day recorded now counts, wherever the topped bag came from. Only the increment, and only that day's: a top-up on a later day is that day's output. The full history of a bag — how many times, when, how much — stays on its `scan_events` rows, which are never rewritten, and is what the top-up activity list and Bag Tracking read.
+
+### Production order counts the top-up increment, never the bag's later total
+
+`addFreshWeightToBag` overwrites `bag_tags.weight_kg` in place — current + increment — while the `scan_events` row it writes alongside carries only the **increment** and is never rewritten. The order page took each bag's kg from `bag_tags.weight_kg`, i.e. the bag's weight *today*.
+
+So a bag bagged at 300 kg on 31-08 and topped up 22 kg on 01-09 had been reading **322 kg on the 31-08 order** ever since, while 01-09 separately counted the 22 kg as a fresh top-up. The same 22 kg on two orders, and the earlier day overstated by it.
+
+- A bag's kg on an order is now its **starting weight** — the earliest `scan_events` row, which is never rewritten — plus only **that day's own** top-up increments. A top-up from another day stays that day's output, as a `freshTopUp`.
+- Bags predating event logging (no weight on any event) fall back to `bag_tags.weight_kg` and keep the old behaviour.
+- `20260902_004_topup_inflation_impact.sql` (read-only) lists every affected bag with what the order used to show, what it will show, the gap, and the dates it was topped up — plus per-order totals, so the correction is not a surprise on a day already signed off.
+
+Capture Overview was never affected: its outputs come from `draft_data`'s captured weight, not `bag_tags`.
+
+### Capture Overview — one balance for the whole day, and top-ups shown where they land
+
+- **The mass balance now covers both shifts.** New `dayProductions` prop, used for the balance and nothing else: the debagging and bagging tables stay this record's own capture so they still match the Capture tab bag for bag. The panel header says which scope it is (`full day, both shifts` vs `this shift`) and the note underneath says outright that the tables above are smaller and why — the two disagreeing silently is what caused the earlier confusion.
+- Each shift's productions are tagged with their own shift, so Sieving's bucket elevator is read in the right direction on both sides of the day (morning consumes yesterday's, afternoon leaves tomorrow's).
+- **Half-bag top-ups now appear under the product they went into**, as a line carrying the same facts as the "Half-bag top-ups this shift" card — serial, product, variant, batch, time, kg. The product's own heading shows `+N top-up` beside its bagged weight, so the group explains its own figure instead of the weight only surfacing as an unexplained `+22.0 kg` on Total output.
+- A top-up into a product **nothing was bagged of today** gets its own heading rather than vanishing from the list while still counting toward the total.
+
+### Batch numbers, and per-batch totals
+
+- **Debagging now opens with a `Per batch` table** — batch number, bag count, kg — above the per-type tables, which still list every bag. "How much of each batch went in" is now read, not counted by eye.
+- **Every output bag shows its batch number.** `OrderBagRow` never carried `lot_number` and `bag_tags.lot_number` was never selected, so a Fine Leaf or Coarse Leaf bag on the report was a serial and a weight with nothing tying it to its material. Both fixed, and a product group holding more than one batch shows the per-batch kg and bag count on a strip above its bags.
+
+### Capture Overview — one balance per shift, split only on a changeover
+
+One grade, one mass balance, no extra table. When the record holds **more than one grade**, a `By grade` block appears under the balance with input kg, output kg and bag count per grade. Same rule as the production order: no balance per grade, because the elevator carries material across the changeover and what went in as one grade can come out as the other. Unattributable weight (elevator, spillage, top-ups) gets its own line so the split adds up.
+
+### The production order summary splits by grade
+
+The printed order for 31-08 read `Conventional · Grade A`, one raw grade letter, over `TOTAL INPUT 14 385.0 kg` / `TOTAL OUTPUT 14 103.0 kg`. Correct to the kilogram and misleading: the day ran Export and Export Blend, and nothing on the report distinguished them.
+
+- **A `By grade` table in the mass-balance summary** — input kg, output kg and bag count per grade. Only appears when the run actually held more than one grade.
+- **No balance per grade, deliberately.** The tower is one physical stream: the bucket elevator carries across the changeover, spillage belongs to no single grade, and material in the machine when the grade changed went in as one and came out as the other. Input and output are captured per bag and are real; a per-grade balance would be false precision. Anything unattributable gets its own line, so the split still adds up to the totals above it.
+- **Print fix.** The input/output tables live in `overflow-x-auto` wrappers with min-widths. On screen they scroll; on paper there is nothing to scroll, so the rightmost column is cut off silently — which would have been the new Grade column. `@media print` now lets them wrap and drops the min-widths.
+
+### Quality's awaiting-QC queue — closing a bag that was never sampled
+
+The queue stood at 62. About 20 were the changeover's serial-less twins and Step 3b deleted those; they were never physical bags. The other **42 are real bags with no Final QC at all** — Step 8a established that no final `sd_run` carries their serial, and the runs that do exist for the same lot and day belong to bags that already cleared. There was no broken link to repair (Step 8b looked and found none). QC samples some bags per lot; the queue asks for a Final QC per **bag**, so every bag the sampling plan doesn't cover sits there permanently.
+
+- **Not fixed by writing the missing `sd_runs`.** A final run carries a needle count, a leaf shade and a QC's name; manufacturing 42 of them to empty a screen would put fabricated readings into the FSSC record against a real operator. Declined.
+- **New `qms.bag_qc_waivers`** (`20260902_003`) records an explicit, attributable decision instead: this bag was not sampled, here is who accepted that and why. `v_pending_bag_qc` skips a waived bag — `CREATE OR REPLACE` with `SELECT *`, so no dependent view is dropped and `v_bag_qc_status`/`v_bag_events` are untouched (rebuilding those is what once took the queue from 8 rows to 847). Deleting the waiver row puts the bag back.
+- **It never reads as a pass.** The Sieving QC panel now shows `N closed unsampled` with the reason and who accepted it. A shorter queue with no visible reason is the same failure as silently hiding the duplicate rows.
+- **The standing problem is policy, not data:** per-bag QC vs per-lot sampling. Waiving each backlog is not a fix — `qc_required` needs to reflect what the sampling plan actually requires. Flagged for Quality.
 
 ### Repair script — now covers `prod_bagging` and `draft_data`
 

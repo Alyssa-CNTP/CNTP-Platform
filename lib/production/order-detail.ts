@@ -7,6 +7,8 @@
 // the combined debagging inputs, and the summed mass balance. Shared by the
 // detail page so the report always shows the same data.
 
+import { normalizeLot } from '@/lib/production/self-heal-reconcile'
+import { GRADE_TO_LOCAL_EXPORT } from '@/lib/production/capture-config'
 import { getDb } from '@/lib/supabase/db'
 import { massBalanceToleranceFor } from '@/lib/production/capture-config'
 
@@ -68,6 +70,16 @@ export interface OrderBagRow {
   // `bags` and in the separate `rebagRows` list.
   bornViaRebag: boolean
   rebagSourceSerial: string | null
+  // The batch (lot) this bag was bagged under. Fine Leaf and Coarse Leaf are
+  // both bagged against a batch number, and without it a bag on the report is
+  // a serial and a weight with nothing tying it to the material it came from.
+  lot_number: string | null
+  // The grade this bag was TAGGED for -- bag_tags.destination, resolved from
+  // the A/B/C letter to the words on the label ('Export', 'Export Blend',
+  // 'Domestic/Local'). Per bag, not per day: a run that changed over mid-shift
+  // produces bags of both grades under one production order, and until this
+  // was carried through there was no way to tell which was which.
+  grade: string | null
 }
 
 // A re-bag transaction shown on its own panel, distinct from ordinary
@@ -189,6 +201,7 @@ export interface OrderDay {
   representativeSessionId: string   // earliest non-archived session — list links here
   status: string                    // aggregate day status
   grade: string | null              // production grade (A/B/C), from the capture record
+  gradeLetters: string[]            // every grade letter captured that day, in capture order
   poItems: OrderPO[]                // production order codes + their Master Inventory descriptions
   shifts: OrderShiftBlock[]         // morning first
   bags: OrderBagRow[]               // merged across ALL shifts, continuous 1..N, shift-tagged
@@ -260,9 +273,21 @@ function sumMassBalance(shifts: OrderShiftBlock[], sectionId: string): OrderMass
 // merely topped up LATER (whose first row is still 'bagging_out'). A bag
 // with no scan_events row at all (shouldn't happen, but defensively) is
 // treated as an ordinary bag, not a re-bag.
+// bag_tags.destination holds the A/B/C letter the operator picked; the words
+// on the label (and on the production order) come from the same map the capture
+// screen uses, so the order can never disagree with the bag in someone's hand.
+function gradeLabel(letter: string | null | undefined): string | null {
+  const v = String(letter ?? '').trim().toUpperCase()
+  if (!v) return null
+  return GRADE_TO_LOCAL_EXPORT[v] ?? v
+}
+
 function mergeOutputBags(
   tags: any[], bagging: any[],
-  firstEvent: Map<string, { action: string; related_serial_number: string | null }>,
+  firstEvent: Map<string, { action: string; related_serial_number: string | null; weight_kg: number | null }>,
+  // Top-up increments captured by THIS day's sessions, per serial. Added to the
+  // bag's starting weight; a top-up from another day is that day's output.
+  sameDayTopUpKg: Map<string, number>,
 ): { rows: OrderBagRow[]; duplicateOutputsHidden: number } {
   const voided = new Set(tags.filter(t => t.status === 'voided').map(t => t.serial_number))
   const active = tags.filter(t => t.status !== 'voided')
@@ -289,11 +314,18 @@ function mergeOutputBags(
       product_type: t.product_type ?? pb?.product_type ?? null,
       variant: t.variant ?? pb?.variant ?? null,
       acumatica_id: t.acumatica_id ?? null,
-      kg: Number(t.weight_kg) || 0,
+      // The weight this day put in the bag: its starting weight (from the
+      // earliest scan_events row, never rewritten) plus only this day's own
+      // top-up increments. NOT bag_tags.weight_kg, which is the bag's current
+      // total and grows with every later top-up. Falls back to the tag when a
+      // bag predates event logging.
+      kg: (fe?.weight_kg ?? (Number(t.weight_kg) || 0)) + (sameDayTopUpKg.get(t.serial_number) ?? 0),
       bagging_time: pb?.bagging_time ?? t.printed_at ?? null,
       session_id: t.session_id,
       bornViaRebag,
       rebagSourceSerial: bornViaRebag ? (fe?.related_serial_number ?? null) : null,
+      lot_number: t.lot_number ?? pb?.lot_number ?? null,
+      grade: gradeLabel(t.destination),
     })
   }
   for (const pb of pbBySerial.values()) {
@@ -304,6 +336,8 @@ function mergeOutputBags(
       variant: pb.variant ?? null, acumatica_id: null,
       kg: Number(pb.kg) || 0, bagging_time: pb.bagging_time ?? null,
       session_id: pb.session_id, bornViaRebag: false, rebagSourceSerial: null,
+      lot_number: pb.lot_number ?? null,
+      grade: null,
     })
   }
   // A serial-less prod_bagging row that mirrors a bag already on the spine is a
@@ -333,6 +367,8 @@ function mergeOutputBags(
       variant: pb.variant ?? null, acumatica_id: null,
       kg: Number(pb.kg) || 0, bagging_time: pb.bagging_time ?? null,
       session_id: pb.session_id, bornViaRebag: false, rebagSourceSerial: null,
+      lot_number: pb.lot_number ?? null,
+      grade: null,
     })
   }
 
@@ -376,13 +412,23 @@ export async function loadOrderDay(sessionId: string): Promise<OrderDay | null> 
     .flatMap(s => ((s.draft_data?.productions ?? []) as any[]).map(p => p?.grade))
     .find((g: any) => !!g) ?? null
 
+  // EVERY grade letter captured across the day, in capture order. A changeover
+  // run (Export in the morning, Export Blend after it) has two, and reporting
+  // only the first read the whole order as one grade — which is exactly how
+  // 2026-08-31 came to show no Export Blend at all. Kept as letters; the page
+  // resolves them to labels.
+  const gradeLetters: string[] = Array.from(new Set(
+    sessions
+      .flatMap(s => ((s.draft_data?.productions ?? []) as any[]).map(p => p?.grade))
+      .filter((g: any): g is string => !!g)))
+
   // Every production-order code used across the day, resolved to its Master
   // Inventory description so the report shows "CODE — Description".
   const poCodes = Array.from(new Set(sessions.flatMap(s => (s.production_orders ?? []) as string[]).filter(Boolean)))
 
   const [mbRes, tagsRes, bagsRes, debagsRes, sigRes, reopenRes, notesRes, checksRes, tsRes, takeoverRes, invRes] = await Promise.all([
     db.from('prod_mass_balance').select('*').in('session_id', ids),
-    db.from('bag_tags').select('session_id,serial_number,product_type,variant,acumatica_id,weight_kg,printed_at,status').in('session_id', ids),
+    db.from('bag_tags').select('session_id,serial_number,product_type,variant,acumatica_id,weight_kg,printed_at,status,destination,lot_number').in('session_id', ids),
     db.from('prod_bagging').select('*').in('session_id', ids),
     db.from('prod_debagging').select('*').in('session_id', ids).order('bag_no'),
     db.from('session_signatures').select('*').in('session_id', ids),
@@ -418,7 +464,7 @@ export async function loadOrderDay(sessionId: string): Promise<OrderDay | null> 
   }
   if (serialToSession.size) {
     const { data: strandedTags } = await db.from('bag_tags')
-      .select('session_id,serial_number,product_type,variant,acumatica_id,weight_kg,printed_at,status')
+      .select('session_id,serial_number,product_type,variant,acumatica_id,weight_kg,printed_at,status,destination,lot_number')
       .in('serial_number', Array.from(serialToSession.keys()))
     for (const t of ((strandedTags as any[]) ?? [])) {
       if (!t.session_id) t.session_id = serialToSession.get(t.serial_number) ?? null
@@ -433,15 +479,42 @@ export async function loadOrderDay(sessionId: string): Promise<OrderDay | null> 
   // take each serial's first occurrence.
   const activeSerials = allTags
     .filter(t => t.status !== 'voided').map(t => t.serial_number)
-  const firstEventBySerial = new Map<string, { action: string; related_serial_number: string | null }>()
+  const firstEventBySerial = new Map<string, { action: string; related_serial_number: string | null; weight_kg: number | null }>()
+  // ── What THIS day bagged, not what the bag weighs now ────────────────────
+  // bag_tags.weight_kg is overwritten in place on every top-up
+  // (addFreshWeightToBag sets it to current + increment), so a bag bagged at
+  // 300 kg and topped up 22 kg a week later reads 322 kg for ever after. Taking
+  // the bag's kg from that column made the ORIGINAL day's order grow by other
+  // days' top-ups: 31-08 reported 322 kg for a bag that produced 300, while
+  // 01-09 separately counted the 22 as a fresh top-up. The same 22 kg on two
+  // orders.
+  //
+  // The bag's own starting weight is on its earliest scan_events row and is
+  // never rewritten, so that is what the day's output is built from, plus any
+  // top-up increments belonging to THIS day's sessions. Only ever the
+  // increment; never a later total.
+  const sameDayTopUpKgBySerial = new Map<string, number>()
   if (activeSerials.length) {
     const { data: evData } = await db.from('scan_events')
-      .select('serial_number, action, related_serial_number, scanned_at')
+      .select('serial_number, action, related_serial_number, scanned_at, weight_kg, notes, session_id')
       .in('serial_number', activeSerials)
       .order('scanned_at', { ascending: true })
+    const dayIds = new Set(ids)
     for (const ev of (evData as any[]) ?? []) {
       if (!firstEventBySerial.has(ev.serial_number)) {
-        firstEventBySerial.set(ev.serial_number, { action: ev.action, related_serial_number: ev.related_serial_number ?? null })
+        firstEventBySerial.set(ev.serial_number, {
+          action: ev.action,
+          related_serial_number: ev.related_serial_number ?? null,
+          weight_kg: ev.weight_kg == null ? null : Number(ev.weight_kg),
+        })
+        continue
+      }
+      // Every later HALF_BAG_TOPUP row captured by one of this day's own
+      // sessions. A top-up from another day belongs to that day's order and is
+      // picked up there as a freshTopUp.
+      if (String(ev.notes ?? '').startsWith('HALF_BAG_TOPUP') && dayIds.has(ev.session_id)) {
+        sameDayTopUpKgBySerial.set(ev.serial_number,
+          (sameDayTopUpKgBySerial.get(ev.serial_number) ?? 0) + (Number(ev.weight_kg) || 0))
       }
     }
   }
@@ -463,7 +536,8 @@ export async function loadOrderDay(sessionId: string): Promise<OrderDay | null> 
   }))
 
   // Whole-day output bags, then attribute each to its shift.
-  const { rows: bags, duplicateOutputsHidden } = mergeOutputBags(allTags, (bagsRes.data as any[]) ?? [], firstEventBySerial)
+  const { rows: bags, duplicateOutputsHidden } = mergeOutputBags(
+    allTags, (bagsRes.data as any[]) ?? [], firstEventBySerial, sameDayTopUpKgBySerial)
   bags.forEach(b => { b.shift = shiftBySession.get(b.session_id) ?? '' })
 
   // Fallback: output bags in draft_data that exist in neither bag_tags nor
@@ -480,6 +554,10 @@ export async function loadOrderDay(sessionId: string): Promise<OrderDay | null> 
             acumatica_id: out.code || null, kg: Number(out.weight) || 0,
             bagging_time: out.logged_at || null, session_id: s.id, shift: s.shift ?? '',
             bornViaRebag: false, rebagSourceSerial: null,
+            lot_number: out.batch || prod.lot || null,
+            // draft_data carries the operator's destination letter per bag,
+            // so a bag that never reached bag_tags still reports its grade.
+            grade: gradeLabel(out.destination ?? prod.grade),
           })
           bagSerials.add(out.serial)
         }
@@ -510,9 +588,9 @@ export async function loadOrderDay(sessionId: string): Promise<OrderDay | null> 
   // session, so it never appears in `bags` above at all. addFreshWeightToBag
   // always marks its scan_events row's notes with HALF_BAG_TOPUP, so this
   // is never confused with an ordinary bag's own first-ever 'bagging_out'
-  // row. A same-day bag's own 'bagging_out' rows — its original creation, or
-  // a same-day top-up — are already fully reflected in its bag_tags.weight_kg
-  // snapshot above, so they're excluded here (via todaysBagSerials) too, to
+  // row. A same-day bag's own rows — its original creation, and any same-day
+  // top-up — are already in that bag's kg above (starting weight plus
+  // sameDayTopUpKgBySerial), so they're excluded here via todaysBagSerials to
   // avoid double-counting.
   const todaysBagSerials = new Set(bags.map(b => b.bag_serial_no).filter(Boolean) as string[])
   const { data: freshEvData } = await db.from('scan_events')
@@ -571,7 +649,8 @@ export async function loadOrderDay(sessionId: string): Promise<OrderDay | null> 
     .filter((d: any) => {
       const label = String(d.notes ?? '').trim()
       if (d.is_spillage || !FARM_BAG_TYPES.has(d.product_type) || !label) return true
-      const key = `${d.session_id}|${String(d.lot_number ?? '').trim()}|${label}`
+      // Lot compared by identity, not by how it was typed — see normalizeLot.
+      const key = `${d.session_id}|${normalizeLot(d.lot_number)}|${label}`
       if (seenFarmBag.has(key)) { debagDuplicatesHidden++; return false }
       seenFarmBag.add(key)
       return true
@@ -673,6 +752,7 @@ export async function loadOrderDay(sessionId: string): Promise<OrderDay | null> 
     representativeSessionId: representative.id,
     status: aggregateDayStatus(shifts),
     grade,
+    gradeLetters,
     poItems,
     shifts,
     bags,

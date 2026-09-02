@@ -16,7 +16,7 @@ import { useParams, useRouter } from 'next/navigation'
 import { format } from 'date-fns'
 import { ArrowLeft, Printer, Loader2, CheckCircle2, Clock, Pen, Play, Radio, Sparkles, MessageSquare, MessageSquarePlus, ArrowRightLeft, AlertTriangle } from 'lucide-react'
 import { loadOrderDay, type OrderDay, type OrderBagRow, type OrderRebagRow, type OrderFreshTopUpRow, type OrderDebagRow, type OrderShiftBlock, type OrderMassBalance, type OrderTimesheet, type OrderNote } from '@/lib/production/order-detail'
-import { sectionMeta } from '@/lib/production/capture-config'
+import { sectionMeta, GRADE_TO_LOCAL_EXPORT } from '@/lib/production/capture-config'
 import { formatSAST } from '@/lib/production/shifts'
 import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
@@ -135,14 +135,23 @@ export default function ProductionOrderDetailPage() {
   if (loading) return <div className="p-12 flex justify-center"><Loader2 className="animate-spin text-text-faint" /></div>
   if (error || !day) return <div className="p-6 text-center text-text-muted">{error ?? 'Production order not found.'}</div>
 
-  const { section_id, date, status, grade, poItems, shifts, bags, bagsOutputKg, rebagRows, freshTopUps, debags, debagDuplicatesHidden, duplicateOutputsHidden, massBalance: mb, timesheets, takeovers, notes, representativeSessionId } = day
+  const { section_id, date, status, grade, gradeLetters, poItems, shifts, bags, bagsOutputKg, rebagRows, freshTopUps, debags, debagDuplicatesHidden, duplicateOutputsHidden, massBalance: mb, timesheets, takeovers, notes, representativeSessionId } = day
   const meta = sectionMeta(section_id)
   const st = STATUS[status] ?? STATUS.new
   const operators = Array.from(new Set(shifts.flatMap(s => s.session.operator_names ?? [])))
   const variant = shifts.map(s => s.session.variant).find(Boolean) ?? null
   const supervisor = shifts.map(s => s.session.sup_name_signoff || s.session.supervisor_name).find(Boolean) ?? null
   const submittedAt = shifts.map(s => s.session.submitted_at).filter(Boolean).sort().slice(-1)[0] ?? null
-  const variantGrade = [variant, grade ? `Grade ${grade}` : null].filter(Boolean).join(' · ') || '—'
+  // Every grade the day actually ran, not just the first batch's. A changeover
+  // run (Export, then Export Blend after it) has two, and reporting the first
+  // one made 2026-08-31 read as a pure Export order with no Export Blend
+  // anywhere on it -- the bags were captured, the grade just was not shown.
+  const gradeNames = (gradeLetters ?? []).map(g => GRADE_TO_LOCAL_EXPORT[g] ?? `Grade ${g}`)
+  const gradeText = gradeNames.length > 1
+    ? gradeNames.join(' + ')
+    : (gradeNames[0] ?? (grade ? `Grade ${grade}` : null))
+  const variantGrade = [variant, gradeText].filter(Boolean).join(' · ') || '—'
+  const changedOver = gradeNames.length > 1
   const poText = poItems.length
     ? poItems.map(p => p.description ? `${p.code} — ${p.description}` : p.code).join('; ')
     : '—'
@@ -182,6 +191,54 @@ export default function ProductionOrderDetailPage() {
   const yieldPct = totalInput > 0 ? Math.round((totalOutput / totalInput) * 1000) / 10 : null
   const wholeRunBalance = massBalanceInfo(totalOutput, totalInput)
 
+  // ── The summary, split by grade ──────────────────────────────────────────
+  // A changeover day runs two grades under one production order, and a single
+  // pair of totals cannot say which is which. That is what made the 31-08
+  // report misleading: 14 385 kg in and 14 103 kg out, correct to the kilogram,
+  // with nothing anywhere on it distinguishing Export from Export Blend.
+  //
+  // Input and output are split per grade because both are captured per bag and
+  // are therefore real. There is deliberately NO per-grade balance: the tower
+  // is one physical stream, so the bucket elevator carried across the
+  // changeover and the machine spillage belong to no single grade, and material
+  // sitting in the machine when the grade changed was fed by one and bagged as
+  // the other. A per-grade balance would be false precision. Anything that
+  // cannot be attributed is shown on its own line rather than folded into a
+  // grade, so these figures add up to the totals above.
+  const inputByGrade = new Map<string, number>()
+  let inputUnattributedKg = 0
+  for (const d of inputRows) {
+    const g = (d.grade || '').trim()
+    const kg = Number(d.kg_nett) || 0
+    if (!g) { inputUnattributedKg += kg; continue }
+    inputByGrade.set(g, (inputByGrade.get(g) ?? 0) + kg)
+  }
+  const outputByGrade = new Map<string, { kg: number; bags: number }>()
+  let outputUnattributedKg = 0
+  let outputUnattributedBags = 0
+  for (const b of bags) {
+    if (b.bornViaRebag) continue          // counted on the day its source was bagged
+    const g = (b.grade || '').trim()
+    if (!g) { outputUnattributedKg += b.kg || 0; outputUnattributedBags++; continue }
+    const cur = outputByGrade.get(g) ?? { kg: 0, bags: 0 }
+    cur.kg += b.kg || 0
+    cur.bags += 1
+    outputByGrade.set(g, cur)
+  }
+  // Half-bag top-ups add weight to a bag from an earlier day; the increment
+  // carries no grade of its own.
+  const topUpUnattributedKg = freshTopUps.reduce((t, r) => t + r.kg, 0)
+  const gradeRows = Array.from(new Set([...inputByGrade.keys(), ...outputByGrade.keys()]))
+    .sort()
+    .map(g => ({
+      grade: g,
+      inKg: inputByGrade.get(g) ?? 0,
+      out: outputByGrade.get(g) ?? { kg: 0, bags: 0 },
+    }))
+  const unattributedInKg  = inputUnattributedKg
+  const unattributedOutKg = outputUnattributedKg + topUpUnattributedKg
+  const showGradeBreakdown = gradeRows.length > 1
+
   return (
     <div className="px-4 py-6 max-w-[1000px] mx-auto space-y-5 print-full-width">
       <div className="no-print flex items-center justify-between">
@@ -215,6 +272,13 @@ export default function ProductionOrderDetailPage() {
             <Field label="Supervisor" value={supervisor || '—'} bold />
             <Field label="Submitted" value={submittedAt ? format(new Date(submittedAt), 'd MMM HH:mm') : '—'} bold />
             <Field label="Production order" value={poText} bold className="col-span-2 sm:col-span-4" />
+            {changedOver && (
+              <p className="col-span-2 sm:col-span-4 text-[11.5px] text-text-muted leading-relaxed">
+                This run changed grade mid-shift, so it covers {gradeNames.join(' and ')}. The
+                Grade column on the tables below is per bag -- that is what says which bag belongs
+                to which grade.
+              </p>
+            )}
           </div>
         </PanelBody>
       </Panel>
@@ -237,6 +301,55 @@ export default function ProductionOrderDetailPage() {
               <Field label="Balance (out − in)" value={<span className={TONE_TEXT_CLASS[wholeRunBalance.tone]}>{wholeRunBalance.text}</span>} />
               <Field label="Yield"        value={yieldPct != null ? `${yieldPct}%` : '—'} />
             </div>
+            {/* Which of those kilograms are Export and which are Export Blend.
+                Only shown when the run actually held more than one grade. */}
+            {showGradeBreakdown && (
+              <div className="mt-4 rounded-xl border border-surface-rule overflow-hidden">
+                <div className="px-3 py-2 bg-surface-dim text-[12.5px] font-semibold text-text">
+                  By grade
+                </div>
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr>
+                      {['Grade', 'Input', 'Output', 'Bags'].map((h, i) => (
+                        <th key={h} className={`px-3 py-1.5 font-mono text-[9px] font-semibold text-text-faint uppercase tracking-[0.06em] whitespace-nowrap ${i > 0 ? 'text-right' : ''}`}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-surface-rule/60">
+                    {gradeRows.map(g => (
+                      <tr key={g.grade}>
+                        <td className="px-3 py-1.5 text-[12.5px] font-medium text-text whitespace-nowrap">{g.grade}</td>
+                        <td className="px-3 py-1.5 font-mono text-[12px] text-text-muted text-right tabular-nums">{g.inKg.toFixed(1)} kg</td>
+                        <td className="px-3 py-1.5 font-mono text-[12px] text-text-muted text-right tabular-nums">{g.out.kg.toFixed(1)} kg</td>
+                        <td className="px-3 py-1.5 font-mono text-[12px] text-text-muted text-right tabular-nums">{g.out.bags}</td>
+                      </tr>
+                    ))}
+                    {(unattributedInKg > 0 || unattributedOutKg > 0) && (
+                      <tr>
+                        <td className="px-3 py-1.5 text-[12.5px] text-text-muted">
+                          Not attributable to one grade
+                          <span className="block text-[10.5px] text-text-faint">
+                            bucket elevator across the changeover, machine spillage, half-bag top-ups
+                          </span>
+                        </td>
+                        <td className="px-3 py-1.5 font-mono text-[12px] text-text-muted text-right tabular-nums">{unattributedInKg > 0 ? `${unattributedInKg.toFixed(1)} kg` : '—'}</td>
+                        <td className="px-3 py-1.5 font-mono text-[12px] text-text-muted text-right tabular-nums">{unattributedOutKg > 0 ? `${unattributedOutKg.toFixed(1)} kg` : '—'}</td>
+                        <td className="px-3 py-1.5 font-mono text-[12px] text-text-faint text-right tabular-nums">{outputUnattributedBags || '—'}</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+                <p className="px-3 py-2 border-t border-surface-rule/60 bg-surface-dim/40 text-[11px] text-text-muted leading-relaxed">
+                  No balance per grade, deliberately. The tower is one physical stream: the bucket
+                  elevator carries across the changeover, spillage belongs to no single grade, and
+                  material in the machine when the grade changed went in as one and came out as the
+                  other. Input and output above are captured per bag and are real; a balance per
+                  grade would not be.
+                </p>
+              </div>
+            )}
+
             {/* What the two totals are made of, and anything held out of them —
                 so the figure can be checked rather than taken on trust. */}
             <p className="mt-3 pt-3 border-t border-surface-rule/60 text-[11.5px] text-text-muted leading-relaxed">
@@ -271,6 +384,10 @@ export default function ProductionOrderDetailPage() {
         <PanelBody>
           {inputRows.length === 0 ? <Empty>No inputs recorded.</Empty> : (
             <div className="space-y-4">
+              {/* Per batch first, because that is the question actually asked of
+                  this panel: how much of each batch went in. The per-type
+                  tables below still list every bag; this is the total. */}
+              <BatchTotals rows={inputRows} />
               {groupBy(inputRows, inputType).map(g => (
                 <InputTypeGroup key={g.type} type={g.type} rows={g.rows} multiShift={shifts.length > 1} />
               ))}
@@ -452,19 +569,24 @@ function groupBy<T>(rows: T[], key: (r: T) => string): { type: string; rows: T[]
 // is stated on the order). Compact list, mobile-friendly, with a per-type total.
 function InputTypeGroup({ type, rows, multiShift }: { type: string; rows: OrderDebagRow[]; multiShift: boolean }) {
   const kg = rows.reduce((s, r) => s + (Number(r.kg_nett) || 0), 0)
+  // Per-grade subtotals, shown on the header only when this type actually holds
+  // more than one grade -- which is the whole point on a changeover run: the
+  // total alone cannot say how much of it was Export Blend.
+  const byGrade = gradeSplit(rows.map(r => ({ grade: r.grade, kg: Number(r.kg_nett) || 0 })))
   return (
     <div className="rounded-xl border border-surface-rule overflow-hidden">
       <div className="flex items-center justify-between gap-2 px-3 py-2 bg-surface-dim">
         <span className="text-[12.5px] font-semibold text-text">{type}</span>
         <span className="font-mono text-[11px] text-text-muted whitespace-nowrap">
+          {byGrade && <span className="mr-2 text-text-faint">{byGrade}</span>}
           {rows.length} · {kg.toFixed(1)} kg
         </span>
       </div>
       <div className="overflow-x-auto">
-        <table className="w-full text-left border-collapse min-w-[380px]">
+        <table className="w-full text-left border-collapse min-w-[440px]">
           <thead>
             <tr>
-              {['Farm bag', 'Lot', multiShift ? 'Shift' : null, 'kg'].filter(Boolean).map(h => (
+              {['Farm bag', 'Lot', 'Grade', multiShift ? 'Shift' : null, 'kg'].filter(Boolean).map(h => (
                 <th key={h as string} className={`px-3 py-1.5 font-mono text-[9px] font-semibold text-text-faint uppercase tracking-[0.06em] whitespace-nowrap ${h === 'kg' ? 'text-right' : ''}`}>{h}</th>
               ))}
             </tr>
@@ -474,6 +596,7 @@ function InputTypeGroup({ type, rows, multiShift }: { type: string; rows: OrderD
               <tr key={d.id}>
                 <td className="px-3 py-1.5 font-mono text-[12px] text-text">{d.notes || d.bag_serial_no || '—'}</td>
                 <td className="px-3 py-1.5 text-[12px] text-text-muted">{d.lot_number || '—'}</td>
+                <td className="px-3 py-1.5 text-[12px] text-text-muted whitespace-nowrap">{d.grade || '—'}</td>
                 {multiShift && <td className="px-3 py-1.5 text-[11px] text-text-faint capitalize">{d.shift}</td>}
                 <td className="px-3 py-1.5 font-mono text-[12px] text-text-muted text-right tabular-nums">{Number(d.kg_nett).toFixed(1)}</td>
               </tr>
@@ -485,22 +608,111 @@ function InputTypeGroup({ type, rows, multiShift }: { type: string; rows: OrderD
   )
 }
 
+// Totals per batch number, biggest first. Blank lots collapse into one
+// "no batch" line rather than being dropped, so the figures still add up.
+function batchTotals(rows: { lot: string | null; kg: number }[]): { lot: string; kg: number; n: number }[] {
+  const m = new Map<string, { lot: string; kg: number; n: number }>()
+  for (const r of rows) {
+    const lot = (r.lot || '').trim() || '(no batch)'
+    const cur = m.get(lot)
+    if (cur) { cur.kg += r.kg; cur.n++ }
+    else m.set(lot, { lot, kg: r.kg, n: 1 })
+  }
+  return Array.from(m.values()).sort((a, b) => b.kg - a.kg)
+}
+
+// Debagging, totalled per batch number. The per-type tables below it list every
+// bag; this answers "how much of each batch went in" without counting by eye.
+function BatchTotals({ rows }: { rows: OrderDebagRow[] }) {
+  const batches = batchTotals(rows.map(r => ({ lot: r.lot_number, kg: Number(r.kg_nett) || 0 })))
+  if (batches.length === 0) return null
+  const total = batches.reduce((s, b) => s + b.kg, 0)
+  return (
+    <div className="rounded-xl border border-surface-rule overflow-hidden">
+      <div className="flex items-center justify-between gap-2 px-3 py-2 bg-surface-dim">
+        <span className="text-[12.5px] font-semibold text-text">Per batch</span>
+        <span className="font-mono text-[11px] text-text-muted whitespace-nowrap">
+          {batches.length} batch{batches.length === 1 ? '' : 'es'} · {total.toFixed(1)} kg
+        </span>
+      </div>
+      <table className="w-full text-left border-collapse">
+        <thead>
+          <tr>
+            {['Batch', 'Bags', 'kg'].map((h, i) => (
+              <th key={h} className={`px-3 py-1.5 font-mono text-[9px] font-semibold text-text-faint uppercase tracking-[0.06em] whitespace-nowrap ${i > 0 ? 'text-right' : ''}`}>{h}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-surface-rule/60">
+          {batches.map(b => (
+            <tr key={b.lot}>
+              <td className="px-3 py-1.5 text-[12.5px] font-medium text-text whitespace-nowrap">{b.lot}</td>
+              <td className="px-3 py-1.5 font-mono text-[12px] text-text-muted text-right tabular-nums">{b.n}</td>
+              <td className="px-3 py-1.5 font-mono text-[12px] text-text text-right tabular-nums">{b.kg.toFixed(1)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+// "Export 4550 · Export Blend 2800" -- null when there is only one grade (or
+// none recorded), so a single-grade run gains no noise.
+function gradeSplit(rows: { grade: string | null; kg: number }[]): string | null {
+  const m = new Map<string, number>()
+  for (const r of rows) {
+    const k = (r.grade || '').trim()
+    if (!k) continue
+    m.set(k, (m.get(k) ?? 0) + r.kg)
+  }
+  if (m.size < 2) return null
+  return Array.from(m.entries())
+    .sort((a, b) => b[1] - a[1])
+    .map(([g, kg]) => `${g} ${kg.toFixed(0)}`)
+    .join(' · ')
+}
+
 // One output product type's bags — compact per-bag lines with a per-type total.
 function OutputTypeGroup({ type, rows, multiShift }: { type: string; rows: OrderBagRow[]; multiShift: boolean }) {
   const kg = rows.reduce((s, r) => s + (r.kg || 0), 0)
+  // Per-grade split, shown only on a mixed group -- see gradeSplit.
+  const byGrade = gradeSplit(rows.map(r => ({ grade: r.grade, kg: r.kg || 0 })))
+  // Per batch, for this product. Fine Leaf and Coarse Leaf are each bagged
+  // against a batch number and the per-batch total is what gets reconciled.
+  const batches = batchTotals(rows.map(r => ({ lot: r.lot_number, kg: r.kg || 0 })))
   return (
     <div className="rounded-xl border border-surface-rule overflow-hidden">
       <div className="flex items-center justify-between gap-2 px-3 py-2 bg-surface-dim">
         <span className="text-[12.5px] font-semibold text-text">{type}</span>
         <span className="font-mono text-[11px] text-text-muted whitespace-nowrap">
+          {byGrade && <span className="mr-2 text-text-faint">{byGrade}</span>}
           {rows.length} bag{rows.length === 1 ? '' : 's'} · {kg.toFixed(1)} kg
         </span>
       </div>
+      {batches.length > 1 && (
+        <div className="px-3 py-2 border-b border-surface-rule/60 bg-surface-dim/40 flex flex-wrap gap-x-4 gap-y-1">
+          {batches.map(b => (
+            <span key={b.lot} className="text-[11.5px] text-text-muted whitespace-nowrap">
+              {b.lot} <span className="font-mono text-text tabular-nums">{b.kg.toFixed(1)} kg</span>
+              <span className="text-text-faint"> · {b.n} bag{b.n === 1 ? '' : 's'}</span>
+            </span>
+          ))}
+        </div>
+      )}
       <ul className="divide-y divide-surface-rule/60">
         {rows.map((b, i) => (
           <li key={b.id} className="flex items-center gap-2 px-3 py-1.5 text-[12px]">
             <span className="font-mono text-text-faint w-6 shrink-0 text-right">{i + 1}</span>
             <span className="font-mono text-text flex-1 min-w-0 truncate">{b.bag_serial_no || '—'}</span>
+            {/* The batch this bag was bagged under. Fine Leaf and Coarse Leaf
+                are both bagged against a batch number, and a serial alone does
+                not say which material it came from. */}
+            <span className="text-[11px] text-text-muted shrink-0 whitespace-nowrap">{b.lot_number || '—'}</span>
+            {/* The grade this bag was TAGGED for. On a changeover run this is
+                the only thing that says which bag is Export and which is
+                Export Blend -- the order header cannot, it covers both. */}
+            <span className="text-[11px] text-text-muted shrink-0 whitespace-nowrap">{b.grade || '—'}</span>
             {multiShift && <span className="text-[10px] text-text-faint shrink-0 capitalize">{b.shift}</span>}
             {b.output_group && <span className="font-mono text-[10px] text-text-faint shrink-0">grp {b.output_group}</span>}
             <span className="font-mono text-text-muted shrink-0 tabular-nums w-16 text-right">{b.kg.toFixed(1)} kg</span>
