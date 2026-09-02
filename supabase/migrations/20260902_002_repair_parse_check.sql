@@ -17,11 +17,13 @@
 -- If this whole file runs without error, every statement in the repair script
 -- is valid against this database.
 --
--- Step 0 (the backup table) and Step 4's function must be created first --
--- EXPLAIN still has to resolve their names. Run Step 0 and the
--- "create or replace function production.dedupe_sieving_draft" block from the
--- repair script, then this. Both are safe: one creates an empty table, the
--- other creates a pure function. Neither touches production data.
+-- Only Step 0 (the backup table) has to exist first, because EXPLAIN still
+-- resolves every name. Run Step 0, then this. Step 0 creates an empty table
+-- and touches no production data.
+--
+-- Nothing here is dollar-quoted, and neither is the repair script: the
+-- Supabase dashboard editor splits a script on semicolons, so a "do $$ ... $$"
+-- body fails with "unterminated dollar-quoted string".
 -- ============================================================================
 
 
@@ -127,7 +129,19 @@ order by s.date desc, s.shift;
 
 -- Step 3a (DELETE -- parsed and planned, NOT executed)
 explain
-with ranked as (
+with unsafe as (
+  select 1 as x
+  from production.prod_debagging pd
+  join production.prod_sessions s on s.id = pd.session_id and s.section_id = 'sieving'
+  where pd.product_type in ('Farm Bag', '500kg Farm Bag')
+    and pd.is_spillage = false
+    and coalesce(btrim(pd.notes), '') <> ''
+  group by pd.session_id,
+           upper(regexp_replace(coalesce(pd.lot_number, ''), '\s', '', 'g')),
+           btrim(pd.notes)
+  having count(distinct round(pd.kg_nett::numeric, 3)) > 1
+),
+ranked as (
   select pd.id,
          row_number() over (
            partition by pd.session_id,
@@ -142,7 +156,9 @@ with ranked as (
     and coalesce(btrim(pd.notes), '') <> ''
 ),
 doomed as (
-  select id from ranked where rn > 1
+  select id from ranked
+  where rn > 1
+    and not exists (select 1 from unsafe)
 ),
 saved as (
   insert into production.repair_20260902_backup (source, session_id, row_id, payload)
@@ -191,43 +207,157 @@ where pb.id = d.id;
 
 -- Step 4a
 explain
-select s.id, s.date, s.shift,
-       (select count(*)
-          from jsonb_array_elements(s.draft_data -> 'productions') pr,
-               jsonb_array_elements(case when jsonb_typeof(pr.value -> 'data' -> 'debag') = 'array'
-                                          then pr.value -> 'data' -> 'debag' else '[]'::jsonb end)
-       ) as debag_before,
-       (select count(*)
-          from jsonb_array_elements(production.dedupe_sieving_draft(s.draft_data) -> 'productions') pr,
-               jsonb_array_elements(case when jsonb_typeof(pr.value -> 'data' -> 'debag') = 'array'
-                                          then pr.value -> 'data' -> 'debag' else '[]'::jsonb end)
-       ) as debag_after
-from production.prod_sessions s
-where s.section_id = 'sieving'
-  and jsonb_typeof(s.draft_data -> 'productions') = 'array'
-  and production.dedupe_sieving_draft(s.draft_data) is distinct from s.draft_data
-order by s.date desc, s.shift;
+with prods as (
+  select s.id as session_id, s.date, s.shift, s.draft_data,
+         p.ord as p_idx, p.value as p_json
+  from production.prod_sessions s
+  cross join lateral jsonb_array_elements(s.draft_data -> 'productions')
+       with ordinality as p(value, ord)
+  where s.section_id = 'sieving'
+    and jsonb_typeof(s.draft_data -> 'productions') = 'array'
+),
+debag as (
+  select pr.session_id, pr.p_idx, r.ord as r_idx, r.value as r_json,
+         case
+           when btrim(coalesce(r.value ->> 'bag_no', '')) = ''
+           then '#' || pr.p_idx || '.' || r.ord            -- blank label: never merged
+           else upper(regexp_replace(coalesce(nullif(r.value ->> 'lot', ''), pr.p_json ->> 'lot', ''), '\s', '', 'g'))
+                || '|' || btrim(coalesce(r.value ->> 'bag_no', ''))
+         end as identity
+  from prods pr
+  cross join lateral jsonb_array_elements(
+         case when jsonb_typeof(pr.p_json -> 'data' -> 'debag') = 'array'
+              then pr.p_json -> 'data' -> 'debag' else '[]'::jsonb end)
+       with ordinality as r(value, ord)
+),
+outs as (
+  select pr.session_id, pr.p_idx, r.ord as r_idx,
+         case
+           when btrim(coalesce(r.value ->> 'serial', '')) = ''
+           then '#' || pr.p_idx || '.' || r.ord            -- blank serial: never merged
+           else btrim(r.value ->> 'serial')
+         end as identity
+  from prods pr
+  cross join lateral jsonb_array_elements(
+         case when jsonb_typeof(pr.p_json -> 'data' -> 'outputs') = 'array'
+              then pr.p_json -> 'data' -> 'outputs' else '[]'::jsonb end)
+       with ordinality as r(value, ord)
+)
+select pr.session_id, min(pr.date) as date, min(pr.shift) as shift,
+       (select count(*) from debag d where d.session_id = pr.session_id)          as debag_before,
+       (select count(distinct d.identity) from debag d where d.session_id = pr.session_id) as debag_after,
+       (select count(*) from outs o where o.session_id = pr.session_id)           as outputs_before,
+       (select count(distinct o.identity) from outs o where o.session_id = pr.session_id)  as outputs_after
+from prods pr
+group by pr.session_id
+having (select count(*) from debag d where d.session_id = pr.session_id)
+       > (select count(distinct d.identity) from debag d where d.session_id = pr.session_id)
+    or (select count(*) from outs o where o.session_id = pr.session_id)
+       > (select count(distinct o.identity) from outs o where o.session_id = pr.session_id)
+order by min(pr.date) desc, min(pr.shift);
 
 
 -- Step 4b (UPDATE -- parsed and planned, NOT executed)
 explain
-with changed as (
-  select s.id, s.draft_data
+with prods as (
+  select s.id as session_id, s.draft_data,
+         p.ord as p_idx, p.value as p_json
   from production.prod_sessions s
+  cross join lateral jsonb_array_elements(s.draft_data -> 'productions')
+       with ordinality as p(value, ord)
   where s.section_id = 'sieving'
     and jsonb_typeof(s.draft_data -> 'productions') = 'array'
-    and production.dedupe_sieving_draft(s.draft_data) is distinct from s.draft_data
+),
+debag as (
+  select pr.session_id, pr.p_idx, r.ord as r_idx, r.value as r_json,
+         case
+           when btrim(coalesce(r.value ->> 'bag_no', '')) = ''
+           then '#' || pr.p_idx || '.' || r.ord
+           else upper(regexp_replace(coalesce(nullif(r.value ->> 'lot', ''), pr.p_json ->> 'lot', ''), '\s', '', 'g'))
+                || '|' || btrim(coalesce(r.value ->> 'bag_no', ''))
+         end as identity
+  from prods pr
+  cross join lateral jsonb_array_elements(
+         case when jsonb_typeof(pr.p_json -> 'data' -> 'debag') = 'array'
+              then pr.p_json -> 'data' -> 'debag' else '[]'::jsonb end)
+       with ordinality as r(value, ord)
+),
+debag_keep as (
+  -- First occurrence in capture order wins, across the whole session.
+  select distinct on (session_id, identity) session_id, p_idx, r_idx, r_json
+  from debag
+  order by session_id, identity, p_idx, r_idx
+),
+debag_new as (
+  select session_id, p_idx, jsonb_agg(r_json order by r_idx) as arr
+  from debag_keep group by session_id, p_idx
+),
+outs as (
+  select pr.session_id, pr.p_idx, r.ord as r_idx, r.value as r_json,
+         case
+           when btrim(coalesce(r.value ->> 'serial', '')) = ''
+           then '#' || pr.p_idx || '.' || r.ord
+           else btrim(r.value ->> 'serial')
+         end as identity
+  from prods pr
+  cross join lateral jsonb_array_elements(
+         case when jsonb_typeof(pr.p_json -> 'data' -> 'outputs') = 'array'
+              then pr.p_json -> 'data' -> 'outputs' else '[]'::jsonb end)
+       with ordinality as r(value, ord)
+),
+outs_keep as (
+  select distinct on (session_id, identity) session_id, p_idx, r_idx, r_json
+  from outs
+  order by session_id, identity, p_idx, r_idx
+),
+outs_new as (
+  select session_id, p_idx, jsonb_agg(r_json order by r_idx) as arr
+  from outs_keep group by session_id, p_idx
+),
+prods_rebuilt as (
+  -- Only the two arrays are replaced, and only where they already exist as
+  -- arrays, so no key is invented and nothing else in the batch is touched.
+  select pr.session_id, pr.p_idx,
+         case when jsonb_typeof(pr.p_json -> 'data' -> 'outputs') = 'array'
+              then jsonb_set(
+                     case when jsonb_typeof(pr.p_json -> 'data' -> 'debag') = 'array'
+                          then jsonb_set(pr.p_json, '{data,debag}', coalesce(dn.arr, '[]'::jsonb))
+                          else pr.p_json end,
+                     '{data,outputs}', coalesce(on_.arr, '[]'::jsonb))
+              else
+                   case when jsonb_typeof(pr.p_json -> 'data' -> 'debag') = 'array'
+                        then jsonb_set(pr.p_json, '{data,debag}', coalesce(dn.arr, '[]'::jsonb))
+                        else pr.p_json end
+         end as p_new
+  from prods pr
+  left join debag_new dn on dn.session_id = pr.session_id and dn.p_idx = pr.p_idx
+  left join outs_new  on_ on on_.session_id = pr.session_id and on_.p_idx = pr.p_idx
+),
+rebuilt as (
+  -- jsonb_agg only. There is no min() for jsonb, so the original document is
+  -- picked up from the table below rather than carried through an aggregate.
+  select pb.session_id, jsonb_agg(pb.p_new order by pb.p_idx) as prods_new
+  from prods_rebuilt pb
+  group by pb.session_id
+),
+changed as (
+  select r.session_id,
+         jsonb_set(s.draft_data, '{productions}', r.prods_new) as draft_new,
+         s.draft_data as draft_old
+  from rebuilt r
+  join production.prod_sessions s on s.id = r.session_id
+  where jsonb_set(s.draft_data, '{productions}', r.prods_new) is distinct from s.draft_data
 ),
 saved as (
   insert into production.repair_20260902_backup (source, session_id, payload)
-  select 'prod_sessions.draft_data', c.id, c.draft_data from changed c
+  select 'prod_sessions.draft_data', c.session_id, c.draft_old from changed c
   returning session_id
 )
 update production.prod_sessions s
-set draft_data = production.dedupe_sieving_draft(s.draft_data),
+set draft_data = c.draft_new,
     updated_at = now()
 from changed c
-where s.id = c.id;
+where s.id = c.session_id;
 
 
 -- Step 7a

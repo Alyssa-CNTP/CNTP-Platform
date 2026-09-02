@@ -53,8 +53,7 @@
 -- Everything numbered "READ ONLY" is safe to run at any point, repeatedly.
 --
 --   0.  Step 0            create the backup table            (writes: empty table)
---   1.  Step 4's function create dedupe_sieving_draft        (writes: a function)
---   2.  20260902_002_repair_parse_check.sql
+--   1.  20260902_002_repair_parse_check.sql
 --                         proves every statement below is valid against THIS
 --                         database before any of them touches data. Executes
 --                         nothing. If it errors, stop and fix that first.
@@ -62,13 +61,20 @@
 --   4.  Step 2c           safety check -- MUST return no rows         READ ONLY
 --   5.  Step 2d           the bags that survive; check against the
 --                         floor's sheet before deleting anything      READ ONLY
---   6.  Step 3            delete the duplicate rows          WRITES, backed up
---   7.  Step 4b           deduplicate draft_data             WRITES, backed up
+--   6.  Step 3a, then 3b  delete the duplicate rows          WRITES, backed up
+--   7.  Step 4a           preview what 4b will change                READ ONLY
+--   8.  Step 4b           deduplicate draft_data             WRITES, backed up
 --                         NOT OPTIONAL -- see below
---   8.  Step 6a           verify: re-run Step 1, expect no rows       READ ONLY
---   9.  Step 8a           why the QC queue is not clearing            READ ONLY
---  10.  Step 8b           relink the forced matches          WRITES, backed up
---  11.  Step 8a, 8c       what is left for a person to decide         READ ONLY
+--   9.  Step 6a           verify: re-run Step 1, expect no rows       READ ONLY
+--  10.  Step 8a           why the QC queue is not clearing            READ ONLY
+--  11.  Step 8b           relink the forced matches          WRITES, backed up
+--  12.  Step 8a, 8c       what is left for a person to decide         READ ONLY
+--
+-- There is no "do $$ ... $$" and no helper function anywhere in this file. The
+-- Supabase dashboard editor splits a script on semicolons, so the ones inside
+-- a dollar-quoted body end the statement early and it fails with
+-- "unterminated dollar-quoted string". Every step is plain SQL, one statement
+-- at a time.
 --
 -- Steps 1, 1b, 1c, 1d, 2a, 2b, 7a, 7b, 7c are diagnostics. Run them whenever
 -- you want more detail; none of them change anything.
@@ -355,221 +361,276 @@ order by s.date desc, s.shift;
 
 
 -- ===========================================================================
--- Step 3. WRITES. Remove the duplicate ledger rows (backed up first)
+-- Step 3a. WRITES. Remove the duplicate prod_debagging rows
 -- ===========================================================================
-do $$
-declare
-  v_debag  int;
-  v_bag    int;
-  v_unsafe int;
-begin
-  -- Refuse to run at all if Step 2c is not clean.
-  select count(*) into v_unsafe from (
-    select 1
-    from production.prod_debagging pd
-    join production.prod_sessions s on s.id = pd.session_id and s.section_id = 'sieving'
-    where pd.product_type in ('Farm Bag', '500kg Farm Bag')
-      and pd.is_spillage = false
-      and coalesce(btrim(pd.notes), '') <> ''
-    group by pd.session_id, upper(regexp_replace(coalesce(pd.lot_number, ''), '\s', '', 'g')), btrim(pd.notes)
-    having count(distinct round(pd.kg_nett::numeric, 3)) > 1
-  ) q;
-
-  if v_unsafe > 0 then
-    raise exception
-      'Aborted: % bag identities have rows that disagree on weight, so they are not copies. Run Step 2c and resolve them by hand first.', v_unsafe;
-  end if;
-
-  -- 3a. prod_debagging
-  with ranked as (
-    select pd.id,
-           row_number() over (
-             partition by pd.session_id,
-                          upper(regexp_replace(coalesce(pd.lot_number, ''), '\s', '', 'g')),
-                          btrim(pd.notes)
-             order by pd.created_at, pd.bag_no, pd.id
-           ) as rn
-    from production.prod_debagging pd
-    join production.prod_sessions s on s.id = pd.session_id and s.section_id = 'sieving'
-    where pd.product_type in ('Farm Bag', '500kg Farm Bag')
-      and pd.is_spillage = false
-      and coalesce(btrim(pd.notes), '') <> ''
-  ),
-  doomed as (
-    select id from ranked where rn > 1
-  ),
-  saved as (
-    insert into production.repair_20260902_backup (source, session_id, row_id, payload)
-    select 'prod_debagging', pd.session_id, pd.id::text, to_jsonb(pd)
-    from production.prod_debagging pd
-    join doomed d on d.id = pd.id
-    returning 1
-  )
-  delete from production.prod_debagging pd
-  using doomed d
-  where pd.id = d.id;
-
-  get diagnostics v_debag = row_count;
-
-  -- 3b. prod_bagging
-  with spine as (
-    select pb.session_id, pb.product_type, round(pb.kg::numeric, 3) as kg, pb.bagging_time
-    from production.prod_bagging pb
-    join production.prod_sessions s on s.id = pb.session_id and s.section_id = 'sieving'
-    where pb.bag_serial_no is not null
-  ),
-  doomed as (
-    select pb.id
-    from production.prod_bagging pb
-    join production.prod_sessions s on s.id = pb.session_id and s.section_id = 'sieving'
-    where pb.bag_serial_no is null
-      and exists (
-        select 1 from spine sp
-        where sp.session_id   = pb.session_id
-          and sp.product_type is not distinct from pb.product_type
-          and sp.kg           = round(pb.kg::numeric, 3)
-          and sp.bagging_time is not distinct from pb.bagging_time
-      )
-  ),
-  saved as (
-    insert into production.repair_20260902_backup (source, session_id, row_id, payload)
-    select 'prod_bagging', pb.session_id, pb.id::text, to_jsonb(pb)
-    from production.prod_bagging pb
-    join doomed d on d.id = pb.id
-    returning 1
-  )
-  delete from production.prod_bagging pb
-  using doomed d
-  where pb.id = d.id;
-
-  get diagnostics v_bag = row_count;
-
-  raise notice 'Removed % duplicate debagging row(s) and % nulled-twin bagging row(s). Backed up in production.repair_20260902_backup.', v_debag, v_bag;
-end $$;
+-- NO "do $$ ... $$" ANYWHERE IN THIS FILE. The Supabase dashboard editor
+-- splits a script on semicolons, so the ones inside a dollar-quoted body end
+-- the statement early: "unterminated dollar-quoted string", then a syntax
+-- error on whatever line followed. Everything here is plain SQL, one
+-- statement per step, which the dashboard runs correctly.
+--
+-- The Step 2c safety check is built INTO this statement rather than sitting in
+-- a procedural guard: if ANY bag identity has rows that disagree on weight,
+-- `unsafe` is non-empty, `doomed` is empty, and this deletes nothing at all.
+-- It cannot half-run.
+--
+-- Backs every row up into production.repair_20260902_backup first.
+with unsafe as (
+  -- Identities whose rows disagree on weight. Those are not copies of one
+  -- another, and dropping one would lose a real figure.
+  select 1 as x
+  from production.prod_debagging pd
+  join production.prod_sessions s on s.id = pd.session_id and s.section_id = 'sieving'
+  where pd.product_type in ('Farm Bag', '500kg Farm Bag')
+    and pd.is_spillage = false
+    and coalesce(btrim(pd.notes), '') <> ''
+  group by pd.session_id,
+           upper(regexp_replace(coalesce(pd.lot_number, ''), '\s', '', 'g')),
+           btrim(pd.notes)
+  having count(distinct round(pd.kg_nett::numeric, 3)) > 1
+),
+ranked as (
+  select pd.id,
+         row_number() over (
+           partition by pd.session_id,
+                        upper(regexp_replace(coalesce(pd.lot_number, ''), '\s', '', 'g')),
+                        btrim(pd.notes)
+           order by pd.created_at, pd.bag_no, pd.id
+         ) as rn
+  from production.prod_debagging pd
+  join production.prod_sessions s on s.id = pd.session_id and s.section_id = 'sieving'
+  where pd.product_type in ('Farm Bag', '500kg Farm Bag')
+    and pd.is_spillage = false
+    and coalesce(btrim(pd.notes), '') <> ''
+),
+doomed as (
+  select id from ranked
+  where rn > 1
+    and not exists (select 1 from unsafe)
+),
+saved as (
+  insert into production.repair_20260902_backup (source, session_id, row_id, payload)
+  select 'prod_debagging', pd.session_id, pd.id::text, to_jsonb(pd)
+  from production.prod_debagging pd
+  join doomed d on d.id = pd.id
+  returning 1
+)
+delete from production.prod_debagging pd
+using doomed d
+where pd.id = d.id;
 
 
 -- ===========================================================================
--- Step 4. WRITES. Deduplicate draft_data, or Step 3 undoes itself
+-- Step 3b. WRITES. Remove the serial-less prod_bagging twins
 -- ===========================================================================
--- draft_data is what persist() rebuilds both tables from on the next save.
-
-create or replace function production.dedupe_sieving_draft(dd jsonb)
-returns jsonb
-language plpgsql
-immutable
-as $fn$
-declare
-  prods       jsonb := coalesce(dd -> 'productions', '[]'::jsonb);
-  out_prods   jsonb := '[]'::jsonb;
-  p           jsonb;
-  r           jsonb;
-  new_debag   jsonb;
-  new_outputs jsonb;
-  seen_debag  text[] := '{}';
-  seen_out    text[] := '{}';
-  k           text;
-begin
-  if jsonb_typeof(prods) <> 'array' then
-    return dd;
-  end if;
-
-  -- seen_debag and seen_out span EVERY batch of the session, because the copies
-  -- live in the OTHER batches, not alongside the original in its own.
-  for p in select value from jsonb_array_elements(prods) loop
-
-    new_debag := '[]'::jsonb;
-    for r in select value from jsonb_array_elements(case when jsonb_typeof(p -> 'data' -> 'debag') = 'array'
-                                        then p -> 'data' -> 'debag' else '[]'::jsonb end) loop
-      -- A farm bag is a physical object debagged ONCE, so (lot, bag label) is
-      -- its identity. A row with a BLANK label is never deduplicated: two
-      -- different unlabelled bags would collapse into one and UNDER-count,
-      -- which is worse than keeping a copy.
-      k := upper(btrim(coalesce(nullif(r ->> 'lot', ''), p ->> 'lot', '')))
-           || '|' || btrim(coalesce(r ->> 'bag_no', ''));
-      if btrim(coalesce(r ->> 'bag_no', '')) = '' then
-        new_debag := new_debag || jsonb_build_array(r);
-      elsif not (k = any(seen_debag)) then
-        seen_debag := seen_debag || k;
-        new_debag  := new_debag || jsonb_build_array(r);
-      end if;
-    end loop;
-
-    new_outputs := '[]'::jsonb;
-    for r in select value from jsonb_array_elements(case when jsonb_typeof(p -> 'data' -> 'outputs') = 'array'
-                                        then p -> 'data' -> 'outputs' else '[]'::jsonb end) loop
-      -- An output bag's serial is unique to one physical bag.
-      k := btrim(coalesce(r ->> 'serial', ''));
-      if k = '' then
-        new_outputs := new_outputs || jsonb_build_array(r);
-      elsif not (k = any(seen_out)) then
-        seen_out    := seen_out || k;
-        new_outputs := new_outputs || jsonb_build_array(r);
-      end if;
-    end loop;
-
-    if p ? 'data' then
-      p := jsonb_set(p, '{data,debag}',   new_debag,   true);
-      p := jsonb_set(p, '{data,outputs}', new_outputs, true);
-    end if;
-
-    out_prods := out_prods || jsonb_build_array(p);
-  end loop;
-
-  return jsonb_set(dd, '{productions}', out_prods, true);
-end
-$fn$;
-
-comment on function production.dedupe_sieving_draft(jsonb) is
-  'One-off repair helper for the 2026-08-31 Sieving changeover duplication. Drops repeated debag rows on (lot, bag label) and repeated output bags on serial, across every batch of a session. Blank labels and blank serials are never deduplicated. Safe to drop once the repair is confirmed.';
+-- A serial-less row matching a serialed bag on session + product + weight +
+-- bagging time is that bag's nulled twin. Backed up first.
+with spine as (
+  select pb.session_id, pb.product_type, round(pb.kg::numeric, 3) as kg, pb.bagging_time
+  from production.prod_bagging pb
+  join production.prod_sessions s on s.id = pb.session_id and s.section_id = 'sieving'
+  where pb.bag_serial_no is not null
+),
+doomed as (
+  select pb.id
+  from production.prod_bagging pb
+  join production.prod_sessions s on s.id = pb.session_id and s.section_id = 'sieving'
+  where pb.bag_serial_no is null
+    and exists (
+      select 1 from spine sp
+      where sp.session_id   = pb.session_id
+        and sp.product_type is not distinct from pb.product_type
+        and sp.kg           = round(pb.kg::numeric, 3)
+        and sp.bagging_time is not distinct from pb.bagging_time
+    )
+),
+saved as (
+  insert into production.repair_20260902_backup (source, session_id, row_id, payload)
+  select 'prod_bagging', pb.session_id, pb.id::text, to_jsonb(pb)
+  from production.prod_bagging pb
+  join doomed d on d.id = pb.id
+  returning 1
+)
+delete from production.prod_bagging pb
+using doomed d
+where pb.id = d.id;
 
 
--- Step 4a. READ ONLY preview: how many rows each session loses.
-select s.id, s.date, s.shift,
-       (select count(*)
-          from jsonb_array_elements(s.draft_data -> 'productions') pr,
-               jsonb_array_elements(case when jsonb_typeof(pr.value -> 'data' -> 'debag') = 'array'
-                                          then pr.value -> 'data' -> 'debag' else '[]'::jsonb end)
-       ) as debag_before,
-       (select count(*)
-          from jsonb_array_elements(production.dedupe_sieving_draft(s.draft_data) -> 'productions') pr,
-               jsonb_array_elements(case when jsonb_typeof(pr.value -> 'data' -> 'debag') = 'array'
-                                          then pr.value -> 'data' -> 'debag' else '[]'::jsonb end)
-       ) as debag_after,
-       (select count(*)
-          from jsonb_array_elements(s.draft_data -> 'productions') pr,
-               jsonb_array_elements(case when jsonb_typeof(pr.value -> 'data' -> 'outputs') = 'array'
-                                          then pr.value -> 'data' -> 'outputs' else '[]'::jsonb end)
-       ) as outputs_before,
-       (select count(*)
-          from jsonb_array_elements(production.dedupe_sieving_draft(s.draft_data) -> 'productions') pr,
-               jsonb_array_elements(case when jsonb_typeof(pr.value -> 'data' -> 'outputs') = 'array'
-                                          then pr.value -> 'data' -> 'outputs' else '[]'::jsonb end)
-       ) as outputs_after
-from production.prod_sessions s
-where s.section_id = 'sieving'
-  and jsonb_typeof(s.draft_data -> 'productions') = 'array'
-  and production.dedupe_sieving_draft(s.draft_data) is distinct from s.draft_data
-order by s.date desc, s.shift;
+-- ===========================================================================
+-- Step 4. Deduplicate draft_data, or Step 3 undoes itself
+-- ===========================================================================
+-- prod_debagging and prod_bagging are REBUILT from prod_sessions.draft_data on
+-- every save. Step 3 without this step reverses itself the moment an operator
+-- next opens the session. draft_data is the source; the tables are its
+-- projection.
+--
+-- Done in pure SQL, with no helper function, for the dollar-quoting reason at
+-- the top of Step 3a.
+--
+-- The identity rules are the same as everywhere else:
+--   debag   -- (lot, bag label), spanning EVERY batch of the session, because
+--              the copies live in the OTHER batches. A row with a BLANK label
+--              is never deduplicated: two unlabelled bags are two bags, and
+--              collapsing them would UNDER-count. Those get a per-row identity
+--              so they always survive.
+--   outputs -- the bag serial, which is unique to one physical bag. A blank
+--              serial is likewise never deduplicated.
+-- The first occurrence in capture order (batch position, then row position) is
+-- the one kept, and every other key of the batch and of `data` is preserved
+-- untouched.
 
 
--- Step 4b. WRITES: back up the document, then rewrite it.
-with changed as (
-  select s.id, s.draft_data
+-- Step 4a. READ ONLY preview: what Step 4b would change, per session.
+with prods as (
+  select s.id as session_id, s.date, s.shift, s.draft_data,
+         p.ord as p_idx, p.value as p_json
   from production.prod_sessions s
+  cross join lateral jsonb_array_elements(s.draft_data -> 'productions')
+       with ordinality as p(value, ord)
   where s.section_id = 'sieving'
     and jsonb_typeof(s.draft_data -> 'productions') = 'array'
-    and production.dedupe_sieving_draft(s.draft_data) is distinct from s.draft_data
+),
+debag as (
+  select pr.session_id, pr.p_idx, r.ord as r_idx, r.value as r_json,
+         case
+           when btrim(coalesce(r.value ->> 'bag_no', '')) = ''
+           then '#' || pr.p_idx || '.' || r.ord            -- blank label: never merged
+           else upper(regexp_replace(coalesce(nullif(r.value ->> 'lot', ''), pr.p_json ->> 'lot', ''), '\s', '', 'g'))
+                || '|' || btrim(coalesce(r.value ->> 'bag_no', ''))
+         end as identity
+  from prods pr
+  cross join lateral jsonb_array_elements(
+         case when jsonb_typeof(pr.p_json -> 'data' -> 'debag') = 'array'
+              then pr.p_json -> 'data' -> 'debag' else '[]'::jsonb end)
+       with ordinality as r(value, ord)
+),
+outs as (
+  select pr.session_id, pr.p_idx, r.ord as r_idx,
+         case
+           when btrim(coalesce(r.value ->> 'serial', '')) = ''
+           then '#' || pr.p_idx || '.' || r.ord            -- blank serial: never merged
+           else btrim(r.value ->> 'serial')
+         end as identity
+  from prods pr
+  cross join lateral jsonb_array_elements(
+         case when jsonb_typeof(pr.p_json -> 'data' -> 'outputs') = 'array'
+              then pr.p_json -> 'data' -> 'outputs' else '[]'::jsonb end)
+       with ordinality as r(value, ord)
+)
+select pr.session_id, min(pr.date) as date, min(pr.shift) as shift,
+       (select count(*) from debag d where d.session_id = pr.session_id)          as debag_before,
+       (select count(distinct d.identity) from debag d where d.session_id = pr.session_id) as debag_after,
+       (select count(*) from outs o where o.session_id = pr.session_id)           as outputs_before,
+       (select count(distinct o.identity) from outs o where o.session_id = pr.session_id)  as outputs_after
+from prods pr
+group by pr.session_id
+having (select count(*) from debag d where d.session_id = pr.session_id)
+       > (select count(distinct d.identity) from debag d where d.session_id = pr.session_id)
+    or (select count(*) from outs o where o.session_id = pr.session_id)
+       > (select count(distinct o.identity) from outs o where o.session_id = pr.session_id)
+order by min(pr.date) desc, min(pr.shift);
+
+
+-- Step 4b. WRITES. Back up the document, then rewrite it.
+with prods as (
+  select s.id as session_id, s.draft_data,
+         p.ord as p_idx, p.value as p_json
+  from production.prod_sessions s
+  cross join lateral jsonb_array_elements(s.draft_data -> 'productions')
+       with ordinality as p(value, ord)
+  where s.section_id = 'sieving'
+    and jsonb_typeof(s.draft_data -> 'productions') = 'array'
+),
+debag as (
+  select pr.session_id, pr.p_idx, r.ord as r_idx, r.value as r_json,
+         case
+           when btrim(coalesce(r.value ->> 'bag_no', '')) = ''
+           then '#' || pr.p_idx || '.' || r.ord
+           else upper(regexp_replace(coalesce(nullif(r.value ->> 'lot', ''), pr.p_json ->> 'lot', ''), '\s', '', 'g'))
+                || '|' || btrim(coalesce(r.value ->> 'bag_no', ''))
+         end as identity
+  from prods pr
+  cross join lateral jsonb_array_elements(
+         case when jsonb_typeof(pr.p_json -> 'data' -> 'debag') = 'array'
+              then pr.p_json -> 'data' -> 'debag' else '[]'::jsonb end)
+       with ordinality as r(value, ord)
+),
+debag_keep as (
+  -- First occurrence in capture order wins, across the whole session.
+  select distinct on (session_id, identity) session_id, p_idx, r_idx, r_json
+  from debag
+  order by session_id, identity, p_idx, r_idx
+),
+debag_new as (
+  select session_id, p_idx, jsonb_agg(r_json order by r_idx) as arr
+  from debag_keep group by session_id, p_idx
+),
+outs as (
+  select pr.session_id, pr.p_idx, r.ord as r_idx, r.value as r_json,
+         case
+           when btrim(coalesce(r.value ->> 'serial', '')) = ''
+           then '#' || pr.p_idx || '.' || r.ord
+           else btrim(r.value ->> 'serial')
+         end as identity
+  from prods pr
+  cross join lateral jsonb_array_elements(
+         case when jsonb_typeof(pr.p_json -> 'data' -> 'outputs') = 'array'
+              then pr.p_json -> 'data' -> 'outputs' else '[]'::jsonb end)
+       with ordinality as r(value, ord)
+),
+outs_keep as (
+  select distinct on (session_id, identity) session_id, p_idx, r_idx, r_json
+  from outs
+  order by session_id, identity, p_idx, r_idx
+),
+outs_new as (
+  select session_id, p_idx, jsonb_agg(r_json order by r_idx) as arr
+  from outs_keep group by session_id, p_idx
+),
+prods_rebuilt as (
+  -- Only the two arrays are replaced, and only where they already exist as
+  -- arrays, so no key is invented and nothing else in the batch is touched.
+  select pr.session_id, pr.p_idx,
+         case when jsonb_typeof(pr.p_json -> 'data' -> 'outputs') = 'array'
+              then jsonb_set(
+                     case when jsonb_typeof(pr.p_json -> 'data' -> 'debag') = 'array'
+                          then jsonb_set(pr.p_json, '{data,debag}', coalesce(dn.arr, '[]'::jsonb))
+                          else pr.p_json end,
+                     '{data,outputs}', coalesce(on_.arr, '[]'::jsonb))
+              else
+                   case when jsonb_typeof(pr.p_json -> 'data' -> 'debag') = 'array'
+                        then jsonb_set(pr.p_json, '{data,debag}', coalesce(dn.arr, '[]'::jsonb))
+                        else pr.p_json end
+         end as p_new
+  from prods pr
+  left join debag_new dn on dn.session_id = pr.session_id and dn.p_idx = pr.p_idx
+  left join outs_new  on_ on on_.session_id = pr.session_id and on_.p_idx = pr.p_idx
+),
+rebuilt as (
+  -- jsonb_agg only. There is no min() for jsonb, so the original document is
+  -- picked up from the table below rather than carried through an aggregate.
+  select pb.session_id, jsonb_agg(pb.p_new order by pb.p_idx) as prods_new
+  from prods_rebuilt pb
+  group by pb.session_id
+),
+changed as (
+  select r.session_id,
+         jsonb_set(s.draft_data, '{productions}', r.prods_new) as draft_new,
+         s.draft_data as draft_old
+  from rebuilt r
+  join production.prod_sessions s on s.id = r.session_id
+  where jsonb_set(s.draft_data, '{productions}', r.prods_new) is distinct from s.draft_data
 ),
 saved as (
   insert into production.repair_20260902_backup (source, session_id, payload)
-  select 'prod_sessions.draft_data', c.id, c.draft_data from changed c
+  select 'prod_sessions.draft_data', c.session_id, c.draft_old from changed c
   returning session_id
 )
 update production.prod_sessions s
-set draft_data = production.dedupe_sieving_draft(s.draft_data),
+set draft_data = c.draft_new,
     updated_at = now()
 from changed c
-where s.id = c.id;
+where s.id = c.session_id;
 
 
 -- ===========================================================================
@@ -612,9 +673,8 @@ where s.id = c.id;
 --         and b.session_id = s.id
 --         and b.id = <backup id>;
 --
--- 6d. Once the floor has confirmed the repair, the helper can go:
---       drop function production.dedupe_sieving_draft(jsonb);
---     Keep repair_20260902_backup for at least one audit cycle.
+-- 6d. Nothing to drop -- this script installs no helper function. Keep
+--     repair_20260902_backup for at least one audit cycle.
 
 
 -- ===========================================================================
