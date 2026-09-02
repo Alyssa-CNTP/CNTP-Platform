@@ -876,3 +876,74 @@ from qms.v_pending_bag_qc v
 where coalesce(btrim(v.bag_serial_no), '') <> ''
 group by 1, 2, 3
 order by 1, 2;
+
+
+-- ===========================================================================
+-- Step 9. The 2026-08-31 changeover: which bags are Export Blend
+-- ===========================================================================
+-- The floor's sheet for 31-08-2026 splits the morning run:
+--   Export       13 bags  G-825 M-647 4751 E-897 K-838 M-O77 G-474 F-254
+--                         BA-721 T-527 K-421 L-961 X-1602
+--   Export Blend  8 bags  5000 T-635 M-528 M-037 C-1910 K-580 C-296 1073
+-- 21 in total, which is exactly what Step 2d leaves after the repair. The bags
+-- were captured correctly; the changeover that should have opened a second
+-- batch for Export Blend misfired, so every row may be sitting under the first
+-- batch's grade.
+--
+-- The production order now shows a Grade column per bag and names every grade
+-- the day ran, so once these rows are right the split is visible without
+-- reading the paper. The display was only half the problem.
+
+-- 9a. READ ONLY. What grade is actually recorded per bag?
+--     If the Export Blend eight already read 'Export Blend', there is nothing
+--     to fix and 9b should NOT be run.
+select pd.grade,
+       count(*) as bags,
+       array_agg(btrim(pd.notes) order by btrim(pd.notes)) as bag_labels
+from production.prod_debagging pd
+where pd.session_id = '640a5b53-82a4-47a8-b7ca-b22cd7b2dfff'
+  and pd.product_type in ('Farm Bag', '500kg Farm Bag')
+  and pd.is_spillage = false
+group by pd.grade
+order by count(*) desc;
+
+-- 9b. WRITES. Set the eight Export Blend bags to their real grade.
+--     Run this ONLY if 9a shows them under the wrong grade, and ONLY after
+--     Step 3a -- otherwise it would also relabel the duplicate rows that Step
+--     3a is about to delete. Backed up first.
+with target as (
+  select pd.id
+  from production.prod_debagging pd
+  where pd.session_id = '640a5b53-82a4-47a8-b7ca-b22cd7b2dfff'
+    and pd.product_type in ('Farm Bag', '500kg Farm Bag')
+    and pd.is_spillage = false
+    and btrim(pd.notes) in ('5000', 'T-635', 'M-528', 'M-037', 'C-1910', 'K-580', 'C-296', '1073')
+    and coalesce(pd.grade, '') <> 'Export Blend'
+),
+saved as (
+  insert into production.repair_20260902_backup (source, session_id, row_id, payload)
+  select 'prod_debagging.grade', pd.session_id, pd.id::text, to_jsonb(pd)
+  from production.prod_debagging pd join target t on t.id = pd.id
+  returning 1
+)
+update production.prod_debagging pd
+set grade = 'Export Blend'
+from target t
+where pd.id = t.id;
+
+-- 9c. READ ONLY. Verify: 13 Export and 8 Export Blend, 21 in total.
+--     Re-run 9a.
+--
+-- 9d. NOT DONE, and it needs the floor. The OUTPUT bags for that morning also
+--     carry a grade (bag_tags.destination), and the sheet does not say which
+--     bagged-out bags were Export Blend -- it lists the farm bags that went
+--     IN. Correcting the output side would mean guessing which output bag
+--     belongs to which grade, and a wrong guess mislabels finished product.
+--     Ask the operator which output serials were Export Blend, then set
+--     bag_tags.destination = 'B' for those specific serials.
+--     This lists what there is to decide about:
+--       select t.serial_number, t.product_type, t.destination, t.weight_kg,
+--              t.printed_at
+--       from production.bag_tags t
+--       where t.session_id = '640a5b53-82a4-47a8-b7ca-b22cd7b2dfff'
+--       order by t.printed_at;

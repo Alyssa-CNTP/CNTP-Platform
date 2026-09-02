@@ -16,7 +16,7 @@ import { useParams, useRouter } from 'next/navigation'
 import { format } from 'date-fns'
 import { ArrowLeft, Printer, Loader2, CheckCircle2, Clock, Pen, Play, Radio, Sparkles, MessageSquare, MessageSquarePlus, ArrowRightLeft, AlertTriangle } from 'lucide-react'
 import { loadOrderDay, type OrderDay, type OrderBagRow, type OrderRebagRow, type OrderFreshTopUpRow, type OrderDebagRow, type OrderShiftBlock, type OrderMassBalance, type OrderTimesheet, type OrderNote } from '@/lib/production/order-detail'
-import { sectionMeta } from '@/lib/production/capture-config'
+import { sectionMeta, GRADE_TO_LOCAL_EXPORT } from '@/lib/production/capture-config'
 import { formatSAST } from '@/lib/production/shifts'
 import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
@@ -135,14 +135,23 @@ export default function ProductionOrderDetailPage() {
   if (loading) return <div className="p-12 flex justify-center"><Loader2 className="animate-spin text-text-faint" /></div>
   if (error || !day) return <div className="p-6 text-center text-text-muted">{error ?? 'Production order not found.'}</div>
 
-  const { section_id, date, status, grade, poItems, shifts, bags, bagsOutputKg, rebagRows, freshTopUps, debags, debagDuplicatesHidden, duplicateOutputsHidden, massBalance: mb, timesheets, takeovers, notes, representativeSessionId } = day
+  const { section_id, date, status, grade, gradeLetters, poItems, shifts, bags, bagsOutputKg, rebagRows, freshTopUps, debags, debagDuplicatesHidden, duplicateOutputsHidden, massBalance: mb, timesheets, takeovers, notes, representativeSessionId } = day
   const meta = sectionMeta(section_id)
   const st = STATUS[status] ?? STATUS.new
   const operators = Array.from(new Set(shifts.flatMap(s => s.session.operator_names ?? [])))
   const variant = shifts.map(s => s.session.variant).find(Boolean) ?? null
   const supervisor = shifts.map(s => s.session.sup_name_signoff || s.session.supervisor_name).find(Boolean) ?? null
   const submittedAt = shifts.map(s => s.session.submitted_at).filter(Boolean).sort().slice(-1)[0] ?? null
-  const variantGrade = [variant, grade ? `Grade ${grade}` : null].filter(Boolean).join(' · ') || '—'
+  // Every grade the day actually ran, not just the first batch's. A changeover
+  // run (Export, then Export Blend after it) has two, and reporting the first
+  // one made 2026-08-31 read as a pure Export order with no Export Blend
+  // anywhere on it -- the bags were captured, the grade just was not shown.
+  const gradeNames = (gradeLetters ?? []).map(g => GRADE_TO_LOCAL_EXPORT[g] ?? `Grade ${g}`)
+  const gradeText = gradeNames.length > 1
+    ? gradeNames.join(' + ')
+    : (gradeNames[0] ?? (grade ? `Grade ${grade}` : null))
+  const variantGrade = [variant, gradeText].filter(Boolean).join(' · ') || '—'
+  const changedOver = gradeNames.length > 1
   const poText = poItems.length
     ? poItems.map(p => p.description ? `${p.code} — ${p.description}` : p.code).join('; ')
     : '—'
@@ -215,6 +224,13 @@ export default function ProductionOrderDetailPage() {
             <Field label="Supervisor" value={supervisor || '—'} bold />
             <Field label="Submitted" value={submittedAt ? format(new Date(submittedAt), 'd MMM HH:mm') : '—'} bold />
             <Field label="Production order" value={poText} bold className="col-span-2 sm:col-span-4" />
+            {changedOver && (
+              <p className="col-span-2 sm:col-span-4 text-[11.5px] text-text-muted leading-relaxed">
+                This run changed grade mid-shift, so it covers {gradeNames.join(' and ')}. The
+                Grade column on the tables below is per bag -- that is what says which bag belongs
+                to which grade.
+              </p>
+            )}
           </div>
         </PanelBody>
       </Panel>
@@ -452,19 +468,24 @@ function groupBy<T>(rows: T[], key: (r: T) => string): { type: string; rows: T[]
 // is stated on the order). Compact list, mobile-friendly, with a per-type total.
 function InputTypeGroup({ type, rows, multiShift }: { type: string; rows: OrderDebagRow[]; multiShift: boolean }) {
   const kg = rows.reduce((s, r) => s + (Number(r.kg_nett) || 0), 0)
+  // Per-grade subtotals, shown on the header only when this type actually holds
+  // more than one grade -- which is the whole point on a changeover run: the
+  // total alone cannot say how much of it was Export Blend.
+  const byGrade = gradeSplit(rows.map(r => ({ grade: r.grade, kg: Number(r.kg_nett) || 0 })))
   return (
     <div className="rounded-xl border border-surface-rule overflow-hidden">
       <div className="flex items-center justify-between gap-2 px-3 py-2 bg-surface-dim">
         <span className="text-[12.5px] font-semibold text-text">{type}</span>
         <span className="font-mono text-[11px] text-text-muted whitespace-nowrap">
+          {byGrade && <span className="mr-2 text-text-faint">{byGrade}</span>}
           {rows.length} · {kg.toFixed(1)} kg
         </span>
       </div>
       <div className="overflow-x-auto">
-        <table className="w-full text-left border-collapse min-w-[380px]">
+        <table className="w-full text-left border-collapse min-w-[440px]">
           <thead>
             <tr>
-              {['Farm bag', 'Lot', multiShift ? 'Shift' : null, 'kg'].filter(Boolean).map(h => (
+              {['Farm bag', 'Lot', 'Grade', multiShift ? 'Shift' : null, 'kg'].filter(Boolean).map(h => (
                 <th key={h as string} className={`px-3 py-1.5 font-mono text-[9px] font-semibold text-text-faint uppercase tracking-[0.06em] whitespace-nowrap ${h === 'kg' ? 'text-right' : ''}`}>{h}</th>
               ))}
             </tr>
@@ -474,6 +495,7 @@ function InputTypeGroup({ type, rows, multiShift }: { type: string; rows: OrderD
               <tr key={d.id}>
                 <td className="px-3 py-1.5 font-mono text-[12px] text-text">{d.notes || d.bag_serial_no || '—'}</td>
                 <td className="px-3 py-1.5 text-[12px] text-text-muted">{d.lot_number || '—'}</td>
+                <td className="px-3 py-1.5 text-[12px] text-text-muted whitespace-nowrap">{d.grade || '—'}</td>
                 {multiShift && <td className="px-3 py-1.5 text-[11px] text-text-faint capitalize">{d.shift}</td>}
                 <td className="px-3 py-1.5 font-mono text-[12px] text-text-muted text-right tabular-nums">{Number(d.kg_nett).toFixed(1)}</td>
               </tr>
@@ -485,14 +507,33 @@ function InputTypeGroup({ type, rows, multiShift }: { type: string; rows: OrderD
   )
 }
 
+// "Export 4550 · Export Blend 2800" -- null when there is only one grade (or
+// none recorded), so a single-grade run gains no noise.
+function gradeSplit(rows: { grade: string | null; kg: number }[]): string | null {
+  const m = new Map<string, number>()
+  for (const r of rows) {
+    const k = (r.grade || '').trim()
+    if (!k) continue
+    m.set(k, (m.get(k) ?? 0) + r.kg)
+  }
+  if (m.size < 2) return null
+  return Array.from(m.entries())
+    .sort((a, b) => b[1] - a[1])
+    .map(([g, kg]) => `${g} ${kg.toFixed(0)}`)
+    .join(' · ')
+}
+
 // One output product type's bags — compact per-bag lines with a per-type total.
 function OutputTypeGroup({ type, rows, multiShift }: { type: string; rows: OrderBagRow[]; multiShift: boolean }) {
   const kg = rows.reduce((s, r) => s + (r.kg || 0), 0)
+  // Per-grade split, shown only on a mixed group -- see gradeSplit.
+  const byGrade = gradeSplit(rows.map(r => ({ grade: r.grade, kg: r.kg || 0 })))
   return (
     <div className="rounded-xl border border-surface-rule overflow-hidden">
       <div className="flex items-center justify-between gap-2 px-3 py-2 bg-surface-dim">
         <span className="text-[12.5px] font-semibold text-text">{type}</span>
         <span className="font-mono text-[11px] text-text-muted whitespace-nowrap">
+          {byGrade && <span className="mr-2 text-text-faint">{byGrade}</span>}
           {rows.length} bag{rows.length === 1 ? '' : 's'} · {kg.toFixed(1)} kg
         </span>
       </div>
@@ -501,6 +542,10 @@ function OutputTypeGroup({ type, rows, multiShift }: { type: string; rows: Order
           <li key={b.id} className="flex items-center gap-2 px-3 py-1.5 text-[12px]">
             <span className="font-mono text-text-faint w-6 shrink-0 text-right">{i + 1}</span>
             <span className="font-mono text-text flex-1 min-w-0 truncate">{b.bag_serial_no || '—'}</span>
+            {/* The grade this bag was TAGGED for. On a changeover run this is
+                the only thing that says which bag is Export and which is
+                Export Blend -- the order header cannot, it covers both. */}
+            <span className="text-[11px] text-text-muted shrink-0 whitespace-nowrap">{b.grade || '—'}</span>
             {multiShift && <span className="text-[10px] text-text-faint shrink-0 capitalize">{b.shift}</span>}
             {b.output_group && <span className="font-mono text-[10px] text-text-faint shrink-0">grp {b.output_group}</span>}
             <span className="font-mono text-text-muted shrink-0 tabular-nums w-16 text-right">{b.kg.toFixed(1)} kg</span>

@@ -8,6 +8,7 @@
 // detail page so the report always shows the same data.
 
 import { normalizeLot } from '@/lib/production/self-heal-reconcile'
+import { GRADE_TO_LOCAL_EXPORT } from '@/lib/production/capture-config'
 import { getDb } from '@/lib/supabase/db'
 import { massBalanceToleranceFor } from '@/lib/production/capture-config'
 
@@ -69,6 +70,12 @@ export interface OrderBagRow {
   // `bags` and in the separate `rebagRows` list.
   bornViaRebag: boolean
   rebagSourceSerial: string | null
+  // The grade this bag was TAGGED for -- bag_tags.destination, resolved from
+  // the A/B/C letter to the words on the label ('Export', 'Export Blend',
+  // 'Domestic/Local'). Per bag, not per day: a run that changed over mid-shift
+  // produces bags of both grades under one production order, and until this
+  // was carried through there was no way to tell which was which.
+  grade: string | null
 }
 
 // A re-bag transaction shown on its own panel, distinct from ordinary
@@ -190,6 +197,7 @@ export interface OrderDay {
   representativeSessionId: string   // earliest non-archived session — list links here
   status: string                    // aggregate day status
   grade: string | null              // production grade (A/B/C), from the capture record
+  gradeLetters: string[]            // every grade letter captured that day, in capture order
   poItems: OrderPO[]                // production order codes + their Master Inventory descriptions
   shifts: OrderShiftBlock[]         // morning first
   bags: OrderBagRow[]               // merged across ALL shifts, continuous 1..N, shift-tagged
@@ -261,6 +269,15 @@ function sumMassBalance(shifts: OrderShiftBlock[], sectionId: string): OrderMass
 // merely topped up LATER (whose first row is still 'bagging_out'). A bag
 // with no scan_events row at all (shouldn't happen, but defensively) is
 // treated as an ordinary bag, not a re-bag.
+// bag_tags.destination holds the A/B/C letter the operator picked; the words
+// on the label (and on the production order) come from the same map the capture
+// screen uses, so the order can never disagree with the bag in someone's hand.
+function gradeLabel(letter: string | null | undefined): string | null {
+  const v = String(letter ?? '').trim().toUpperCase()
+  if (!v) return null
+  return GRADE_TO_LOCAL_EXPORT[v] ?? v
+}
+
 function mergeOutputBags(
   tags: any[], bagging: any[],
   firstEvent: Map<string, { action: string; related_serial_number: string | null }>,
@@ -295,6 +312,7 @@ function mergeOutputBags(
       session_id: t.session_id,
       bornViaRebag,
       rebagSourceSerial: bornViaRebag ? (fe?.related_serial_number ?? null) : null,
+      grade: gradeLabel(t.destination),
     })
   }
   for (const pb of pbBySerial.values()) {
@@ -305,6 +323,7 @@ function mergeOutputBags(
       variant: pb.variant ?? null, acumatica_id: null,
       kg: Number(pb.kg) || 0, bagging_time: pb.bagging_time ?? null,
       session_id: pb.session_id, bornViaRebag: false, rebagSourceSerial: null,
+      grade: null,
     })
   }
   // A serial-less prod_bagging row that mirrors a bag already on the spine is a
@@ -334,6 +353,7 @@ function mergeOutputBags(
       variant: pb.variant ?? null, acumatica_id: null,
       kg: Number(pb.kg) || 0, bagging_time: pb.bagging_time ?? null,
       session_id: pb.session_id, bornViaRebag: false, rebagSourceSerial: null,
+      grade: null,
     })
   }
 
@@ -377,13 +397,23 @@ export async function loadOrderDay(sessionId: string): Promise<OrderDay | null> 
     .flatMap(s => ((s.draft_data?.productions ?? []) as any[]).map(p => p?.grade))
     .find((g: any) => !!g) ?? null
 
+  // EVERY grade letter captured across the day, in capture order. A changeover
+  // run (Export in the morning, Export Blend after it) has two, and reporting
+  // only the first read the whole order as one grade — which is exactly how
+  // 2026-08-31 came to show no Export Blend at all. Kept as letters; the page
+  // resolves them to labels.
+  const gradeLetters: string[] = Array.from(new Set(
+    sessions
+      .flatMap(s => ((s.draft_data?.productions ?? []) as any[]).map(p => p?.grade))
+      .filter((g: any): g is string => !!g)))
+
   // Every production-order code used across the day, resolved to its Master
   // Inventory description so the report shows "CODE — Description".
   const poCodes = Array.from(new Set(sessions.flatMap(s => (s.production_orders ?? []) as string[]).filter(Boolean)))
 
   const [mbRes, tagsRes, bagsRes, debagsRes, sigRes, reopenRes, notesRes, checksRes, tsRes, takeoverRes, invRes] = await Promise.all([
     db.from('prod_mass_balance').select('*').in('session_id', ids),
-    db.from('bag_tags').select('session_id,serial_number,product_type,variant,acumatica_id,weight_kg,printed_at,status').in('session_id', ids),
+    db.from('bag_tags').select('session_id,serial_number,product_type,variant,acumatica_id,weight_kg,printed_at,status,destination').in('session_id', ids),
     db.from('prod_bagging').select('*').in('session_id', ids),
     db.from('prod_debagging').select('*').in('session_id', ids).order('bag_no'),
     db.from('session_signatures').select('*').in('session_id', ids),
@@ -419,7 +449,7 @@ export async function loadOrderDay(sessionId: string): Promise<OrderDay | null> 
   }
   if (serialToSession.size) {
     const { data: strandedTags } = await db.from('bag_tags')
-      .select('session_id,serial_number,product_type,variant,acumatica_id,weight_kg,printed_at,status')
+      .select('session_id,serial_number,product_type,variant,acumatica_id,weight_kg,printed_at,status,destination')
       .in('serial_number', Array.from(serialToSession.keys()))
     for (const t of ((strandedTags as any[]) ?? [])) {
       if (!t.session_id) t.session_id = serialToSession.get(t.serial_number) ?? null
@@ -481,6 +511,9 @@ export async function loadOrderDay(sessionId: string): Promise<OrderDay | null> 
             acumatica_id: out.code || null, kg: Number(out.weight) || 0,
             bagging_time: out.logged_at || null, session_id: s.id, shift: s.shift ?? '',
             bornViaRebag: false, rebagSourceSerial: null,
+            // draft_data carries the operator's destination letter per bag,
+            // so a bag that never reached bag_tags still reports its grade.
+            grade: gradeLabel(out.destination ?? prod.grade),
           })
           bagSerials.add(out.serial)
         }
@@ -675,6 +708,7 @@ export async function loadOrderDay(sessionId: string): Promise<OrderDay | null> 
     representativeSessionId: representative.id,
     status: aggregateDayStatus(shifts),
     grade,
+    gradeLetters,
     poItems,
     shifts,
     bags,
