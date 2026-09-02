@@ -96,18 +96,19 @@ comment on table production.repair_20260902_backup is
 -- debagging rows than distinct bags. A database with no 2026-09-01 sieving
 -- session, or with a single-figure row count on 31-08, is not the one the
 -- floor is capturing into.
+-- Counted with scalar subqueries, NOT by joining both tables to the session.
+-- Joining prod_debagging and prod_bagging in one query pairs every debag row
+-- with every bagging row and multiplies both counts.
 select s.date, s.shift, s.id as session_id, s.status,
-       count(pd.id) filter (
-         where pd.product_type in ('Farm Bag', '500kg Farm Bag')
-           and pd.is_spillage = false
-       ) as debag_rows,
-       count(pb.id) as bagging_rows
+       (select count(*) from production.prod_debagging pd
+         where pd.session_id = s.id
+           and pd.product_type in ('Farm Bag', '500kg Farm Bag')
+           and pd.is_spillage = false) as debag_rows,
+       (select count(*) from production.prod_bagging pb
+         where pb.session_id = s.id) as bagging_rows
 from production.prod_sessions s
-left join production.prod_debagging pd on pd.session_id = s.id
-left join production.prod_bagging   pb on pb.session_id = s.id
 where s.section_id = 'sieving'
   and s.date >= date '2026-08-28'
-group by s.date, s.shift, s.id, s.status
 order by s.date, s.shift;
 
 
@@ -282,7 +283,10 @@ order by pb.session_id, pb.bag_no;
 -- (41 bags, 41 distinct pairs). Check it again here before writing anything.
 --
 -- Step 3 runs this same check itself and aborts if it finds anything.
-select pd.session_id, pd.lot_number, btrim(pd.notes) as bag_label,
+select pd.session_id,
+       upper(regexp_replace(coalesce(pd.lot_number, ''), '\s', '', 'g')) as lot_identity,
+       array_agg(distinct pd.lot_number) as lot_written_as,
+       btrim(pd.notes) as bag_label,
        count(*) as rows_with_this_identity,
        count(distinct round(pd.kg_nett::numeric, 3)) as distinct_weights,
        array_agg(distinct round(pd.kg_nett::numeric, 3)) as weights
@@ -293,6 +297,35 @@ where pd.product_type in ('Farm Bag', '500kg Farm Bag')
   and coalesce(btrim(pd.notes), '') <> ''
 group by pd.session_id, upper(regexp_replace(coalesce(pd.lot_number, ''), '\s', '', 'g')), btrim(pd.notes)
 having count(distinct round(pd.kg_nett::numeric, 3)) > 1;
+
+
+-- ===========================================================================
+-- Step 2d. READ ONLY. The bags that SURVIVE, per session
+-- ===========================================================================
+-- Check this against the floor's paper sheet for the day before running Step
+-- 3. The count here is what the production order will read afterwards, so a
+-- disagreement with the sheet is a reason to stop, not to proceed.
+--
+-- 2026-09-01 morning is the one to look at hardest: the dedup leaves 19 bags
+-- there against 17 bulk bags on the capture list, so two identities need
+-- accounting for before the rest is deleted.
+select s.date, s.shift, pd.session_id,
+       count(*) as bags_after_repair,
+       round(sum(pd.kg_nett)::numeric, 1) as kg_after_repair,
+       array_agg(btrim(pd.notes) order by btrim(pd.notes)) as bag_labels
+from (
+  select distinct on (pd.session_id, upper(regexp_replace(coalesce(pd.lot_number, ''), '\s', '', 'g')), btrim(pd.notes))
+         pd.session_id, pd.notes, pd.kg_nett
+  from production.prod_debagging pd
+  join production.prod_sessions s on s.id = pd.session_id and s.section_id = 'sieving'
+  where pd.product_type in ('Farm Bag', '500kg Farm Bag')
+    and pd.is_spillage = false
+    and coalesce(btrim(pd.notes), '') <> ''
+  order by pd.session_id, upper(regexp_replace(coalesce(pd.lot_number, ''), '\s', '', 'g')), btrim(pd.notes), pd.created_at, pd.bag_no, pd.id
+) pd
+join production.prod_sessions s on s.id = pd.session_id
+group by s.date, s.shift, pd.session_id
+order by s.date desc, s.shift;
 
 
 -- ===========================================================================
@@ -550,3 +583,36 @@ where s.id = c.id;
 -- 6d. Once the floor has confirmed the repair, the helper can go:
 --       drop function production.dedupe_sieving_draft(jsonb);
 --     Keep repair_20260902_backup for at least one audit cycle.
+
+
+-- ===========================================================================
+-- Step 7. READ ONLY. The bags sitting in Quality's awaiting-sampling queue
+-- ===========================================================================
+-- Quality reported 62 bags waiting to be sampled, and that the backlog is
+-- getting confused with newly loaded bags. That queue is qms.v_pending_bag_qc,
+-- which reads prod_bagging (20260813_007) -- so the serial-less twins Step 3b
+-- removes are IN it, appearing as cards with no serial that can never be
+-- sampled and therefore never clear.
+--
+-- Step 3b removes those. It does NOT touch the rest, and the rest are real
+-- bags that genuinely have not been QC'd. Clearing those is a Quality
+-- decision, not a data repair -- do not delete them to make a number go down.
+--
+-- 7a. Split the queue: how much of it is the fault, and how much is real work.
+select case when coalesce(btrim(v.bag_serial_no), '') = ''
+            then 'no serial - changeover twin, removed by Step 3b'
+            else 'has serial - a real bag still awaiting QC' end as kind,
+       count(*)             as bags,
+       min(v.bagged_at)::date as oldest,
+       max(v.bagged_at)::date as newest
+from qms.v_pending_bag_qc v
+group by 1
+order by 2 desc;
+
+-- 7b. The real ones, oldest first -- this is the list for Quality to work
+--     through or to decide about.
+select v.bagged_at::date as bagged_on, v.product, count(*) as bags
+from qms.v_pending_bag_qc v
+where coalesce(btrim(v.bag_serial_no), '') <> ''
+group by 1, 2
+order by 1, 2;
