@@ -60,6 +60,12 @@ Monday 31-08 ran Export, then Export Blend after the changeover, and the order s
 - **Neither table showed a grade at all.** `prod_debagging.grade` was already correct per row and simply was not rendered; output bags had no grade because `bag_tags.destination` was never selected. Both tables now carry a **Grade** column, and a group holding more than one grade shows the per-grade kg split on its header. A single-grade run gains no noise.
 - Confirmed against the floor's sheet for 31-08: **13 Export, 8 Export Blend**, matching the stored grades exactly. The data was right; only the display was missing.
 
+### Capture screens were SHORT by any same-day top-up
+
+The Sieving capture total and the Capture Overview both excluded a top-up whose bag had been bagged in the same record, on the stated grounds that it was "already inside that bag's captured weight". That premise was wrong: `HalfBagTopUpModal` never touches `draft_data` — it says so at the top of the file — so the increment lives only in `bag_tags` and `scan_events`. A bag captured at 300 kg still reads 300 kg locally after a 22 kg top-up, so excluding the increment left the displayed output **short by it** rather than guarding a double count.
+
+Every increment the day recorded now counts, wherever the topped bag came from. Only the increment, and only that day's: a top-up on a later day is that day's output. The full history of a bag — how many times, when, how much — stays on its `scan_events` rows, which are never rewritten, and is what the top-up activity list and Bag Tracking read.
+
 ### Production order counts the top-up increment, never the bag's later total
 
 `addFreshWeightToBag` overwrites `bag_tags.weight_kg` in place — current + increment — while the `scan_events` row it writes alongside carries only the **increment** and is never rewritten. The order page took each bag's kg from `bag_tags.weight_kg`, i.e. the bag's weight *today*.

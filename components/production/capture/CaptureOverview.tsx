@@ -375,14 +375,19 @@ export function CaptureOverview({
   const hasData       = debagGroups.length > 0 || productGroups.length > 0
   const poStr         = formatPO(productionOrders)
 
-  // A top-up into a bag one of THESE batches bagged is already inside that
-  // bag's own captured weight — counting it again would double it. In practice
-  // the topped bag is from an earlier day, which is why the total ran short
-  // rather than over.
-  const ownSerials = useMemo(
-    () => new Set(productGroups.flatMap(g => g.lots.flatMap(l => l.bags.map(b => b.serial)))),
-    [productGroups])
-  const freshTopUps = topUpRows.filter(r => !ownSerials.has(r.serial))
+  // EVERY top-up increment counts, including one into a bag bagged earlier the
+  // same day. HalfBagTopUpModal never touches draft_data (it says so at the top
+  // of that file) -- the increment lives only in bag_tags and scan_events -- so
+  // a bag captured at 300 kg still reads 300 kg in the local array after being
+  // topped up by 22. Excluding same-day tops-ups, as this did, therefore left
+  // the displayed output SHORT by them rather than protecting against a double
+  // count.
+  //
+  // Only the increment, and only today's: that weight was produced today. A
+  // top-up on a later day belongs to that day's total, and the full history of
+  // a bag -- how many times, when, how much -- stays on its scan_events rows,
+  // which are never rewritten.
+  const freshTopUps = topUpRows
   const topUpKg = freshTopUps.reduce((t, r) => t + r.kg, 0)
   // Keyed by the product of the bag that was topped up, so each one can sit
   // under that product's own heading in the bagging list instead of only
@@ -395,7 +400,7 @@ export function CaptureOverview({
       if (cur) cur.push(r); else m.set(k, [r])
     }
     return m
-  }, [topUpRows, ownSerials])
+  }, [topUpRows])
   // A top-up into a product nothing was bagged of today has no group to sit
   // under, so it needs one of its own or it would vanish from the list while
   // still counting toward the total.
@@ -473,14 +478,9 @@ export function CaptureOverview({
     [spansDay, dayProductions, productions])
   const dayDebagKg   = dayDebag.groups.reduce((t, g) => t + g.totalKg, 0)
   const dayBaggedKg  = dayProducts.reduce((t, g) => t + g.totalKg, 0)
-  const dayOwnSerials = useMemo(
-    () => new Set(dayProducts.flatMap(g => g.lots.flatMap(l => l.bags.map(b => b.serial)))),
-    [dayProducts])
-  // A top-up into a bag the DAY itself bagged is already inside that bag's
-  // captured weight; only a top-up into an older bag is new output.
-  const dayTopUpNew = spansDay
-    ? dayTopUpKg - topUpRows.filter(r => dayOwnSerials.has(r.serial)).reduce((t, r) => t + r.kg, 0)
-    : topUpKg
+  // Every increment the day recorded, for the same reason as above: none of
+  // them reach draft_data, so none of them are already in dayBaggedKg.
+  const dayTopUpNew = spansDay ? dayTopUpKg : topUpKg
 
   const mbInputKg  = dayDebagKg + dayDebag.bucketInKg + dayDebag.machineKg
   const mbOutputKg = dayBaggedKg + Math.max(0, dayTopUpNew)
@@ -940,7 +940,7 @@ export function CaptureOverview({
                   Input is everything debagged plus machine spillage
                   {bucketInKg > 0 && <>, plus the {bucketInKg.toFixed(1)} kg of bucket elevator carried in from yesterday (always this run&apos;s own variant — the carry-over ledger keeps conventional and organic apart)</>}.
                   {' '}Output is bags bagged out
-                  {topUpKg > 0 && <> plus {topUpKg.toFixed(1)} kg added into older bags by half-bag top-up — the top-up amount only, not those bags&apos; full weight</>}.
+                  {topUpKg > 0 && <> plus the {topUpKg.toFixed(1)} kg added into other bags by half-bag top-up — only the amount added today, never a topped bag&apos;s full weight, and never an increment from another day</>}.
                   {bucketOutKg > 0 && <> The {bucketOutKg.toFixed(1)} kg left in the elevator for tomorrow is work in progress and counts on neither side.</>}
                   {duplicatesHidden > 0 && <> Excludes {duplicatesHidden} duplicate debagging row{duplicatesHidden === 1 ? '' : 's'} left by the changeover fault.</>}
                   {spansDay && <> These totals are the <strong>whole day, both shifts</strong> — the

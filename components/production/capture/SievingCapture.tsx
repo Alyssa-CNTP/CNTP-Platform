@@ -553,12 +553,19 @@ export function SievingCapture({
     return () => { cancelled = true }
   }, [sectionId, sessionId])
 
-  // A top-up into a bag THIS session bagged is already inside that bag's
-  // captured weight in value.outputs — counting it again would double it. In
-  // practice the topped bag is from an earlier day (STRB-310826-*,
-  // STIS-280826-*), which is why the total was short rather than over.
-  const ownSerials = new Set((value.outputs ?? []).map(b => b.serial))
-  const topUpKg = topUpRows.filter(r => !ownSerials.has(r.serial)).reduce((t, r) => t + r.kg, 0)
+  // EVERY top-up increment counts, including one into a bag bagged earlier the
+  // same day. HalfBagTopUpModal never touches draft_data (it says so at the top
+  // of that file) -- the increment lives only in bag_tags and scan_events -- so
+  // a bag captured at 300 kg still reads 300 kg in the local array after being
+  // topped up by 22. Excluding same-day tops-ups, as this did, therefore left
+  // the displayed output SHORT by them rather than protecting against a double
+  // count.
+  //
+  // Only the increment, and only today's: that weight was produced today. A
+  // top-up on a later day belongs to that day's total, and the full history of
+  // a bag -- how many times, when, how much -- stays on its scan_events rows,
+  // which are never rewritten.
+  const topUpKg = topUpRows.reduce((t, r) => t + r.kg, 0)
   const totalOutWithTopUps = totalOut + topUpKg
   const byType: Record<string, number> = {}
   value.outputs.forEach(b => { byType[b.productType] = (byType[b.productType] ?? 0) + 1 })
