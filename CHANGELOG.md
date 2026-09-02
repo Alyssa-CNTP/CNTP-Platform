@@ -60,6 +60,18 @@ Monday 31-08 ran Export, then Export Blend after the changeover, and the order s
 - **Neither table showed a grade at all.** `prod_debagging.grade` was already correct per row and simply was not rendered; output bags had no grade because `bag_tags.destination` was never selected. Both tables now carry a **Grade** column, and a group holding more than one grade shows the per-grade kg split on its header. A single-grade run gains no noise.
 - Confirmed against the floor's sheet for 31-08: **13 Export, 8 Export Blend**, matching the stored grades exactly. The data was right; only the display was missing.
 
+### Production order counts the top-up increment, never the bag's later total
+
+`addFreshWeightToBag` overwrites `bag_tags.weight_kg` in place — current + increment — while the `scan_events` row it writes alongside carries only the **increment** and is never rewritten. The order page took each bag's kg from `bag_tags.weight_kg`, i.e. the bag's weight *today*.
+
+So a bag bagged at 300 kg on 31-08 and topped up 22 kg on 01-09 had been reading **322 kg on the 31-08 order** ever since, while 01-09 separately counted the 22 kg as a fresh top-up. The same 22 kg on two orders, and the earlier day overstated by it.
+
+- A bag's kg on an order is now its **starting weight** — the earliest `scan_events` row, which is never rewritten — plus only **that day's own** top-up increments. A top-up from another day stays that day's output, as a `freshTopUp`.
+- Bags predating event logging (no weight on any event) fall back to `bag_tags.weight_kg` and keep the old behaviour.
+- `20260902_004_topup_inflation_impact.sql` (read-only) lists every affected bag with what the order used to show, what it will show, the gap, and the dates it was topped up — plus per-order totals, so the correction is not a surprise on a day already signed off.
+
+Capture Overview was never affected: its outputs come from `draft_data`'s captured weight, not `bag_tags`.
+
 ### Capture Overview — one balance for the whole day, and top-ups shown where they land
 
 - **The mass balance now covers both shifts.** New `dayProductions` prop, used for the balance and nothing else: the debagging and bagging tables stay this record's own capture so they still match the Capture tab bag for bag. The panel header says which scope it is (`full day, both shifts` vs `this shift`) and the note underneath says outright that the tables above are smaller and why — the two disagreeing silently is what caused the earlier confusion.
