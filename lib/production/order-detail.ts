@@ -284,10 +284,10 @@ function gradeLabel(letter: string | null | undefined): string | null {
 
 function mergeOutputBags(
   tags: any[], bagging: any[],
-  firstEvent: Map<string, { action: string; related_serial_number: string | null; weight_kg: number | null }>,
-  // Top-up increments captured by THIS day's sessions, per serial. Added to the
-  // bag's starting weight; a top-up from another day is that day's output.
-  sameDayTopUpKg: Map<string, number>,
+  firstEvent: Map<string, { action: string; related_serial_number: string | null }>,
+  // Increments added on a LATER production day, per serial. Subtracted from the
+  // bag's current weight, because they are that later day's output.
+  laterTopUpKg: Map<string, number>,
 ): { rows: OrderBagRow[]; duplicateOutputsHidden: number } {
   const voided = new Set(tags.filter(t => t.status === 'voided').map(t => t.serial_number))
   const active = tags.filter(t => t.status !== 'voided')
@@ -314,12 +314,12 @@ function mergeOutputBags(
       product_type: t.product_type ?? pb?.product_type ?? null,
       variant: t.variant ?? pb?.variant ?? null,
       acumatica_id: t.acumatica_id ?? null,
-      // The weight this day put in the bag: its starting weight (from the
-      // earliest scan_events row, never rewritten) plus only this day's own
-      // top-up increments. NOT bag_tags.weight_kg, which is the bag's current
-      // total and grows with every later top-up. Falls back to the tag when a
-      // bag predates event logging.
-      kg: (fe?.weight_kg ?? (Number(t.weight_kg) || 0)) + (sameDayTopUpKg.get(t.serial_number) ?? 0),
+      // What this day put in the bag: the bag's weight NOW -- the corrected
+      // truth, including any same-day top-up and any weight the operator fixed
+      // after bagging -- minus only the increments added on a later day, which
+      // belong to that day's order. Never the creation event's weight: that is
+      // written once and a later correction never reaches it.
+      kg: Math.max(0, (Number(t.weight_kg) || 0) - (laterTopUpKg.get(t.serial_number) ?? 0)),
       bagging_time: pb?.bagging_time ?? t.printed_at ?? null,
       session_id: t.session_id,
       bornViaRebag,
@@ -479,43 +479,63 @@ export async function loadOrderDay(sessionId: string): Promise<OrderDay | null> 
   // take each serial's first occurrence.
   const activeSerials = allTags
     .filter(t => t.status !== 'voided').map(t => t.serial_number)
-  const firstEventBySerial = new Map<string, { action: string; related_serial_number: string | null; weight_kg: number | null }>()
-  // ── What THIS day bagged, not what the bag weighs now ────────────────────
+  const firstEventBySerial = new Map<string, { action: string; related_serial_number: string | null }>()
+  // ── What THIS day bagged: the bag now, minus what LATER days added ───────
   // bag_tags.weight_kg is overwritten in place on every top-up
   // (addFreshWeightToBag sets it to current + increment), so a bag bagged at
-  // 300 kg and topped up 22 kg a week later reads 322 kg for ever after. Taking
-  // the bag's kg from that column made the ORIGINAL day's order grow by other
-  // days' top-ups: 31-08 reported 322 kg for a bag that produced 300, while
-  // 01-09 separately counted the 22 as a fresh top-up. The same 22 kg on two
-  // orders.
+  // 300 kg and topped up 22 kg a week later reads 322 kg for ever after. Read
+  // straight, that made the ORIGINAL day's order grow by another day's top-up:
+  // 31-08 showed 322 kg for a bag that produced 300, while 01-09 separately
+  // counted the 22 as a fresh top-up. The same 22 kg on two orders.
   //
-  // The bag's own starting weight is on its earliest scan_events row and is
-  // never rewritten, so that is what the day's output is built from, plus any
-  // top-up increments belonging to THIS day's sessions. Only ever the
-  // increment; never a later total.
-  const sameDayTopUpKgBySerial = new Map<string, number>()
+  // The first attempt at this took the bag's weight from its earliest
+  // scan_events row instead, on the reasoning that the row is never rewritten.
+  // It is never rewritten -- and that is exactly why it is the wrong source. A
+  // bag's bagging_out event is written ONCE, at creation (see addOutput), so a
+  // weight the operator corrects afterwards is corrected in bag_tags and NOT on
+  // the event. Live data: blend bag 25SFCKUN25C-1-10 carries 3505 kg on its
+  // event -- a mistyped 350.5 -- against 350 kg on the bag. Reading the event
+  // would have added 3 155 kg to the 31-08 Blender order, and 3 205.5 kg to
+  // that day in total.
+  //
+  // So: the bag's CURRENT weight, which is the corrected truth about the bag,
+  // minus only the increments added on a LATER production day. A same-day
+  // top-up is already in that weight and stays counted; a later one is that
+  // later day's output and is subtracted here.
+  const laterTopUpKgBySerial = new Map<string, number>()
   if (activeSerials.length) {
     const { data: evData } = await db.from('scan_events')
       .select('serial_number, action, related_serial_number, scanned_at, weight_kg, notes, session_id')
       .in('serial_number', activeSerials)
       .order('scanned_at', { ascending: true })
-    const dayIds = new Set(ids)
-    for (const ev of (evData as any[]) ?? []) {
+    const evRows = ((evData as any[]) ?? [])
+    for (const ev of evRows) {
       if (!firstEventBySerial.has(ev.serial_number)) {
         firstEventBySerial.set(ev.serial_number, {
           action: ev.action,
           related_serial_number: ev.related_serial_number ?? null,
-          weight_kg: ev.weight_kg == null ? null : Number(ev.weight_kg),
         })
-        continue
       }
-      // Every later HALF_BAG_TOPUP row captured by one of this day's own
-      // sessions. A top-up from another day belongs to that day's order and is
-      // picked up there as a freshTopUp.
-      if (String(ev.notes ?? '').startsWith('HALF_BAG_TOPUP') && dayIds.has(ev.session_id)) {
-        sameDayTopUpKgBySerial.set(ev.serial_number,
-          (sameDayTopUpKgBySerial.get(ev.serial_number) ?? 0) + (Number(ev.weight_kg) || 0))
-      }
+    }
+
+    // Which production day each top-up belongs to. The session's own date, not
+    // the wall clock: the afternoon shift runs to 01h00, so scanned_at alone
+    // would push a late top-up into the next day.
+    const topUps = evRows.filter(e => String(e.notes ?? '').startsWith('HALF_BAG_TOPUP'))
+    const evSessionIds = Array.from(new Set(topUps.map(e => e.session_id).filter(Boolean)))
+    const dateBySession = new Map<string, string>(ids.map(i => [i, date]))
+    const unknown = evSessionIds.filter(i => !dateBySession.has(i))
+    if (unknown.length) {
+      const { data: otherSess } = await db.from('prod_sessions').select('id,date').in('id', unknown)
+      for (const r of ((otherSess as any[]) ?? [])) dateBySession.set(r.id, r.date)
+    }
+    for (const ev of topUps) {
+      const evDate = (ev.session_id && dateBySession.get(ev.session_id))
+        // No session on the row: fall back to the SAST calendar date.
+        || (ev.scanned_at ? new Date(ev.scanned_at).toLocaleDateString('en-CA', { timeZone: 'Africa/Johannesburg' }) : null)
+      if (!evDate || evDate <= date) continue      // same day or earlier: already in the bag's weight
+      laterTopUpKgBySerial.set(ev.serial_number,
+        (laterTopUpKgBySerial.get(ev.serial_number) ?? 0) + (Number(ev.weight_kg) || 0))
     }
   }
 
@@ -537,7 +557,7 @@ export async function loadOrderDay(sessionId: string): Promise<OrderDay | null> 
 
   // Whole-day output bags, then attribute each to its shift.
   const { rows: bags, duplicateOutputsHidden } = mergeOutputBags(
-    allTags, (bagsRes.data as any[]) ?? [], firstEventBySerial, sameDayTopUpKgBySerial)
+    allTags, (bagsRes.data as any[]) ?? [], firstEventBySerial, laterTopUpKgBySerial)
   bags.forEach(b => { b.shift = shiftBySession.get(b.session_id) ?? '' })
 
   // Fallback: output bags in draft_data that exist in neither bag_tags nor
@@ -589,9 +609,8 @@ export async function loadOrderDay(sessionId: string): Promise<OrderDay | null> 
   // always marks its scan_events row's notes with HALF_BAG_TOPUP, so this
   // is never confused with an ordinary bag's own first-ever 'bagging_out'
   // row. A same-day bag's own rows — its original creation, and any same-day
-  // top-up — are already in that bag's kg above (starting weight plus
-  // sameDayTopUpKgBySerial), so they're excluded here via todaysBagSerials to
-  // avoid double-counting.
+  // top-up — are already inside that bag's current weight above, so they're
+  // excluded here via todaysBagSerials to avoid double-counting.
   const todaysBagSerials = new Set(bags.map(b => b.bag_serial_no).filter(Boolean) as string[])
   const { data: freshEvData } = await db.from('scan_events')
     .select('serial_number, session_id, weight_kg, notes, scanned_at')

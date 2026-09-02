@@ -2,6 +2,30 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-02 — Alyssa (HOTFIX: a bag's kg on an order is the bag now, minus later top-ups)
+
+**Files changed:** `lib/production/order-detail.ts`, `scripts/verify-order-day-kg.py` (new)
+
+Fixes the change made earlier today in the same session, which was wrong and shipped.
+
+Earlier today the order page stopped reading `bag_tags.weight_kg` for a bag's kg — correctly, because that column is overwritten on every top-up, so an earlier day's order grew by a later day's increment. The replacement was wrong: it took the weight from the bag's **earliest `scan_events` row**, on the reasoning that the row is never rewritten.
+
+It is never rewritten, and that is exactly why it is the wrong source. A bag's `bagging_out` event is written **once, at creation** (see `addOutput`), so a weight the operator corrects afterwards is corrected in `bag_tags` and never on the event. Live data, found by running `20260902_004` on production:
+
+| bag | event says | bag says | order would have shown |
+|---|---|---|---|
+| `25SFCKUN25C-1-10` | 3505 | 350 | **3505** — a mistyped 350.5 |
+| `06-08-26-004` | 170 | 500 | 170 |
+| `31-07-26-007` | 300 | 100 | 300 |
+
+That would have added **3 205.5 kg** to the 31-08 Blender day alone. Fifteen bags across Blender and Granule had a corrected weight and no top-up at all.
+
+**The rule now:** a bag's kg on an order is its **current weight** — the corrected truth, including any same-day top-up — **minus only the increments added on a later production day**, which belong to that later day's order. The production day comes from the top-up's own session, not the wall clock, because the afternoon shift runs to 01h00.
+
+`scripts/verify-order-day-kg.py` checks the arithmetic against the real production rows: 9 genuine top-up cases, the 7 corrected-weight bags that broke the first attempt, same-day top-ups, two-day reconciliation (both days together equal the bag's current weight), multiple later top-ups, the never-negative floor, and a bag with no events. **26 checks, all passing.**
+
+---
+
 ## 2026-09-02 — Alyssa (Bag serials generated wrong and skipped: manual database corrections, logged after the fact)
 
 **Files changed:** none — this was done directly in the database, in earlier sessions, with no migration file. Logged here because it happened and nothing recorded it.
