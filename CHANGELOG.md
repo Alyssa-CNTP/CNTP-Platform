@@ -2,6 +2,81 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-02 — Alyssa (Capture resolves Acumatica items, behind a flag)
+
+**Files changed:** `lib/production/use-item-codes.ts` (new), `lib/production/inventory.suggest.test.ts` (new), `lib/production/inventory.ts`, `lib/config/flags.ts`, `features/acumatica-items/index.ts`, `app/(app)/production/live/capture/page.tsx`, `components/production/capture/{Granule,Refining}Capture.tsx`, `components/production/capture/OutputPicker.tsx`
+
+The resolver shipped inert two entries ago. This wires all 11 call sites to it
+behind **`NEXT_PUBLIC_FF_ACUMATICA_RESOLVER`**. With the flag unset — the default
+— every screen behaves exactly as it does today.
+
+### How it is wired
+
+`getAcumaticaCode()` is synchronous. The resolver is too, but only once the
+master inventory is in memory, and that is a network read — and several call
+sites are inside render, so making them async would mean threading promises
+through JSX. So the catalogue loads once per screen and everything downstream
+stays synchronous.
+
+**`lib/production/use-item-codes.ts`** is the single place the app chooses
+between the two, so no capture screen knows there are two:
+
+    const codes = useItemCodes()
+    const acu = codes.codeFor(productType, variant, grade)   // same shape as before
+
+Until the catalogue arrives, and whenever the flag is off, it falls through to
+the templates. `OutputPicker` costs no extra request at all — it already loads
+the master list, so `catalogueFrom()` indexes the rows it is holding.
+
+The adapter lives in `lib/production/`, not in the feature: a feature that
+reaches back into the code it replaces can never be finished, so the app owns
+the changeover. When the flag is on everywhere and the templates go, that file
+collapses to a hook that returns the resolver and nothing else.
+
+### What an operator sees when the flag is on
+
+Measured against the live staging master inventory, across every section,
+variant and grade: **78 outputs resolve, 4 legitimately have no item (Bucket
+Elevator Spillage), and 6 warn.** All six are on the Granule Line:
+
+| section / variant | warns |
+|---|---|
+| granule / CON, ORG | SG Granules 002 |
+| granule / RA CON, RA ORG | SG Granules 002, Export Granules |
+
+Sieving, Refining 1 and Refining 2 are unaffected — every output resolves.
+
+Those six were already broken: the templates emit `20BGGSG-002-*` and
+`20BGGE-001-RC/-RO`, none of which exist in Acumatica, so the bags were failing
+the import silently. They now say so on screen, naming the id that was looked
+for and which variants do exist.
+
+**Nothing is blocked.** An unresolved output stays selectable and the bag still
+saves — without an item code. The material was made and has to be recorded;
+refusing the save because Acumatica lacks an item would stop production over a
+data gap. Two places changed from silence to a warning:
+
+- the live Acumatica strip under the output form, which previously rendered
+  nothing at all, so "this product has no item" and "the lookup failed" looked
+  identical — an empty space;
+- the output picker, which previously filtered rows without a code out of the
+  list entirely. An operator would have found the output simply missing, with no
+  reason given. Unresolved rows are now kept and labelled; genuine no-item
+  streams like spillage still drop out.
+
+### Why a plain boolean and not a per-section set
+
+Unlike the serial flag, an item code is not printed on anything and is not an
+identity — it is a field on a row that can be corrected afterwards. The blast
+radius of a bad flip is a re-save, not a re-labelled pallet.
+
+**Verification:** 199 unit tests (up from 191), boundary lint clean, 36 type
+errors (unchanged from staging), `next build` compiles. Picker behaviour
+simulated against the live staging master inventory with the flag both on and
+off.
+
+---
+
 ## 2026-09-02 — Alyssa (Heavy Sticks named throughout; variant-matching fixed; Fairtrade unfolded)
 
 **Files changed:** `lib/core/product-names.ts`, `lib/core/product-names.test.ts`, `lib/core/serials.ts`, `features/acumatica-items/{catalogue,resolve,stems,index}.ts`, `features/acumatica-items/resolve.test.ts`, `lib/production/{inventory,capture-config,acumatica-codes,live-types}.ts`, `lib/constants/manufacturing.ts`, `lib/data/sections.ts`, `components/production/capture/{Sieving,Refining}Capture.tsx`, `components/production/capture/OutputPicker.tsx`, `components/production/AcumaticaSummary.tsx`, `app/(app)/production/capture/[section]/page.tsx`

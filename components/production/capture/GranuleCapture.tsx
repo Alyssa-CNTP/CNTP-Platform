@@ -38,7 +38,7 @@ import { variantToShort, LABEL_PRINTING_ENABLED, isImplausibleWeight, isOpenBagW
 import { markBagConsumed, sanitizeSerial, voidBagTag } from '@/lib/production/scan-utils'
 import { SECTION_CONFIG } from '@/lib/production/live-types'
 import type { OutputBag, Variant as ShortVariant } from '@/lib/production/live-types'
-import { getAcumaticaCode } from '@/lib/production/acumatica-codes'
+import { useItemCodes } from '@/lib/production/use-item-codes'
 import ScanCameraButton from '@/components/shared/ScanCameraButton'
 import { fetchGranuleQuality, type QualityPoint } from '@/lib/production/granule-quality'
 import { logCarryover, outstandingCarryover } from '@/lib/production/carryover'
@@ -608,6 +608,7 @@ export function GranuleCapture({
 }) {
   const [tab, setTab] = useState<'feed' | 'bag'>('feed')
   const variantShort = variantToShort(variantWord as any) as ShortVariant
+  const itemCodes = useItemCodes()
   const patch = (p: Partial<GranuleData>) => onChange({ ...value, ...p })
 
   const item = value.item || GRANULE_OUTPUT_ITEMS[0]
@@ -719,7 +720,7 @@ export function GranuleCapture({
     if (!alloc) { setAdding(false); return }
     const serial = alloc.serial
     const now = nowISO()
-    const acCode = getAcumaticaCode(item, variantShort, 'A')
+    const acCode = itemCodes.codeFor(item, variantShort, 'A')
     try {
       await getDb().schema('production').from('bag_tags').upsert({
         serial_number: serial, section_id: 'granule', session_id: null, product_type: item,
@@ -757,7 +758,7 @@ export function GranuleCapture({
     getDb().schema('production').from('bag_tags').update({ tag_method: method } as any)
       .eq('serial_number', bag.serial).then(() => {})
     if (method === 'printed') {
-      const acCode = getAcumaticaCode(bag.item, variantShort, 'A')
+      const acCode = itemCodes.codeFor(bag.item, variantShort, 'A')
       printLabelAuto({
         id: bag.id, serial_number: bag.serial, product_type: bag.item, variant: variantShort, grade: 'A',
         weight_kg: n(bag.weight), lot_number: bag.lot, section_id: 'granule',
@@ -788,7 +789,7 @@ export function GranuleCapture({
     if (!alloc) return
     const serial = alloc.serial
     const now = nowISO()
-    const acCode = getAcumaticaCode(dustType, variantShort, 'A')
+    const acCode = itemCodes.codeFor(dustType, variantShort, 'A')
     try {
       await getDb().schema('production').from('bag_tags').upsert({
         serial_number: serial, section_id: 'granule', session_id: null, product_type: dustType,

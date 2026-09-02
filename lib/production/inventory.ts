@@ -11,15 +11,33 @@ import { getAcumaticaCode } from '@/lib/production/acumatica-codes'
 import { variantToShort, PRODUCTION_ORDER_PREFIXES, SECTION_OUTPUT_GROUPS, leafFamily, VARIANT_OPTIONS } from '@/lib/production/capture-config'
 import { SECTION_CONFIG } from '@/lib/production/live-types'
 import { variantFamily } from '@/lib/production/scan-utils'
-import { variantCodeOf, variantCodeForWord } from '@/features/acumatica-items'
+import { variantCodeOf, variantCodeForWord, buildCatalogue, resolveItem, resolvedId, explain, type Catalogue } from '@/features/acumatica-items'
+import { flags } from '@/lib/config/flags'
 import type { InventoryItem } from '@/lib/supabase/database.types'
 
 export interface SuggestedItem {
   productType: string
-  code: string | null      // Acumatica inventory id (derived)
+  code: string | null      // Acumatica inventory id — null when there isn't one
   description: string
   isLeaf: boolean
   match: number            // 0–100 relevance, for display
+  /**
+   * Why there is no code, when the resolver is running and the answer is not
+   * simply "this product has no item". Null otherwise. The picker uses it to
+   * say what is missing instead of silently dropping the row.
+   */
+  problem?: string | null
+}
+
+/**
+ * Build a catalogue from rows the caller has already loaded.
+ *
+ * suggestOutputs() is called on every render, so it must stay synchronous; the
+ * screens that use it already hold the master list from loadAllInventory(), and
+ * this turns that into the index the resolver needs without a second read.
+ */
+export function catalogueFrom(all: InventoryItem[]): Catalogue {
+  return buildCatalogue(all as any)
 }
 
 export const LEAF = new Set(['Fine Leaf', 'Coarse Leaf'])
@@ -29,19 +47,42 @@ export const LEAF = new Set(['Fine Leaf', 'Coarse Leaf'])
  * picker shows. Derived from the section's known output types (no DB needed,
  * instant). Ranked so the most common outputs sit first.
  */
-export function suggestOutputs(sectionId: string, variantWord: string, grade: string = 'A'): SuggestedItem[] {
+export function suggestOutputs(
+  sectionId: string,
+  variantWord: string,
+  grade: string = 'A',
+  catalogue?: Catalogue | null,
+): SuggestedItem[] {
   const cfg = SECTION_CONFIG[sectionId]
   if (!cfg) return []
   const vShort = variantToShort(variantWord as any)
+  // Resolve against the synced master inventory when the flag is on and the
+  // caller has a catalogue; otherwise build the id from the old templates.
+  const useResolver = flags.acumaticaResolver && !!catalogue
   return cfg.outputTypes.map((type, i) => {
+    // Earlier in the list = more common for the section → higher match.
+    const match = Math.max(60, 95 - i * 6)
+    const isLeaf = LEAF.has(type)
+    if (useResolver) {
+      const r = resolveItem(catalogue!, { productType: type, variant: vShort, grade })
+      const code = resolvedId(r)
+      return {
+        productType: type,
+        code,
+        description: r.kind === 'resolved' ? r.item.description : type,
+        isLeaf,
+        match,
+        problem: (r.kind === 'not-stocked' || r.kind === 'unknown-product') ? explain(r) : null,
+      }
+    }
     const acu = getAcumaticaCode(type, vShort, grade)
     return {
       productType: type,
       code: acu?.inventoryId ?? null,
       description: acu?.description ?? type,
-      isLeaf: LEAF.has(type),
-      // Earlier in the list = more common for the section → higher match.
-      match: Math.max(60, 95 - i * 6),
+      isLeaf,
+      match,
+      problem: null,
     }
   })
 }

@@ -15,9 +15,11 @@
  *       case 'bad-input':       // caller passed a variant/grade we don't know
  *     }
  *
- * NOT yet wired into capture. lib/production/acumatica-codes.ts is still the
- * live path; this ships alongside it so the two can be compared on real data
- * before anything switches over.
+ * Wired into capture behind NEXT_PUBLIC_FF_ACUMATICA_RESOLVER. With the flag
+ * off, lib/production/acumatica-codes.ts remains the live path and nothing
+ * changes; the changeover is owned by lib/production/use-item-codes.ts, not by
+ * this feature — a feature that reaches back into the code it replaces can
+ * never be finished.
  */
 import { getDb } from '@/lib/supabase/db'
 import { buildCatalogue, type Catalogue, type InventoryRow } from './catalogue'
