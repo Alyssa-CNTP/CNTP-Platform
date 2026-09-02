@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useRef, Suspense } from 'react'
+import { useState, useEffect, useRef, useMemo, Suspense } from 'react'
 import Link from 'next/link'
 import { useSearchParams, useRouter, useParams } from 'next/navigation'
 import { format, parseISO, differenceInCalendarDays } from 'date-fns'
@@ -45,6 +45,7 @@ import { HourlyVsdPrompt } from '@/components/production/capture/HourlyVsdPrompt
 import { CaptureOverview, type BlenderRatioGroup } from '@/components/production/capture/CaptureOverview'
 import { getBlendComponents, groupComponentsByItem, type BlendIngredientGroup } from '@/lib/production/bom'
 import { normalizeBatch } from '@/lib/production/batch-key'
+import { debagRowKey } from '@/lib/production/self-heal-reconcile'
 import { ensureCheckRecord, appendCheckEvent, loadCheckRecord } from '@/lib/production/checks-db'
 import { machineChecksFor } from '@/lib/production/checks-config'
 import { cleanersOnDuty } from '@/lib/production/cleaner-roster'
@@ -313,6 +314,27 @@ function CaptureScreen() {
   const active = productions[activeIdx]
   const updateActiveData = (d: SievingData | RefiningData | GranuleData | BlenderData | PasteuriserData) =>
     setProductions(ps => ps.map((p, i) => i === activeIdx ? { ...p, data: d } : p))
+
+  // ── What the OTHER batches of this session are already holding ────────────
+  // A capture screen is mounted for ONE batch (key={active.id}) but its
+  // self-heal reads the ledger for the whole SESSION, and persist() writes the
+  // mounted batch's array back to those same session-scoped rows. So a batch
+  // that can't see its siblings' rows treats every one of them as "missing"
+  // and adopts it — which is precisely how the 2026-08-31 changeover doubled
+  // the debagging rows on every page load (8 → 16 → 32 → … → 258 rows for 41
+  // physical bags). Handing each batch its siblings' row identities is what
+  // makes the restore idempotent. See lib/production/self-heal-reconcile.ts.
+  const siblingBatchKeys = useMemo(() => {
+    const debagKeys: string[] = []
+    const outputSerials: string[] = []
+    productions.forEach((p, i) => {
+      if (i === activeIdx) return
+      const d = p.data as SievingData | undefined
+      ;(d?.debag ?? []).forEach(r => debagKeys.push(debagRowKey(r.bag_no, r.lot, n(r.nett))))
+      ;(d?.outputs ?? []).forEach(b => { if (b.serial) outputSerials.push(b.serial) })
+    })
+    return { debagKeys, outputSerials }
+  }, [productions, activeIdx])
 
   // Sieving: once any bulk bag has been locked ("Done — lock this bag") under
   // this batch's variant/grade, that choice is what's on record for it — the
@@ -2353,6 +2375,8 @@ function CaptureScreen() {
                         date={dateParam}
                         sectionId={sectionId}
                         sessionId={sessionId}
+                        otherBatchDebagKeys={siblingBatchKeys.debagKeys}
+                        otherBatchOutputSerials={siblingBatchKeys.outputSerials}
                       />
                   }
                   {!locked && !isPasteuriser(sectionId) && (
@@ -2403,20 +2427,31 @@ function CaptureScreen() {
             <>
               <div className="flex items-start gap-2 px-3 py-2.5 bg-info/5 border border-info/20 rounded-xl text-[12px] text-info">
                 <Info size={14} className="shrink-0 mt-0.5" />
-                <span>{runId ? 'Totals are combined across the whole production run (all shifts), grouped by product, variant and grade.' : 'Totals are grouped and combined across both shifts where variant and grade match.'} Copy or print for Acumatica data entry.</span>
+                <span>Totals are this record&apos;s own capture — the same debagging and bagging rows as the Capture tab, grouped by product, variant and grade. Copy or print for Acumatica data entry.</span>
               </div>
               <CaptureOverview
-                productions={[
-                  // Tagged with which shift each batch belongs to — Sieving's
-                  // bucket-elevator figure means opposite things on the two
-                  // shifts (morning consumes last night's carry-over, afternoon
-                  // leaves a new one for tomorrow) and must never be summed as
-                  // if it were one figure. See CaptureOverview's debag grouping.
-                  ...productions.map(p => ({ ...p, shift: shiftBal })),
-                  ...siblingProductions.map(p => ({ ...p, shift: shiftBal })),
-                  ...otherShiftProductions.map(p => ({ ...p, shift: otherShiftBal })),
-                ]}
+                productions={
+                  // THIS record's own capture, and nothing else — the same rows
+                  // the Capture tab shows, so the two screens can never disagree.
+                  //
+                  // It used to add siblingProductions and otherShiftProductions,
+                  // which made the Overview answer a different question from the
+                  // Debagging/Bagging cards a tab away: the card counts this
+                  // session, the Overview counted this session plus its siblings
+                  // plus the other shift. On 2026-09-01 morning that read 274
+                  // bags against the card's 17, and on the afternoon record the
+                  // two agreed only because nothing else happened to be in scope
+                  // — the same screen, agreeing or disagreeing depending on data
+                  // it never showed you.
+                  //
+                  // Still tagged with the shift: Sieving's bucket elevator means
+                  // opposite things on the two shifts (morning consumes last
+                  // night's carry-over, afternoon leaves a new one for tomorrow),
+                  // and CaptureOverview's debag grouping reads that tag.
+                  productions.map(p => ({ ...p, shift: shiftBal }))
+                }
                 sectionId={sectionId}
+                sessionId={sessionId}
                 sectionName={meta.name}
                 sectionColor={meta.colorHex}
                 date={dateParam}
@@ -2424,8 +2459,6 @@ function CaptureScreen() {
                 showSerials={isIT}
                 productionOrders={assignment?.production_orders}
                 locked={locked}
-                balanceRows={balanceRows}
-                balanceNote={balanceNote}
                 blenderRatios={blenderRatios}
               />
               <HalfBagTopUpActivity sectionId={sectionId} sessionId={sessionId} />

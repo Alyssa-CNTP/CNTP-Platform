@@ -135,7 +135,7 @@ export default function ProductionOrderDetailPage() {
   if (loading) return <div className="p-12 flex justify-center"><Loader2 className="animate-spin text-text-faint" /></div>
   if (error || !day) return <div className="p-6 text-center text-text-muted">{error ?? 'Production order not found.'}</div>
 
-  const { section_id, date, status, grade, poItems, shifts, bags, bagsOutputKg, rebagRows, freshTopUps, debags, debagDuplicatesHidden, massBalance: mb, timesheets, takeovers, notes, representativeSessionId } = day
+  const { section_id, date, status, grade, poItems, shifts, bags, bagsOutputKg, rebagRows, freshTopUps, debags, debagDuplicatesHidden, duplicateOutputsHidden, massBalance: mb, timesheets, takeovers, notes, representativeSessionId } = day
   const meta = sectionMeta(section_id)
   const st = STATUS[status] ?? STATUS.new
   const operators = Array.from(new Set(shifts.flatMap(s => s.session.operator_names ?? [])))
@@ -153,21 +153,31 @@ export default function ProductionOrderDetailPage() {
   // an input today, and not an output today either). It's captured as a debag
   // row, so pull it out of the input total and show it purely as an
   // informational carry-over figure, not summed into anything.
-  const isBucketCarryOut = (d: OrderDebagRow) =>
-    /bucket elevator/i.test(d.product_type || '') && (d.shift === 'afternoon' || d.shift === 'night')
-  const inputRows = debags.filter(d => !isBucketCarryOut(d))
-  const bucketCarryOverKg = debags.filter(isBucketCarryOut).reduce((s, d) => s + (Number(d.kg_nett) || 0), 0)
-  // Total input = computed from actual debag rows (non-spillage bags + machine
-  // spillage + morning bucket elevator — yesterday's carry-over being consumed
-  // today), NOT from the prod_mass_balance snapshot which goes stale when
-  // persist() fails or the session is submitted.
-  const totalInput = inputRows.reduce((s, d) => s + (Number(d.kg_nett) || 0), 0)
-  // Total output = physical bagged product only (bagsOutputKg already reflects
-  // each bag's current weight, so a half-filled bag counts at whatever it
-  // currently holds — no separate handling needed for half bags). The bucket
-  // elevator carry-over is WIP, not finished product, and is deliberately
-  // excluded here — folding it into output previously masked genuine
-  // over/under-yield by inflating the output side with unprocessed material.
+  // ── Mass balance: Total Output − Total Input ──────────────────────────────
+  // Total Input  = farm bags debagged + machine spillage
+  //                + bucket elevator carried in from the previous day, ONLY when
+  //                  it is the same variant as this run. Conventional and organic
+  //                  are separate physical pools that never mix, so last night's
+  //                  carry-over is only this run's input if it is the same
+  //                  material. A row with no variant recorded is counted rather
+  //                  than dropped — legacy rows predate the column, and silently
+  //                  losing real input is worse than counting an unprovable one.
+  // Total Output = bags bagged out + the half-bag TOP-UP INCREMENTS (the weight
+  //                added into an older bag today, not that bag's whole weight —
+  //                bagsOutputKg already sums only the increments)
+  //                MINUS nothing for the bucket elevator left for tomorrow: that
+  //                is work in progress, not product, so it is excluded from
+  //                output entirely rather than counted on either side.
+  const isBucketRow   = (d: OrderDebagRow) => /bucket elevator/i.test(d.product_type || '')
+  const isCarriedOut  = (d: OrderDebagRow) => isBucketRow(d) && (d.shift === 'afternoon' || d.shift === 'night')
+  const sameVariant   = (d: OrderDebagRow) => !d.variant || !variant || d.variant === variant
+  // Carried IN from yesterday, and only if it is this run's material.
+  const bucketInExcluded = debags.filter(d => isBucketRow(d) && !isCarriedOut(d) && !sameVariant(d))
+  const bucketInExcludedKg = bucketInExcluded.reduce((t, d) => t + (Number(d.kg_nett) || 0), 0)
+
+  const inputRows = debags.filter(d => !isCarriedOut(d) && sameVariant(d))
+  const bucketCarryOverKg = debags.filter(isCarriedOut).reduce((s, d) => s + (Number(d.kg_nett) || 0), 0)
+  const totalInput  = inputRows.reduce((s, d) => s + (Number(d.kg_nett) || 0), 0)
   const totalOutput = bagsOutputKg
   const yieldPct = totalInput > 0 ? Math.round((totalOutput / totalInput) * 1000) / 10 : null
   const wholeRunBalance = massBalanceInfo(totalOutput, totalInput)
@@ -217,17 +227,37 @@ export default function ProductionOrderDetailPage() {
       </div>
 
       {/* Whole-run mass balance — computed from actual debag/bag rows */}
-      {SHOW_DERIVED_FIGURES && (totalInput > 0 || totalOutput > 0) && (
+      {(totalInput > 0 || totalOutput > 0) && (
         <Panel>
           <PanelHead title="Mass balance — full run (07h00–01h00)" />
           <PanelBody>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
               <Field label="Total input"  value={`${totalInput.toFixed(1)} kg`} />
               <Field label="Total output" value={`${totalOutput.toFixed(1)} kg`} />
-              {bucketCarryOverKg > 0 && <Field label="Bucket elevator (WIP, carried to tomorrow)" value={`${bucketCarryOverKg.toFixed(1)} kg`} />}
-              <Field label="Balance"      value={<span className={TONE_TEXT_CLASS[wholeRunBalance.tone]}>{wholeRunBalance.text}</span>} />
+              <Field label="Balance (out − in)" value={<span className={TONE_TEXT_CLASS[wholeRunBalance.tone]}>{wholeRunBalance.text}</span>} />
               <Field label="Yield"        value={yieldPct != null ? `${yieldPct}%` : '—'} />
             </div>
+            {/* What the two totals are made of, and anything held out of them —
+                so the figure can be checked rather than taken on trust. */}
+            <p className="mt-3 pt-3 border-t border-surface-rule/60 text-[11.5px] text-text-muted leading-relaxed">
+              Input is farm bags debagged plus machine spillage, plus the bucket elevator carried in
+              from the previous day when it is the same variant. Output is bags bagged out plus the
+              weight added into older bags by half-bag top-up — the top-up amount only, not those
+              bags&apos; full weight.
+              {bucketCarryOverKg > 0 && (
+                <> Bucket elevator left for tomorrow ({bucketCarryOverKg.toFixed(1)} kg) is work in
+                progress and counts on neither side.</>
+              )}
+              {bucketInExcludedKg > 0 && (
+                <> {bucketInExcludedKg.toFixed(1)} kg of carried-in bucket elevator is excluded as a
+                different variant from this run.</>
+              )}
+              {(debagDuplicatesHidden > 0 || duplicateOutputsHidden > 0) && (
+                <> Excludes {debagDuplicatesHidden > 0 ? `${debagDuplicatesHidden} duplicate debagging row${debagDuplicatesHidden === 1 ? '' : 's'}` : ''}
+                {debagDuplicatesHidden > 0 && duplicateOutputsHidden > 0 ? ' and ' : ''}
+                {duplicateOutputsHidden > 0 ? `${duplicateOutputsHidden} duplicate output row${duplicateOutputsHidden === 1 ? '' : 's'}` : ''} left by the changeover fault.</>
+              )}
+            </p>
           </PanelBody>
         </Panel>
       )}
@@ -252,7 +282,9 @@ export default function ProductionOrderDetailPage() {
       {/* Bagging (outputs) — grouped by product type with per-type totals */}
       <Panel>
         <PanelHead title="Bagging — outputs"
-          meta={`${bags.length} bag${bags.length === 1 ? '' : 's'} · ${bagsOutputKg.toFixed(1)} kg`} />
+          meta={`${bags.length} bag${bags.length === 1 ? '' : 's'} · ${bagsOutputKg.toFixed(1)} kg${
+            duplicateOutputsHidden > 0 ? ` · ${duplicateOutputsHidden} duplicate row${duplicateOutputsHidden === 1 ? '' : 's'} hidden` : ''
+          }`} />
         <PanelBody>
           {bags.length === 0 && bucketCarryOverKg === 0 ? <Empty>No output bags recorded.</Empty> : (
             <div className="space-y-4">

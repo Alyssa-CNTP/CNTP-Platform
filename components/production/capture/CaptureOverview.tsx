@@ -7,7 +7,7 @@
 // Machine spillage is entered here (not in capture) and is session-level.
 // Combined totals merge both shifts when same variant+grade+lot are passed in.
 
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { Printer, Copy, CheckCircle2, AlertTriangle, Package, PackageCheck,
   ChevronDown, ChevronRight, Filter, X, Scale, Hash } from 'lucide-react'
 import { type SievingData } from '@/components/production/capture/SievingCapture'
@@ -15,8 +15,7 @@ import { type RefiningData } from '@/components/production/capture/RefiningCaptu
 import { dustProductType, type GranuleData } from '@/components/production/capture/GranuleCapture'
 import { type BlenderData } from '@/components/production/capture/BlenderCapture'
 import { type PasteuriserData } from '@/components/production/capture/PasteuriserCapture'
-import { massBalanceToleranceFor } from '@/lib/production/capture-config'
-import { MassBalanceTable, type BalanceRow } from '@/components/production/capture/MassBalanceTable'
+import { getDb } from '@/lib/supabase/db'
 
 interface Production {
   id: string; variant: string; grade: string; lot: string
@@ -28,16 +27,9 @@ interface Production {
 }
 
 const num = (v: any): number => parseFloat(String(v).replace(',', '.')) || 0
-// Derived production figures — yield, tons, mass-balance variance — are HIDDEN.
-//
-// They are computed from the captured debagging rows, and a changeover bug was
-// multiplying those rows, so every one of these read confidently and wrongly:
-// 92 086 kg in against 5 160 kg out, 5.6% yield, +86 926 kg balance, on a shift
-// that debagged 15 bags and bagged 12. The debagging and bagging rows themselves
-// are correct and stay on screen; only the figures derived from them are hidden.
-//
-// Flip to true to bring them all back — that is the whole revert.
-const SHOW_DERIVED_FIGURES = false
+// Mass-balance tolerance: ±1% of total input, everywhere (per-section rules in
+// lib/production/capture-config are for the fuller balance this replaces).
+const MASS_BALANCE_TOLERANCE_PCT = 0.01
 
 const DEBAG_BLUE  = '#1d4ed8'
 const BAG_ORANGE  = '#d97706'
@@ -269,12 +261,13 @@ const fmtTime = (iso?: string) =>
 // ── Main component ────────────────────────────────────────────────────────────
 
 export function CaptureOverview({
-  productions, sectionId, sectionName, sectionColor, date, shift, showSerials = false,
-  productionOrders, locked = false, balanceRows, balanceNote, blenderRatios,
+  productions, sectionId, sessionId, sectionName, sectionColor, date, shift, showSerials = false,
+  productionOrders, locked = false, blenderRatios,
 }: {
-  productions: Production[]; sectionId?: string; sectionName: string; sectionColor: string; date: string; shift: string; showSerials?: boolean
+  productions: Production[]; sectionId?: string; sessionId?: string | null
+  sectionName: string; sectionColor: string; date: string; shift: string; showSerials?: boolean
   productionOrders?: any; locked?: boolean
-  balanceRows?: BalanceRow[]; balanceNote?: string; blenderRatios?: BlenderRatioGroup[]
+  blenderRatios?: BlenderRatioGroup[]
 }) {
   const [copied, setCopied] = useState(false)
   const [expandedProducts,  setExpandedProducts]  = useState<Set<string>>(new Set())
@@ -288,16 +281,72 @@ export function CaptureOverview({
   const { groups: debagGroups, bucketInKg, bucketOutKg, machineKg, duplicatesHidden } = useMemo(() => buildDebagLotGroups(productions), [productions])
   const productGroups = useMemo(() => buildProductGroups(productions), [productions])
 
+  // ── Half-bag top-ups ──────────────────────────────────────────────────────
+  // A top-up is a deliberate side-channel write (see HalfBagTopUpModal) that
+  // never reaches a batch's outputs array, so every total on this screen was
+  // short by exactly that weight. Only mode === 'production' counts: it logs a
+  // plain 'bagging_out' row (carrying the HALF_BAG_TOPUP notes prefix) because
+  // the weight is genuinely new product. A mode === 'existing' bag-to-bag
+  // transfer logs 'topped_up' instead and must NOT be counted — it moves
+  // weight already counted as output when its SOURCE bag was bagged.
+  const [topUpRows, setTopUpRows] = useState<{ serial: string; kg: number }[]>([])
+  useEffect(() => {
+    if (!sectionId || !sessionId) { setTopUpRows([]); return }
+    let cancelled = false
+    ;(async () => {
+      const { data } = await getDb().schema('production').from('scan_events')
+        .select('serial_number, weight_kg, notes')
+        .eq('section_id', sectionId).eq('session_id', sessionId).eq('action', 'bagging_out')
+      if (cancelled) return
+      setTopUpRows(((data as any[]) ?? [])
+        .filter(r => String(r.notes ?? '').startsWith('HALF_BAG_TOPUP'))
+        .map(r => ({ serial: String(r.serial_number), kg: Number(r.weight_kg) || 0 })))
+    })()
+    return () => { cancelled = true }
+  }, [sectionId, sessionId])
+
   const debagOnlyKg   = debagGroups.reduce((s, g) => s + g.totalKg, 0)
-  const totalIncl     = debagOnlyKg + bucketInKg + machineKg
   const baggedOnlyKg  = productGroups.reduce((s, g) => s + g.totalKg, 0)
-  const totalOut      = baggedOnlyKg + bucketOutKg
   const totalBags     = productGroups.reduce((s, g) => s + g.totalCount, 0)
-  const variance      = totalOut - totalIncl
-  const balanceTolKg  = massBalanceToleranceFor(sectionId ?? '')
-  const withinTol     = Math.abs(variance) <= balanceTolKg
   const hasData       = debagGroups.length > 0 || productGroups.length > 0
   const poStr         = formatPO(productionOrders)
+
+  // A top-up into a bag one of THESE batches bagged is already inside that
+  // bag's own captured weight — counting it again would double it. In practice
+  // the topped bag is from an earlier day, which is why the total ran short
+  // rather than over.
+  const ownSerials = useMemo(
+    () => new Set(productGroups.flatMap(g => g.lots.flatMap(l => l.bags.map(b => b.serial)))),
+    [productGroups])
+  const topUpKg = topUpRows.filter(r => !ownSerials.has(r.serial)).reduce((t, r) => t + r.kg, 0)
+
+  // ── Mass balance: Total Output − Total Input ───────────────────────────────
+  // One figure, computed one way, from the same rows the tables below show.
+  //
+  // Total Input  = everything debagged, plus machine spillage, plus the bucket
+  //                elevator carried in from the previous day. That carry-over
+  //                is only ever this run's input when it is the same variant,
+  //                and here it always is: production.bucket_elevator_log keeps
+  //                conventional and organic as separate pools that never sum
+  //                across each other (lib/production/bucket-elevator.ts), and
+  //                a shift can only draw on its own family's balance. So there
+  //                is no cross-variant carry-over to exclude at this level.
+  // Total Output = bags bagged out, plus half-bag TOP-UP INCREMENTS — the
+  //                weight added into an older bag today, never that bag's full
+  //                weight.
+  //                The bucket elevator this afternoon shift LEAVES for tomorrow
+  //                is work in progress, not product: excluded from output
+  //                entirely rather than counted on either side.
+  //
+  // Read as out − in, so the normal case (moisture, dust, spillage) is a
+  // NEGATIVE number that says "material lost" at a glance. Flagged outside ±1%
+  // of total input — the tolerance a real run is expected to close within.
+  const mbInputKg  = debagOnlyKg + bucketInKg + machineKg
+  const mbOutputKg = baggedOnlyKg + topUpKg
+  const balanceKg  = mbOutputKg - mbInputKg
+  const balancePct = mbInputKg > 0 ? (balanceKg / mbInputKg) * 100 : 0
+  const withinTol  = mbInputKg > 0 ? Math.abs(balanceKg) <= mbInputKg * MASS_BALANCE_TOLERANCE_PCT : true
+  const yieldPct   = mbInputKg > 0 ? Math.round((mbOutputKg / mbInputKg) * 1000) / 10 : null
 
   const filteredProducts = productGroups.filter(g => {
     if (filterProduct && !g.product.toLowerCase().includes(filterProduct.toLowerCase())) return false
@@ -323,19 +372,20 @@ export function CaptureOverview({
       if (g.rows.length > 1) lines.push(`Subtotal ${g.lot}\t\t\t${g.totalKg.toFixed(1)}`)
     })
     if (bucketInKg > 0 || machineKg > 0) {
-      lines.push(`Total debagging (excl. spillage)\t\t\t${debagOnlyKg.toFixed(1)}`)
+      lines.push(`Debagged (excl. spillage)\t\t\t${debagOnlyKg.toFixed(1)}`)
       if (bucketInKg > 0) lines.push(`Bucket elevator (from yesterday)\t\t\t${bucketInKg.toFixed(1)}`)
       if (machineKg > 0) lines.push(`Machine spillage\t\t\t${machineKg.toFixed(1)}`)
     }
-    lines.push(`Total incl. spillage\t\t\t${totalIncl.toFixed(1)}`)
+    lines.push(`Total input\t\t\t${mbInputKg.toFixed(1)}`)
     lines.push('', 'BAGGING', 'Product\tLot\tVariant\tGrade\tBags\tWeight (kg)')
     productGroups.forEach(g => {
       g.lots.forEach(l => lines.push(`${g.product}\t${l.lot}\t${l.variant}\t${l.grade}\t${l.count}\t${l.kg.toFixed(1)}`))
       if (g.lots.length > 1) lines.push(`Total ${g.product}\t\t\t\t${g.totalCount}\t${g.totalKg.toFixed(1)}`)
     })
-    if (bucketOutKg > 0) lines.push(`Bucket elevator (left for tomorrow)\t\t\t\t\t${bucketOutKg.toFixed(1)}`)
-    lines.push('', `Total out\t\t\t\t${totalBags}\t${totalOut.toFixed(1)}`)
-    lines.push(`Balance (out − in)\t\t\t\t\t${variance > 0 ? '+' : ''}${variance.toFixed(1)}`)
+    if (topUpKg > 0) lines.push(`Half-bag top-ups (added into older bags)\t\t\t\t\t${topUpKg.toFixed(1)}`)
+    lines.push('', `Total output\t\t\t\t${totalBags}\t${mbOutputKg.toFixed(1)}`)
+    if (bucketOutKg > 0) lines.push(`Bucket elevator (left for tomorrow — not output)\t\t\t\t\t${bucketOutKg.toFixed(1)}`)
+    lines.push(`Balance (out − in)\t\t\t\t\t${balanceKg >= 0 ? '+' : ''}${balanceKg.toFixed(1)}`)
     navigator.clipboard.writeText(lines.join('\n')).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000) })
   }
 
@@ -370,22 +420,6 @@ export function CaptureOverview({
           </button>
         </div>
       </div>
-
-      {/* Yield & throughput — the numbers this record is actually judged on.
-          They were only visible by leaving capture for /traceability, which is
-          how "yields are hiding" became true: the line that produced the figures
-          couldn't see them. Computed here from the same totals the tables below
-          show, so the strip can never disagree with the detail under it. */}
-      {SHOW_DERIVED_FIGURES && hasData && (
-        <YieldStrip
-          sectionId={sectionId} inKg={totalIncl} outKg={totalOut} bags={totalBags}
-          variance={variance} withinTol={withinTol} tolKg={balanceTolKg}
-          topProducts={productGroups
-            .map(g => ({ product: g.product, kg: g.totalKg, sharePct: totalOut > 0 ? (g.totalKg / totalOut) * 100 : 0 }))
-            .sort((a, b) => b.kg - a.kg).slice(0, 4)}
-          lot={productions.map(p => p.lot).find(l => !!l) ?? null}
-        />
-      )}
 
       {/* Filter panel */}
       {showFilters && (
@@ -448,7 +482,7 @@ export function CaptureOverview({
                       </span>
                     )}
                   </span>
-                  <span className="font-mono font-bold text-[13px]" style={{ color: DEBAG_BLUE }}>{totalIncl.toFixed(1)} kg</span>
+                  <span className="font-mono font-bold text-[13px]" style={{ color: DEBAG_BLUE }}>{mbInputKg.toFixed(1)} kg</span>
                 </div>
 
                 <div className="divide-y divide-stone-100">
@@ -486,7 +520,7 @@ export function CaptureOverview({
                 <div className="border-t-2 border-stone-200 divide-y divide-stone-100">
                   {(bucketInKg > 0 || machineKg > 0) && debagGroups.length > 0 && (
                     <div className="flex items-center justify-between px-3 py-2 text-[11px] font-semibold text-stone-500 uppercase tracking-wide">
-                      <span>Total debagging (excl. spillage)</span>
+                      <span>Debagged (excl. spillage)</span>
                       <span className="font-mono font-bold text-stone-800 normal-case">{debagOnlyKg.toFixed(1)} kg</span>
                     </div>
                   )}
@@ -501,8 +535,8 @@ export function CaptureOverview({
                     <span className="font-mono">{machineKg > 0 ? `${machineKg.toFixed(1)} kg` : <span className="text-stone-400 font-normal">—</span>}</span>
                   </div>
                   <div className="flex items-center justify-between px-3 py-2.5 font-bold text-[12px] text-stone-800 uppercase tracking-wide" style={{ background: DEBAG_BLUE + '08' }}>
-                    <span>Total incl. spillage</span>
-                    <span className="font-mono font-bold text-[14px] text-stone-900 normal-case">{totalIncl.toFixed(1)} kg</span>
+                    <span>Total input</span>
+                    <span className="font-mono font-bold text-[14px] text-stone-900 normal-case">{mbInputKg.toFixed(1)} kg</span>
                   </div>
                 </div>
               </div>
@@ -539,7 +573,7 @@ export function CaptureOverview({
                     <PackageCheck size={14} /> Bagging — out
                   </span>
                   <span className="font-mono font-bold text-[13px]" style={{ color: BAG_ORANGE }}>
-                    {totalOut.toFixed(1)} kg · {totalBags} bag{totalBags !== 1 ? 's' : ''}
+                    {mbOutputKg.toFixed(1)} kg · {totalBags} bag{totalBags !== 1 ? 's' : ''}
                   </span>
                 </div>
 
@@ -613,48 +647,89 @@ export function CaptureOverview({
                   })}
                 </div>
 
-                {/* Totals + bucket-elevator carry-over — mirrors the debagging
-                    card's own totals block: bagged weight, then the elevator
-                    figure this AFTERNOON shift is leaving for tomorrow morning
-                    (a different physical quantity from bucketInKg above), then
-                    the grand total. */}
+                {/* Totals — the same parts the mass balance adds up, in the
+                    same order and under the same names, so the panel below can
+                    be checked against this card line by line. The bucket
+                    elevator this afternoon shift leaves for tomorrow morning is
+                    a different physical quantity from bucketInKg above, and is
+                    NOT product: it sits below the total, not inside it. */}
                 <div className="border-t-2 border-stone-300 divide-y divide-stone-100">
-                  {bucketOutKg > 0 && productGroups.length > 0 && (
+                  {(bucketOutKg > 0 || topUpKg > 0) && productGroups.length > 0 && (
                     <div className="flex items-center justify-between px-3 py-2 text-[11px] font-semibold text-stone-500 uppercase tracking-wide">
-                      <span>Total bagged out</span>
+                      <span>Bagged out</span>
                       <span className="font-mono font-bold text-stone-800 normal-case">{totalBags} bags · {baggedOnlyKg.toFixed(1)} kg</span>
                     </div>
                   )}
-                  {bucketOutKg > 0 && (
-                    <div className="flex items-center justify-between px-3 py-2 text-[12px] font-medium text-amber-700" style={{ background: '#f59e0b0d' }}>
-                      <span className="flex items-center gap-1.5"><Scale size={12} className="text-amber-500" /> Bucket elevator — left for tomorrow</span>
-                      <span className="font-mono">{bucketOutKg.toFixed(1)} kg</span>
+                  {topUpKg > 0 && (
+                    <div className="flex items-center justify-between px-3 py-2 text-[12px] font-medium text-violet-700" style={{ background: '#7c3aed0d' }}>
+                      <span className="flex items-center gap-1.5"><Scale size={12} className="text-violet-500" /> Half-bag top-ups — added into older bags</span>
+                      <span className="font-mono">+{topUpKg.toFixed(1)} kg</span>
                     </div>
                   )}
                   <div className="flex items-center justify-between px-3 py-2.5 font-bold text-[12px] text-stone-800 uppercase tracking-wide" style={{ background: BAG_ORANGE + '08' }}>
-                    <span>Total out</span>
+                    <span>Total output</span>
                     <span className="flex items-center gap-3 normal-case">
                       <span className="font-mono font-bold text-stone-900">{totalBags} bags</span>
-                      <span className="font-mono font-bold text-[14px] text-stone-900">{totalOut.toFixed(1)} kg</span>
+                      <span className="font-mono font-bold text-[14px] text-stone-900">{mbOutputKg.toFixed(1)} kg</span>
                     </span>
                   </div>
+                  {bucketOutKg > 0 && (
+                    <div className="flex items-start justify-between gap-3 px-3 py-2 text-[12px] font-medium text-amber-700" style={{ background: '#f59e0b0d' }}>
+                      <span className="flex items-start gap-1.5">
+                        <Scale size={12} className="text-amber-500 shrink-0 mt-0.5" />
+                        <span>Bucket elevator — left for tomorrow
+                          <span className="block text-[10.5px] font-normal text-amber-600/80">work in progress · not counted as output</span>
+                        </span>
+                      </span>
+                      <span className="font-mono shrink-0">{bucketOutKg.toFixed(1)} kg</span>
+                    </div>
+                  )}
                 </div>
               </div>
             )}
 
-            {/* Mass balance — tabular (Morning / Afternoon / whole run) when the
-                page supplies per-shift rows; otherwise a single-line fallback. */}
-            {SHOW_DERIVED_FIGURES && (balanceRows && balanceRows.length > 0 ? (
-              <MassBalanceTable rows={balanceRows} tolerance={balanceTolKg} note={balanceNote} />
-            ) : (
-              <div className={`flex items-center justify-between px-3 py-2 rounded-lg border text-[12px] font-mono ${withinTol ? 'bg-ok/5 border-ok/30' : 'bg-warn/5 border-warn/30'}`}>
-                <span className="text-stone-500">In {totalIncl.toFixed(1)} − Out {totalOut.toFixed(1)} =</span>
-                <span className="inline-flex items-center gap-1.5 font-bold text-[13px]">
-                  <span className={withinTol ? 'text-ok' : 'text-warn'}>{(-variance) > 0 ? '+' : ''}{(-variance).toFixed(1)} kg</span>
-                  {withinTol ? <CheckCircle2 size={14} className="text-ok" /> : <AlertTriangle size={14} className="text-warn" />}
-                </span>
+            {/* ── Mass balance — one figure, stated in full ──────────────
+                Output − Input, over the two totals shown on the cards above.
+                Everything it leaves out is named underneath, in kg, so the
+                number can be checked rather than taken on trust. */}
+            {(mbInputKg > 0 || mbOutputKg > 0) && (
+              <div className={`rounded-xl border-2 overflow-hidden ${withinTol ? 'border-ok/30' : 'border-warn/40'}`}>
+                <div className={`flex items-center justify-between px-3 py-2 ${withinTol ? 'bg-ok/5' : 'bg-warn/5'}`}>
+                  <span className="inline-flex items-center gap-1.5 text-[12px] font-bold text-stone-700">
+                    <Scale size={14} className="text-stone-500" /> Mass balance
+                    <span className="font-normal text-[10.5px] text-stone-400">output − input</span>
+                  </span>
+                  <span className="inline-flex items-center gap-1.5 font-mono font-bold text-[14px]">
+                    <span className={withinTol ? 'text-ok' : 'text-warn'}>
+                      {balanceKg >= 0 ? '+' : ''}{balanceKg.toFixed(1)} kg
+                      {mbInputKg > 0 && <span className="font-normal text-[12px]"> ({balancePct >= 0 ? '+' : ''}{balancePct.toFixed(1)}%)</span>}
+                    </span>
+                    {withinTol ? <CheckCircle2 size={14} className="text-ok" /> : <AlertTriangle size={14} className="text-warn" />}
+                  </span>
+                </div>
+                <div className="grid grid-cols-3 divide-x divide-stone-100 border-t border-stone-100 bg-white">
+                  {[
+                    { label: 'Total input',  value: `${mbInputKg.toFixed(1)} kg` },
+                    { label: 'Total output', value: `${mbOutputKg.toFixed(1)} kg` },
+                    { label: 'Yield',        value: yieldPct != null ? `${yieldPct}%` : '—' },
+                  ].map(t => (
+                    <div key={t.label} className="px-3 py-2.5">
+                      <div className="font-mono font-bold text-[15px] leading-tight text-stone-800">{t.value}</div>
+                      <div className="text-[9.5px] text-stone-400 uppercase tracking-wide">{t.label}</div>
+                    </div>
+                  ))}
+                </div>
+                <p className="px-3 py-2.5 border-t border-stone-100 bg-stone-50/60 text-[11.5px] text-stone-500 leading-relaxed">
+                  Input is everything debagged plus machine spillage
+                  {bucketInKg > 0 && <>, plus the {bucketInKg.toFixed(1)} kg of bucket elevator carried in from yesterday (always this run&apos;s own variant — the carry-over ledger keeps conventional and organic apart)</>}.
+                  {' '}Output is bags bagged out
+                  {topUpKg > 0 && <> plus {topUpKg.toFixed(1)} kg added into older bags by half-bag top-up — the top-up amount only, not those bags&apos; full weight</>}.
+                  {bucketOutKg > 0 && <> The {bucketOutKg.toFixed(1)} kg left in the elevator for tomorrow is work in progress and counts on neither side.</>}
+                  {duplicatesHidden > 0 && <> Excludes {duplicatesHidden} duplicate debagging row{duplicatesHidden === 1 ? '' : 's'} left by the changeover fault.</>}
+                  {' '}Flagged outside ±1% of total input.
+                </p>
               </div>
-            ))}
+            )}
           </>
         )}
       </div>
@@ -663,77 +738,3 @@ export function CaptureOverview({
 }
 
 export default CaptureOverview
-
-// ── Yield & throughput strip ─────────────────────────────────────────────────
-// One row of the figures that describe the record: kg in, kg out, yield, tons,
-// bags, mass-balance variance, and how the output split across products. The
-// deep links go to the two places that hold the wider picture — the analytics
-// view of Production Orders filtered to this line, and full batch traceability
-// for this lot — so "where do I see this over time" has an answer from the
-// capture screen instead of being something you have to already know.
-function YieldStrip({ sectionId, inKg, outKg, bags, variance, withinTol, tolKg, topProducts, lot }: {
-  sectionId?: string
-  inKg: number; outKg: number; bags: number
-  variance: number; withinTol: boolean; tolKg: number
-  topProducts: { product: string; kg: number; sharePct: number }[]
-  lot: string | null
-}) {
-  const yieldPct = inKg > 0 ? Math.round((outKg / inKg) * 1000) / 10 : null
-  // Sign convention matches the mass-balance row below: in − out.
-  const balance = -variance
-
-  const tiles = [
-    { label: 'kg in',   value: inKg.toFixed(1) },
-    { label: 'kg out',  value: outKg.toFixed(1) },
-    { label: 'yield',   value: yieldPct != null ? `${yieldPct}%` : '—' },
-    { label: 'tons out',value: (outKg / 1000).toFixed(2) },
-    { label: 'bags',    value: String(bags) },
-    {
-      label: `balance ±${tolKg}`,
-      value: `${balance > 0 ? '+' : ''}${balance.toFixed(1)}`,
-      warn: !withinTol,
-    },
-  ]
-
-  return (
-    <div className="px-5 py-3 border-b border-stone-100 bg-white space-y-2.5">
-      <div className="flex items-stretch gap-4 overflow-x-auto">
-        {tiles.map((t, i) => (
-          <div key={t.label} className="flex items-stretch gap-4 shrink-0">
-            {i > 0 && <div className="w-px bg-stone-200" />}
-            <div>
-              <div className={`font-mono font-bold text-[16px] leading-tight ${t.warn ? 'text-warn' : 'text-stone-800'}`}>{t.value}</div>
-              <div className="text-[9px] text-stone-400 uppercase tracking-wide">{t.label}</div>
-            </div>
-          </div>
-        ))}
-      </div>
-
-      {/* Output split — which product this record actually made, and how much of
-          it, without expanding the tables below. Identity is on the label, never
-          on colour alone. */}
-      {topProducts.length > 1 && (
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-          {topProducts.map(p => (
-            <span key={p.product} className="inline-flex items-center gap-1.5 text-[11px] text-stone-500">
-              <span className="inline-block w-10 h-1.5 rounded-full bg-stone-100 overflow-hidden">
-                <span className="block h-full" style={{ width: `${Math.min(100, p.sharePct)}%`, background: BAG_ORANGE }} />
-              </span>
-              <span className="text-stone-700 font-medium">{p.product}</span>
-              <span className="font-mono">{Math.round(p.sharePct)}% · {p.kg.toFixed(0)} kg</span>
-            </span>
-          ))}
-        </div>
-      )}
-
-      <div className="flex flex-wrap items-center gap-3 text-[11px]">
-        <a href={`/production/orders?view=analytics${sectionId ? `&section=${sectionId}` : ''}`}
-          className="text-brand hover:underline">Yield &amp; throughput over time →</a>
-        {lot && (
-          <a href={`/traceability?batch=${encodeURIComponent(lot)}`}
-            className="text-brand hover:underline">Full traceability for {lot} →</a>
-        )}
-      </div>
-    </div>
-  )
-}

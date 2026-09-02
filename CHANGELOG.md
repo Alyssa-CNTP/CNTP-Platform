@@ -2,6 +2,43 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-02 — Alyssa (Sieving: stop the changeover duplication at source; one mass balance on Capture Overview; repair script for both tables)
+
+**Files changed:** `components/production/capture/SievingCapture.tsx`, `components/production/capture/CaptureOverview.tsx`, `app/(app)/production/capture/[section]/page.tsx`, `lib/production/self-heal-reconcile.ts` (new), `supabase/migrations/20260902_001_repair_sieving_changeover_duplicates.sql` (new — **not applied**, run by hand)
+
+Closes out the 2026-08-31 changeover incident. Everything before this was display-side: the wrong figures were hidden, but the duplicate rows were still being **created** on every page load, and the repair script only covered `prod_debagging`.
+
+### Rows are no longer duplicated on page load
+
+- **Root cause.** `SievingCapture` self-heals its `debag` and `outputs` arrays from the ledger on mount, and both reads are scoped `.eq('session_id', …)`. But a session can hold several **batches** (a grade changeover creates a second one mid-shift), the capture screen mounts **one** batch at a time (`key={active.id}`), and `persist()` writes the mounted batch's array back to those same session-scoped rows. So the batch on screen treated every sibling batch's row as missing and adopted it, and the next save made the copies permanent. Every load doubled them — 8 → 16 → 32 → 64 → 128 → 258 rows for 41 physical bags.
+- **Fix.** The capture page now hands each batch the row identities its **siblings** already hold, and the self-heal restores only the surplus. New `lib/production/self-heal-reconcile.ts` does the reconciliation on **multiplicity**, not set membership: two ledger rows sharing an identity against one held row means one genuinely is missing and must come back, which a `Set` cannot express.
+- **The two self-heal effects are now one.** `patch` is `onChange({ ...value, ...p })` over the effect's own captured `value`, so two effects each resolving their own query and each patching from the same mount-time closure meant whichever landed second silently overwrote the other's restored rows with the mount-time version.
+- Restoring still never removes anything and never writes to `bag_tags`/`prod_debagging` — it remains a read-and-backfill of the display.
+
+### One mass balance on Capture Overview
+
+- The Overview now shows **a single mass balance**, computed the same way as the production order page: **Total Output − Total Input**.
+  - **Total input** — everything debagged, plus machine spillage, plus the bucket elevator carried in from yesterday. That carry-over is always this run's own variant: `production.bucket_elevator_log` keeps conventional and organic as separate pools and a shift can only draw on its own family's balance, so there is nothing to exclude at this level.
+  - **Total output** — bags bagged out, plus half-bag **top-up increments** (the weight added into an older bag today, never that bag's full weight). Top-ups are a side-channel write that never reaches a batch's `outputs`, so every total on this screen was short by exactly that weight until now.
+  - **Bucket elevator left for tomorrow** is work in progress, not product: excluded from output, counted on neither side, and shown separately below the total.
+  - Read as out − in, so the normal case (moisture, dust, spillage) is a negative number that says "material lost" at a glance. Flagged outside ±1% of total input.
+- **The debagging and bagging cards now use the same names and the same arithmetic as the panel** — "Total input", "Total output" — so the balance can be checked against the cards line by line. Previously the bagging card's "Total out" folded the carry-over in while the balance did not, which is exactly the "same figure shown two inconsistent ways" that reads as confusion on the floor.
+- Everything the balance leaves out is named underneath it, in kg: the carry-over, the top-ups, and any duplicate rows still being hidden.
+- **Deleted** the `SHOW_DERIVED_FIGURES` flag and the `YieldStrip` (kg in / kg out / yield / tons / bags / balance tiles + output split) from `CaptureOverview` — the figures it gated are replaced by the single balance, so the dead code goes rather than sitting switched off.
+
+### Repair script — now covers `prod_bagging` and `draft_data`
+
+`supabase/migrations/20260902_001_repair_sieving_changeover_duplicates.sql`. **Not applied by CI — run by hand, one step at a time.** Steps 1, 2 and 6 are read-only.
+
+- **`prod_debagging`** — deduplicated on `(session, lot, bag label)`, because a farm bag is a physical object debagged once. A row with a **blank** label is never deduplicated: two different unlabelled bags would collapse into one and under-count.
+- **`prod_bagging`** — clears the serial-less twins. `persist()` nulls a repeated serial to get the write through and keeps the row, so each copied bag survived as a `—` row on the production order and an unidentified bag in Quality's awaiting-QC queue. A serial-less row is only dropped when it matches a serialed bag on session + product + weight + bagging time; a genuine serial-less by-product will not coincide on all four.
+- **`prod_sessions.draft_data`** — deduplicated too, and this is the step that must not be skipped: both tables are **rebuilt from `draft_data`** on every save, so deleting the rows alone undoes itself the moment an operator next touches the session.
+- **Nothing is lost.** Every row and every `draft_data` document is copied whole into `production.repair_20260902_backup` before being touched; step 6 gives the statements to put any of it back.
+- **It refuses to run** if any bag identity has rows that disagree on weight — those are not copies, and dropping one would lose a real figure.
+- **Deliberately no `bag_tags` cleanup.** The duplication never created a `bag_tags` row (the self-heal reads it and copies bags *into* `draft_data`, never back), so `bag_tags` already holds exactly one row per physical bag and is the source of truth on the output side. Voiding tags on the strength of `draft_data` would invert that and destroy real bags whenever `draft_data` is behind — the very condition the self-heal exists to recover from.
+
+---
+
 ## 2026-08-31 — Gustav (Maintenance: originator verification step retired; QC-done notifications; production DB brought in line)
 
 **Files changed:** `lib/maintenance/useMaintenanceData.ts`, `components/maintenance/JobCardItem.tsx`, `components/maintenance/MaintenanceAlerts.tsx`, `app/api/maintenance/job-cards/[id]/verify/route.ts`, `app/api/maintenance/notify/qc-done/route.ts` (new), `supabase/migrations/20260831_010_retire_originator_verify_step.sql` (new, applied to staging AND production)
