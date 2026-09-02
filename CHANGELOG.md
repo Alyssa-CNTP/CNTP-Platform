@@ -60,6 +60,14 @@ Monday 31-08 ran Export, then Export Blend after the changeover, and the order s
 - **Neither table showed a grade at all.** `prod_debagging.grade` was already correct per row and simply was not rendered; output bags had no grade because `bag_tags.destination` was never selected. Both tables now carry a **Grade** column, and a group holding more than one grade shows the per-grade kg split on its header. A single-grade run gains no noise.
 - Confirmed against the floor's sheet for 31-08: **13 Export, 8 Export Blend**, matching the stored grades exactly. The data was right; only the display was missing.
 
+### The production order summary splits by grade
+
+The printed order for 31-08 read `Conventional · Grade A`, one raw grade letter, over `TOTAL INPUT 14 385.0 kg` / `TOTAL OUTPUT 14 103.0 kg`. Correct to the kilogram and misleading: the day ran Export and Export Blend, and nothing on the report distinguished them.
+
+- **A `By grade` table in the mass-balance summary** — input kg, output kg and bag count per grade. Only appears when the run actually held more than one grade.
+- **No balance per grade, deliberately.** The tower is one physical stream: the bucket elevator carries across the changeover, spillage belongs to no single grade, and material in the machine when the grade changed went in as one and came out as the other. Input and output are captured per bag and are real; a per-grade balance would be false precision. Anything unattributable gets its own line, so the split still adds up to the totals above it.
+- **Print fix.** The input/output tables live in `overflow-x-auto` wrappers with min-widths. On screen they scroll; on paper there is nothing to scroll, so the rightmost column is cut off silently — which would have been the new Grade column. `@media print` now lets them wrap and drops the min-widths.
+
 ### Quality's awaiting-QC queue — closing a bag that was never sampled
 
 The queue stood at 62. About 20 were the changeover's serial-less twins and Step 3b deleted those; they were never physical bags. The other **42 are real bags with no Final QC at all** — Step 8a established that no final `sd_run` carries their serial, and the runs that do exist for the same lot and day belong to bags that already cleared. There was no broken link to repair (Step 8b looked and found none). QC samples some bags per lot; the queue asks for a Final QC per **bag**, so every bag the sampling plan doesn't cover sits there permanently.

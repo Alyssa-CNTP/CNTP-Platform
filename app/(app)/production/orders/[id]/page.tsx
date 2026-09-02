@@ -191,6 +191,54 @@ export default function ProductionOrderDetailPage() {
   const yieldPct = totalInput > 0 ? Math.round((totalOutput / totalInput) * 1000) / 10 : null
   const wholeRunBalance = massBalanceInfo(totalOutput, totalInput)
 
+  // ── The summary, split by grade ──────────────────────────────────────────
+  // A changeover day runs two grades under one production order, and a single
+  // pair of totals cannot say which is which. That is what made the 31-08
+  // report misleading: 14 385 kg in and 14 103 kg out, correct to the kilogram,
+  // with nothing anywhere on it distinguishing Export from Export Blend.
+  //
+  // Input and output are split per grade because both are captured per bag and
+  // are therefore real. There is deliberately NO per-grade balance: the tower
+  // is one physical stream, so the bucket elevator carried across the
+  // changeover and the machine spillage belong to no single grade, and material
+  // sitting in the machine when the grade changed was fed by one and bagged as
+  // the other. A per-grade balance would be false precision. Anything that
+  // cannot be attributed is shown on its own line rather than folded into a
+  // grade, so these figures add up to the totals above.
+  const inputByGrade = new Map<string, number>()
+  let inputUnattributedKg = 0
+  for (const d of inputRows) {
+    const g = (d.grade || '').trim()
+    const kg = Number(d.kg_nett) || 0
+    if (!g) { inputUnattributedKg += kg; continue }
+    inputByGrade.set(g, (inputByGrade.get(g) ?? 0) + kg)
+  }
+  const outputByGrade = new Map<string, { kg: number; bags: number }>()
+  let outputUnattributedKg = 0
+  let outputUnattributedBags = 0
+  for (const b of bags) {
+    if (b.bornViaRebag) continue          // counted on the day its source was bagged
+    const g = (b.grade || '').trim()
+    if (!g) { outputUnattributedKg += b.kg || 0; outputUnattributedBags++; continue }
+    const cur = outputByGrade.get(g) ?? { kg: 0, bags: 0 }
+    cur.kg += b.kg || 0
+    cur.bags += 1
+    outputByGrade.set(g, cur)
+  }
+  // Half-bag top-ups add weight to a bag from an earlier day; the increment
+  // carries no grade of its own.
+  const topUpUnattributedKg = freshTopUps.reduce((t, r) => t + r.kg, 0)
+  const gradeRows = Array.from(new Set([...inputByGrade.keys(), ...outputByGrade.keys()]))
+    .sort()
+    .map(g => ({
+      grade: g,
+      inKg: inputByGrade.get(g) ?? 0,
+      out: outputByGrade.get(g) ?? { kg: 0, bags: 0 },
+    }))
+  const unattributedInKg  = inputUnattributedKg
+  const unattributedOutKg = outputUnattributedKg + topUpUnattributedKg
+  const showGradeBreakdown = gradeRows.length > 1
+
   return (
     <div className="px-4 py-6 max-w-[1000px] mx-auto space-y-5 print-full-width">
       <div className="no-print flex items-center justify-between">
@@ -253,6 +301,55 @@ export default function ProductionOrderDetailPage() {
               <Field label="Balance (out − in)" value={<span className={TONE_TEXT_CLASS[wholeRunBalance.tone]}>{wholeRunBalance.text}</span>} />
               <Field label="Yield"        value={yieldPct != null ? `${yieldPct}%` : '—'} />
             </div>
+            {/* Which of those kilograms are Export and which are Export Blend.
+                Only shown when the run actually held more than one grade. */}
+            {showGradeBreakdown && (
+              <div className="mt-4 rounded-xl border border-surface-rule overflow-hidden">
+                <div className="px-3 py-2 bg-surface-dim text-[12.5px] font-semibold text-text">
+                  By grade
+                </div>
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr>
+                      {['Grade', 'Input', 'Output', 'Bags'].map((h, i) => (
+                        <th key={h} className={`px-3 py-1.5 font-mono text-[9px] font-semibold text-text-faint uppercase tracking-[0.06em] whitespace-nowrap ${i > 0 ? 'text-right' : ''}`}>{h}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-surface-rule/60">
+                    {gradeRows.map(g => (
+                      <tr key={g.grade}>
+                        <td className="px-3 py-1.5 text-[12.5px] font-medium text-text whitespace-nowrap">{g.grade}</td>
+                        <td className="px-3 py-1.5 font-mono text-[12px] text-text-muted text-right tabular-nums">{g.inKg.toFixed(1)} kg</td>
+                        <td className="px-3 py-1.5 font-mono text-[12px] text-text-muted text-right tabular-nums">{g.out.kg.toFixed(1)} kg</td>
+                        <td className="px-3 py-1.5 font-mono text-[12px] text-text-muted text-right tabular-nums">{g.out.bags}</td>
+                      </tr>
+                    ))}
+                    {(unattributedInKg > 0 || unattributedOutKg > 0) && (
+                      <tr>
+                        <td className="px-3 py-1.5 text-[12.5px] text-text-muted">
+                          Not attributable to one grade
+                          <span className="block text-[10.5px] text-text-faint">
+                            bucket elevator across the changeover, machine spillage, half-bag top-ups
+                          </span>
+                        </td>
+                        <td className="px-3 py-1.5 font-mono text-[12px] text-text-muted text-right tabular-nums">{unattributedInKg > 0 ? `${unattributedInKg.toFixed(1)} kg` : '—'}</td>
+                        <td className="px-3 py-1.5 font-mono text-[12px] text-text-muted text-right tabular-nums">{unattributedOutKg > 0 ? `${unattributedOutKg.toFixed(1)} kg` : '—'}</td>
+                        <td className="px-3 py-1.5 font-mono text-[12px] text-text-faint text-right tabular-nums">{outputUnattributedBags || '—'}</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+                <p className="px-3 py-2 border-t border-surface-rule/60 bg-surface-dim/40 text-[11px] text-text-muted leading-relaxed">
+                  No balance per grade, deliberately. The tower is one physical stream: the bucket
+                  elevator carries across the changeover, spillage belongs to no single grade, and
+                  material in the machine when the grade changed went in as one and came out as the
+                  other. Input and output above are captured per bag and are real; a balance per
+                  grade would not be.
+                </p>
+              </div>
+            )}
+
             {/* What the two totals are made of, and anything held out of them —
                 so the figure can be checked rather than taken on trust. */}
             <p className="mt-3 pt-3 border-t border-surface-rule/60 text-[11.5px] text-text-muted leading-relaxed">
