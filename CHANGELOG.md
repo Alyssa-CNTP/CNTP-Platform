@@ -26,6 +26,14 @@ Closes out the 2026-08-31 changeover incident. Everything before this was displa
 - Everything the balance leaves out is named underneath it, in kg: the carry-over, the top-ups, and any duplicate rows still being hidden.
 - **Deleted** the `SHOW_DERIVED_FIGURES` flag and the `YieldStrip` (kg in / kg out / yield / tons / bags / balance tiles + output split) from `CaptureOverview` — the figures it gated are replaced by the single balance, so the dead code goes rather than sitting switched off.
 
+### Production order — the grade per bag
+
+Monday 31-08 ran Export, then Export Blend after the changeover, and the order showed neither split.
+
+- **The order header took the first batch's grade for the whole day**, so a changeover run read as pure Export. It now names every grade the day ran (`Export + Export Blend`) and, when there is more than one, states outright that the Grade column identifies each bag.
+- **Neither table showed a grade at all.** `prod_debagging.grade` was already correct per row and simply was not rendered; output bags had no grade because `bag_tags.destination` was never selected. Both tables now carry a **Grade** column, and a group holding more than one grade shows the per-grade kg split on its header. A single-grade run gains no noise.
+- Confirmed against the floor's sheet for 31-08: **13 Export, 8 Export Blend**, matching the stored grades exactly. The data was right; only the display was missing.
+
 ### Repair script — now covers `prod_bagging` and `draft_data`
 
 `supabase/migrations/20260902_001_repair_sieving_changeover_duplicates.sql`. **Not applied by CI — run by hand, one step at a time.** Steps 1, 2 and 6 are read-only.

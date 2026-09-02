@@ -69,6 +69,12 @@
 --  10.  Step 8a           why the QC queue is not clearing            READ ONLY
 --  11.  Step 8b           relink the forced matches          WRITES, backed up
 --  12.  Step 8a, 8c       what is left for a person to decide         READ ONLY
+--  13.  Step 9a           the 31-08 changeover: grade per bag         READ ONLY
+--                         9b ONLY if 9a shows the wrong grade
+--  14.  Step 10           one query: where the repair stands          READ ONLY
+--
+-- Step 10 is the one to come back to. Every column reads 0 when the repair is
+-- complete, and it is safe to re-run at any time.
 --
 -- There is no "do $$ ... $$" and no helper function anywhere in this file. The
 -- Supabase dashboard editor splits a script on semicolons, so the ones inside
@@ -947,3 +953,59 @@ where pd.id = t.id;
 --       from production.bag_tags t
 --       where t.session_id = '640a5b53-82a4-47a8-b7ca-b22cd7b2dfff'
 --       order by t.printed_at;
+
+
+-- ===========================================================================
+-- Step 10. READ ONLY. Where does the repair stand right now?
+-- ===========================================================================
+-- One query, the whole picture, safe to re-run at any point. Every column
+-- should read 0 when the repair is complete.
+--
+--   debag_copies            duplicate farm-bag rows still in prod_debagging
+--                           -> Step 3a
+--   bagging_twins           serial-less prod_bagging rows mirroring a real bag
+--                           -> Step 3b
+--   draft_debag_copies      duplicate debag entries still in draft_data
+--   draft_output_copies     duplicate output entries still in draft_data
+--                           -> Step 4b. These two matter MOST: while they are
+--                           non-zero the next save rebuilds the rows Step 3
+--                           just deleted.
+select s.date, s.shift, s.status, s.id as session_id,
+       (select count(*) from production.prod_debagging pd
+         where pd.session_id = s.id
+           and pd.product_type in ('Farm Bag', '500kg Farm Bag')
+           and pd.is_spillage = false
+           and coalesce(btrim(pd.notes), '') <> '')
+       - (select count(distinct upper(regexp_replace(coalesce(pd.lot_number, ''), '\s', '', 'g'))
+                                || '|' || btrim(pd.notes))
+          from production.prod_debagging pd
+          where pd.session_id = s.id
+            and pd.product_type in ('Farm Bag', '500kg Farm Bag')
+            and pd.is_spillage = false
+            and coalesce(btrim(pd.notes), '') <> '') as debag_copies,
+       (select count(*) from production.prod_bagging pb
+         where pb.session_id = s.id
+           and pb.bag_serial_no is null
+           and exists (
+             select 1 from production.prod_bagging sp
+             where sp.session_id = pb.session_id
+               and sp.bag_serial_no is not null
+               and sp.product_type is not distinct from pb.product_type
+               and round(sp.kg::numeric, 3) = round(pb.kg::numeric, 3)
+               and sp.bagging_time is not distinct from pb.bagging_time)) as bagging_twins,
+       (select count(*) - count(distinct
+                 upper(regexp_replace(coalesce(nullif(r.value ->> 'lot', ''), pr.value ->> 'lot', ''), '\s', '', 'g'))
+                 || '|' || btrim(coalesce(r.value ->> 'bag_no', '')))
+          from jsonb_array_elements(s.draft_data -> 'productions') pr,
+               jsonb_array_elements(case when jsonb_typeof(pr.value -> 'data' -> 'debag') = 'array'
+                                          then pr.value -> 'data' -> 'debag' else '[]'::jsonb end) r
+          where btrim(coalesce(r.value ->> 'bag_no', '')) <> '') as draft_debag_copies,
+       (select count(*) - count(distinct btrim(r.value ->> 'serial'))
+          from jsonb_array_elements(s.draft_data -> 'productions') pr,
+               jsonb_array_elements(case when jsonb_typeof(pr.value -> 'data' -> 'outputs') = 'array'
+                                          then pr.value -> 'data' -> 'outputs' else '[]'::jsonb end) r
+          where btrim(coalesce(r.value ->> 'serial', '')) <> '') as draft_output_copies
+from production.prod_sessions s
+where s.section_id = 'sieving'
+  and jsonb_typeof(s.draft_data -> 'productions') = 'array'
+order by s.date desc, s.shift;
