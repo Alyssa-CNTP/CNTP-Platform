@@ -233,7 +233,7 @@ export const ACUMATICA_IDS = {
   fine_leaf_export:               (variant: Variant) => `10LGEF-${variantSuffix(variant)}`,
   // Sticks
   indent_sticks:                  (variant: Variant) => `15IGIS-${variantSuffix(variant)}`,
-  sticks:                         (variant: Variant) => `15IGST-${variantSuffix(variant)}`,
+  heavy_sticks:                   (variant: Variant) => `15IGST-${variantSuffix(variant)}`,
   blocks_clean:                   (variant: Variant) => `15IGBL-C-${variantSuffix(variant)}`,
   // Dusts
   brown_dust:                     (variant: Variant) => `15IGDB-${variantSuffix(variant)}`,

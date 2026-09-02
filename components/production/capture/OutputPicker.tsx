@@ -66,7 +66,7 @@ export function OutputPicker({ sectionId, variantWord, gradeLetter = 'A', defaul
   useEffect(() => { loadAllInventory().then(setAll) }, [])
 
   // The curated family shortlist for this section + variant + destination
-  // (Fine/Coarse Leaf, Blocks, Sticks/Indent Sticks, Brown/Powder Dust) — codes
+  // (Fine/Coarse Leaf, Blocks, Heavy/Indent Sticks, Brown/Powder Dust) — codes
   // come from the canonical getAcumaticaCode map. Waste streams (no code) drop out.
   const outputs = suggestOutputs(sectionId, variantWord, gradeLetter).filter(o => o.code)
   const results = filterInventory(all, query, variantWord)

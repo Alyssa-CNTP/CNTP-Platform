@@ -6,7 +6,7 @@
  * else in the folder is private.
  *
  *     const catalogue = await loadCatalogue()
- *     const r = resolveItem(catalogue, { productType: 'Sticks', variant: 'CON', grade: 'A' })
+ *     const r = resolveItem(catalogue, { productType: 'Heavy Sticks', variant: 'CON', grade: 'A' })
  *     switch (r.kind) {
  *       case 'resolved':        // r.item.inventoryId is guaranteed to exist
  *       case 'not-stocked':     // r.availableVariants says what does exist
@@ -23,7 +23,10 @@ import { getDb } from '@/lib/supabase/db'
 import { buildCatalogue, type Catalogue, type InventoryRow } from './catalogue'
 
 export type { Catalogue, CatalogueItem, InventoryRow, VariantCode } from './catalogue'
-export { buildCatalogue, variantCodeOf, stemOf, variantsOf } from './catalogue'
+export {
+  buildCatalogue, variantCodeOf, variantCodeForWord, stemOf, variantsOf,
+  VARIANT_BY_SUFFIX,
+} from './catalogue'
 export {
   resolveItem, resolveInputItem, resolvedId, explain, assertNeverResolution,
   type ItemResolution, type ResolveQuery,

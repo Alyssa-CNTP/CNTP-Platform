@@ -101,7 +101,7 @@ const groupColor = (i: number) => GROUP_COLORS[i % GROUP_COLORS.length]
 // that bags Sticks before Fine Leaf shouldn't reorder the groups on screen.
 // Anything not in this list (Dust, a free-text search result, etc.) sorts
 // after, in the order it was first bagged.
-const OUTPUT_GROUP_ORDER = ['Fine Leaf', 'Coarse Leaf', 'Indent Sticks', 'Sticks', 'RB Blocks']
+const OUTPUT_GROUP_ORDER = ['Fine Leaf', 'Coarse Leaf', 'Indent Sticks', 'Heavy Sticks', 'RB Blocks']
 function sortOutputGroups(types: string[]): string[] {
   // Ordered by canonical name so a session left open across the Sticks rename
   // does not drop its 'Rolsiev Sticks' group to the bottom of the list.

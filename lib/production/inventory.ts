@@ -11,6 +11,7 @@ import { getAcumaticaCode } from '@/lib/production/acumatica-codes'
 import { variantToShort, PRODUCTION_ORDER_PREFIXES, SECTION_OUTPUT_GROUPS, leafFamily, VARIANT_OPTIONS } from '@/lib/production/capture-config'
 import { SECTION_CONFIG } from '@/lib/production/live-types'
 import { variantFamily } from '@/lib/production/scan-utils'
+import { variantCodeOf, variantCodeForWord } from '@/features/acumatica-items'
 import type { InventoryItem } from '@/lib/supabase/database.types'
 
 export interface SuggestedItem {
@@ -56,9 +57,21 @@ export function sectionOutputItems(all: InventoryItem[], sectionId: string, vari
   const groups = SECTION_OUTPUT_GROUPS[sectionId] ?? []
   if (!groups.length || !variantWord) return []
   const leafRe = new RegExp(`^10LG${leafFamily(gradeLetter)}[FC]`)
+  // Match on the variant CODE carried by the inventory id, not on the row's
+  // `variant` column. Two separate reasons, both live:
+  //
+  //   1. Eight synced rows disagree with their own id. 15IGBL-C-O is
+  //      "Blocks: Clean - Organic" but is filed as Conventional, as are
+  //      15IGBL-C-RC and -RO — so an Organic or RA run could not see Blocks in
+  //      this picker at all.
+  //   2. The column and the app's DbVariant spell Fairtrade differently
+  //      ('FT-Organic' vs 'FT-ORG'), so that comparison could never match.
+  //
+  // The id suffix is what Acumatica keys on and is right in both cases.
+  const wantCode = variantCodeForWord(variantWord)
   return all
     .filter(it => {
-      if (it.variant !== variantWord) return false
+      if (wantCode ? variantCodeOf(it.inventory_id) !== wantCode : it.variant !== variantWord) return false
       const g = it.product_group ?? ''
       if (!groups.includes(g)) return false
       if (g === 'Leaf') return leafRe.test(it.inventory_id)
@@ -96,8 +109,12 @@ export function filterInventory(all: InventoryItem[], query: string, variantWord
     const haystack = `${it.inventory_id} ${it.description ?? ''}`.toLowerCase()
     return words.every(w => haystack.includes(w))
   })
-  // Same-variant items first.
-  matched.sort((a, b) => (b.variant === variantWord ? 1 : 0) - (a.variant === variantWord ? 1 : 0))
+  // Same-variant items first — by id suffix, for the same reasons as
+  // sectionOutputItems above.
+  const wantCode = variantCodeForWord(variantWord)
+  const isWanted = (it: InventoryItem) =>
+    wantCode ? variantCodeOf(it.inventory_id) === wantCode : it.variant === variantWord
+  matched.sort((a, b) => (isWanted(b) ? 1 : 0) - (isWanted(a) ? 1 : 0))
   return matched.slice(0, 30)
 }
 
@@ -109,8 +126,10 @@ export function filterInventory(all: InventoryItem[], query: string, variantWord
 export function productionOrderItems(all: InventoryItem[], sectionId: string, variantWord: string): InventoryItem[] {
   const prefixes = PRODUCTION_ORDER_PREFIXES[sectionId] ?? []
   if (!prefixes.length || !variantWord) return []
+  const wantCode = variantCodeForWord(variantWord)
   return all
-    .filter(it => it.variant === variantWord && prefixes.some(p => it.inventory_id.startsWith(p)))
+    .filter(it => (wantCode ? variantCodeOf(it.inventory_id) === wantCode : it.variant === variantWord)
+      && prefixes.some(p => it.inventory_id.startsWith(p)))
     .sort((a, b) => a.inventory_id.localeCompare(b.inventory_id))
 }
 

@@ -92,10 +92,17 @@ export function isOrganicVariant(v: string | null | undefined): boolean {
 }
 
 // Full Acumatica variant word → live-types short code used by getAcumaticaCode().
+// Fairtrade keeps its own short label. It used to fold onto ORG/CON, which
+// meant certified Fairtrade material was booked against the plain organic or
+// conventional Acumatica item — 05RMDE-FC ("Raw Material Dry: Export Fairtrade
+// Conventional") is a real, separate item, and FT is a certification with the
+// same segregation requirement that ORGANIC_VARIANTS above exists to protect.
+// A wrong code imports cleanly and is therefore worse than a blank one.
 export function variantToShort(v: DbVariant | null | undefined): string {
   const map: Record<string, string> = {
     'Conventional': 'CON', 'Organic': 'ORG',
-    'RA-Conventional': 'RA CON', 'RA-Organic': 'RA ORG', 'FT-ORG': 'ORG', 'FT-CON': 'CON',
+    'RA-Conventional': 'RA CON', 'RA-Organic': 'RA ORG',
+    'FT-ORG': 'FT ORG', 'FT-CON': 'FT CON',
   }
   return v ? (map[v] ?? 'CON') : 'CON'
 }

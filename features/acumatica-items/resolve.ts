@@ -32,7 +32,7 @@
 import { canonicalProductType } from '@/lib/core/product-names'
 import {
   type Catalogue, type CatalogueItem, type VariantCode,
-  SUFFIX_BY_SHORT_VARIANT, variantsOf,
+  variantCodeForWord, variantsOf,
 } from './catalogue'
 import { STEMS, STEM_ALIASES, INPUT_STEMS } from './stems'
 
@@ -63,7 +63,9 @@ export function assertNeverResolution(x: never): never {
 }
 
 function suffixFor(variant: string): VariantCode | null {
-  return SUFFIX_BY_SHORT_VARIANT[String(variant ?? '').trim().toUpperCase()] ?? null
+  // Accepts a short label, a DbVariant or an Acumatica variant word — callers
+  // pass all three depending on where they sit. See catalogue.ts.
+  return variantCodeForWord(variant)
 }
 
 /** Resolve one production output to its Acumatica item. */

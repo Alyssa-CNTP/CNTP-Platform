@@ -18,17 +18,7 @@ export const VARIANT_BY_SUFFIX: Readonly<Record<VariantCode, string>> = {
   FO: 'FT-Organic',
 }
 
-/**
- * The platform's short variant labels → the id suffix.
- *
- * Fairtrade is listed here even though variantToShort() in capture-config.ts
- * currently folds FT-CON to CON and FT-ORG to ORG before anything downstream
- * sees it. That fold is wrong on the raw-material side — 05RMDE-FC
- * ("Raw Material Dry: Export Fairtrade Conventional") is a real, separate item
- * and Fairtrade is a certification with segregation requirements, the same
- * reason ORGANIC_VARIANTS exists in capture-config.ts. Mapping it correctly
- * here means the resolver reports the truth once the fold upstream is removed.
- */
+/** The platform's short variant labels → the id suffix. */
 export const SUFFIX_BY_SHORT_VARIANT: Readonly<Record<string, VariantCode>> = {
   'CON':    'C',
   'ORG':    'O',
@@ -36,6 +26,37 @@ export const SUFFIX_BY_SHORT_VARIANT: Readonly<Record<string, VariantCode>> = {
   'RA ORG': 'RO',
   'FT CON': 'FC',
   'FT ORG': 'FO',
+}
+
+/**
+ * Any spelling of a variant → its id suffix.
+ *
+ * There are THREE vocabularies for the same six variants and they do not agree:
+ *
+ *   inventory_items.variant   'Conventional' … 'FT-Conventional', 'FT-Organic'
+ *   app DbVariant             'Conventional' … 'FT-CON', 'FT-ORG'
+ *   short labels in the UI    'CON', 'ORG', 'RA CON', 'RA ORG', 'FT CON', 'FT ORG'
+ *
+ * They line up for the four common variants and diverge on Fairtrade, so a
+ * direct string comparison between an item row and an app variant silently
+ * never matches for FT. Comparing CODES instead is immune to all three.
+ */
+const CODE_BY_WORD: Readonly<Record<string, VariantCode>> = {
+  // inventory_items.variant
+  'conventional': 'C', 'organic': 'O',
+  'ra-conventional': 'RC', 'ra-organic': 'RO',
+  'ft-conventional': 'FC', 'ft-organic': 'FO',
+  // app DbVariant
+  'ft-con': 'FC', 'ft-org': 'FO',
+  // short labels
+  'con': 'C', 'org': 'O', 'ra con': 'RC', 'ra org': 'RO',
+  'ft con': 'FC', 'ft org': 'FO',
+}
+
+/** The variant code for a variant written in any of the three vocabularies. */
+export function variantCodeForWord(word: string | null | undefined): VariantCode | null {
+  const k = String(word ?? '').trim().replace(/\s+/g, ' ').toLowerCase()
+  return k ? (CODE_BY_WORD[k] ?? null) : null
 }
 
 /** Longest first, so '-RC' is tested before '-C'. */

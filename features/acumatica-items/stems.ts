@@ -41,7 +41,9 @@ export const STEMS: Readonly<Record<string, StemRule>> = {
     phantom: (g) => (LEAF_FAMILY[g] ? `S10LG${LEAF_FAMILY[g]}` : null),
   },
   'RB Blocks':    { stem: '15IGBL-C' },
-  'Sticks':       { stem: '15IGST' },
+  // Floor name Heavy Sticks; Acumatica 15IGST "Sticks". The two layers differ
+  // on purpose — see lib/core/product-names.ts.
+  'Heavy Sticks': { stem: '15IGST' },
   'Indent Sticks': { stem: '15IGIS' },
   'Brown Dust':   { stem: '15IGDB' },
   'Powder Dust':  { stem: '15IGDPOWDR' },

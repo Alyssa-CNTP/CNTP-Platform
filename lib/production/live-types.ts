@@ -1,4 +1,7 @@
-export type Variant = 'CON' | 'ORG' | 'RA CON' | 'RA ORG'
+// The short variant labels, as VARIANT_OPTIONS in capture-config.ts defines
+// them. Fairtrade is included: variantToShort() no longer folds FT onto
+// CON/ORG, so these two really do reach capture at runtime.
+export type Variant = 'CON' | 'ORG' | 'RA CON' | 'RA ORG' | 'FT CON' | 'FT ORG'
 export type Grade = 'A' | 'B' | 'C'
 export type ShiftType = 'morning' | 'afternoon' | 'night'
 
@@ -81,7 +84,7 @@ export const SECTION_CONFIG: Record<string, {
     colorHex: '#0d9488', colorClass: 'bg-teal-600',
     inputMode: 'register',
     inputTypes: ['Farm Bag'],
-    outputTypes: ['Fine Leaf','Coarse Leaf','RB Blocks','Sticks','Indent Sticks','Brown Dust','Powder Dust','Bucket Elevator Spillage'],
+    outputTypes: ['Fine Leaf','Coarse Leaf','RB Blocks','Heavy Sticks','Indent Sticks','Brown Dust','Powder Dust','Bucket Elevator Spillage'],
   },
   refining1: {
     name: 'Refining 1', code: 'R1',
@@ -90,14 +93,14 @@ export const SECTION_CONFIG: Record<string, {
     // Coarse Leaf + Cut Heavy Stick Fine/Coarse are additional inputs that
     // originate upstream (sieving tower / refining) — their batch number and
     // serial trace back to the origin bag on scan / system pick.
-    inputTypes: ['Indent Sticks', 'Sticks', 'Blocks: Clean', '1st Cut', 'Coarse Leaf', 'Cut Heavy Stick Fine', 'Cut Heavy Stick Coarse'],
+    inputTypes: ['Indent Sticks', 'Heavy Sticks', 'Blocks: Clean', '1st Cut', 'Coarse Leaf', 'Cut Heavy Stick Fine', 'Cut Heavy Stick Coarse'],
     outputTypes: ['Indent Dust', 'White Dust'],
   },
   refining2: {
     name: 'Refining 2', code: 'R2',
     colorHex: '#3b82f6', colorClass: 'bg-blue-500',
     inputMode: 'scan',
-    inputTypes: ['Sticks', 'Cut Heavy Stick Coarse', 'Cut Heavy Stick Fine', 'Coarse Leaf'],
+    inputTypes: ['Heavy Sticks', 'Cut Heavy Stick Coarse', 'Cut Heavy Stick Fine', 'Coarse Leaf'],
     outputTypes: ['Cut Heavy Stick Fine', 'Cut Heavy Stick Coarse', 'White Dust', 'Powder Dust'],
   },
   granule: {
@@ -157,6 +160,8 @@ export const VARIANT_LABELS: Record<Variant, string> = {
   'ORG':    'Organic',
   'RA CON': 'RA Conventional',
   'RA ORG': 'RA Organic',
+  'FT CON': 'Fairtrade Conventional',
+  'FT ORG': 'Fairtrade Organic',
 }
 
 export const GRADE_LABELS: Record<Grade, string> = {
