@@ -2,6 +2,26 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-02 — Alyssa (The batch list is actually this session's, and the Overview mass balance shows on the afternoon shift)
+
+**Files changed:** `lib/production/inventory.ts`, `components/production/capture/SievingCapture.tsx`, `components/production/capture/CaptureOverview.tsx`
+
+Two things reported from the capture page, both from today's work.
+
+### The batch list said "this session" and offered 32 historical lots
+
+The restriction was on — the field read *"Must match a batch debagged this session"* — and the tap list held `GS-0424`, `GS-0208`, `GS-0332` and thirty others from weeks back. Technically restricted, practically useless, and my earlier diagnosis (that the guard had been lost entirely) was wrong.
+
+`debaggedBatches` had **no date filter at all**: up to 60 lots across all history for the variant family and grade. The carve-out exists for one case — material fed in on an earlier shift that is still legitimately being bagged out — so it now takes a `sinceDate` and Sieving passes **yesterday**. This morning's debagging bagged out this afternoon still works; a lot from three weeks ago is no longer offered, because it is not what is on the machine.
+
+### The mass balance was missing on the afternoon shift
+
+It sat inside the card's `hasData` gate, which asks whether **this record** captured anything. The afternoon session's debagging is often all on the morning record, so the gate showed "Nothing captured yet" and hid the balance — even though the balance is deliberately the **whole day** and had figures to show.
+
+The balance now renders above that gate, on the day's data. The empty state also says so, instead of implying the day is empty.
+
+---
+
 ## 2026-09-02 — Alyssa (Restored: an output bag may only be tagged with a batch debagged this session)
 
 **Files changed:** `components/production/capture/SievingCapture.tsx`, `components/production/capture/OutputPicker.tsx`, `app/(app)/production/capture/[section]/page.tsx`, `scripts/verify-output-batch-hints.py` (new)
