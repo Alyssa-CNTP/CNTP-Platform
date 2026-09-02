@@ -52,6 +52,11 @@
 -- Steps 1 and 2 are read-only: run them first and read the output. Steps 3 and
 -- 4 change data, and step 4 must not be skipped. Step 6 verifies.
 --
+-- START WITH STEP 1b. Steps 1, 2a and 2c filter to product_type in ('Farm
+-- Bag','500kg Farm Bag'); 1b assumes nothing and shows where the rows actually
+-- are, so a repair cannot come back clean simply because it was looking in the
+-- wrong place. 1c finds the duplicated session without needing its id.
+--
 -- Run ONE STEP AT A TIME. Do not paste the whole file in at once.
 -- ============================================================================
 
@@ -91,7 +96,7 @@ d as (
            when pd.product_type in ('Farm Bag', '500kg Farm Bag')
                 and pd.is_spillage = false
                 and coalesce(btrim(pd.notes), '') <> ''
-           then upper(btrim(coalesce(pd.lot_number, ''))) || '|' || btrim(pd.notes)
+           then upper(regexp_replace(coalesce(pd.lot_number, ''), '\s', '', 'g')) || '|' || btrim(pd.notes)
          end) as distinct_labelled_bags,
          count(*) filter (
            where pd.product_type in ('Farm Bag', '500kg Farm Bag')
@@ -126,6 +131,62 @@ order by d.date desc, d.shift;
 
 
 -- ===========================================================================
+-- Step 1b. READ ONLY. What is ACTUALLY in prod_debagging
+-- ===========================================================================
+-- Step 1 and Step 2a both filter to product_type in ('Farm Bag','500kg Farm
+-- Bag'). If the duplicated rows on this database carry some other type, those
+-- steps show nothing and the repair is a no-op against the real problem. This
+-- query assumes nothing. Run it and check that the farm-bag types are in fact
+-- where the rows are.
+select s.section_id,
+       pd.product_type,
+       pd.is_spillage,
+       count(*)                      as rows,
+       count(distinct pd.session_id) as sessions,
+       count(*) filter (where coalesce(btrim(pd.notes), '') = '') as rows_without_bag_label,
+       min(s.date)                   as first_date,
+       max(s.date)                   as last_date
+from production.prod_debagging pd
+left join production.prod_sessions s on s.id = pd.session_id
+group by s.section_id, pd.product_type, pd.is_spillage
+order by count(*) desc;
+
+
+-- ===========================================================================
+-- Step 1c. READ ONLY. The fattest sessions, whatever their product_type
+-- ===========================================================================
+-- debag_rows far above distinct_identities is the duplication. This finds the
+-- affected session without needing to know its id: the 2026-08-31 incident
+-- session held 258 rows for 41 distinct identities.
+select s.section_id, s.date, s.shift, pd.session_id,
+       count(*) as debag_rows,
+       count(distinct upper(regexp_replace(coalesce(pd.lot_number, ''), '\s', '', 'g')) || '|' || btrim(coalesce(pd.notes, ''))) as distinct_identities,
+       round(sum(pd.kg_nett)::numeric, 1) as total_kg
+from production.prod_debagging pd
+left join production.prod_sessions s on s.id = pd.session_id
+group by s.section_id, s.date, s.shift, pd.session_id
+order by count(*) desc
+limit 20;
+
+
+-- ===========================================================================
+-- Step 1d. READ ONLY. Lot numbers that differ only by whitespace or case
+-- ===========================================================================
+-- Live data holds "MAT-0375" and "  MAT- 0375" in the SAME session. Compared
+-- literally those read as two different lots: here, in traceability, and in
+-- every batch join. This repair normalises them, but the stored values are
+-- still worth cleaning up separately.
+select upper(regexp_replace(coalesce(pd.lot_number, ''), '\s', '', 'g')) as lot_identity,
+       array_agg(distinct pd.lot_number) as written_as,
+       count(*) as rows
+from production.prod_debagging pd
+join production.prod_sessions s on s.id = pd.session_id and s.section_id = 'sieving'
+group by 1
+having count(distinct pd.lot_number) > 1
+order by count(*) desc;
+
+
+-- ===========================================================================
 -- Step 2a. READ ONLY. Which prod_debagging rows Step 3 will remove
 -- ===========================================================================
 -- Rows marked DROP are the ones that go. Read this before running Step 3.
@@ -134,7 +195,7 @@ with ranked as (
          pd.created_at,
          row_number() over (
            partition by pd.session_id,
-                        upper(btrim(coalesce(pd.lot_number, ''))),
+                        upper(regexp_replace(coalesce(pd.lot_number, ''), '\s', '', 'g')),
                         btrim(pd.notes)
            order by pd.created_at, pd.bag_no, pd.id
          ) as rn
@@ -196,7 +257,7 @@ join production.prod_sessions s on s.id = pd.session_id and s.section_id = 'siev
 where pd.product_type in ('Farm Bag', '500kg Farm Bag')
   and pd.is_spillage = false
   and coalesce(btrim(pd.notes), '') <> ''
-group by pd.session_id, pd.lot_number, btrim(pd.notes)
+group by pd.session_id, upper(regexp_replace(coalesce(pd.lot_number, ''), '\s', '', 'g')), btrim(pd.notes)
 having count(distinct round(pd.kg_nett::numeric, 3)) > 1;
 
 
@@ -217,7 +278,7 @@ begin
     where pd.product_type in ('Farm Bag', '500kg Farm Bag')
       and pd.is_spillage = false
       and coalesce(btrim(pd.notes), '') <> ''
-    group by pd.session_id, pd.lot_number, btrim(pd.notes)
+    group by pd.session_id, upper(regexp_replace(coalesce(pd.lot_number, ''), '\s', '', 'g')), btrim(pd.notes)
     having count(distinct round(pd.kg_nett::numeric, 3)) > 1
   ) q;
 
@@ -231,7 +292,7 @@ begin
     select pd.id,
            row_number() over (
              partition by pd.session_id,
-                          upper(btrim(coalesce(pd.lot_number, ''))),
+                          upper(regexp_replace(coalesce(pd.lot_number, ''), '\s', '', 'g')),
                           btrim(pd.notes)
              order by pd.created_at, pd.bag_no, pd.id
            ) as rn

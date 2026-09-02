@@ -16,6 +16,7 @@ import { dustProductType, type GranuleData } from '@/components/production/captu
 import { type BlenderData } from '@/components/production/capture/BlenderCapture'
 import { type PasteuriserData } from '@/components/production/capture/PasteuriserCapture'
 import { getDb } from '@/lib/supabase/db'
+import { normalizeLot } from '@/lib/production/self-heal-reconcile'
 
 interface Production {
   id: string; variant: string; grade: string; lot: string
@@ -157,7 +158,10 @@ function buildDebagLotGroups(prods: Production[]): { groups: DebagLotGroup[]; bu
         const lot = (r.lot || p.lot || '—').trim()
         const label = String(r.bag_no ?? '').trim()
         if (label) {
-          const identity = `${lot}|${label}`
+          // Lot compared by identity, not by how it was typed: live data holds
+          // `MAT-0375` and `  MAT- 0375` in one session, and a copy either side
+          // of that correction is still a copy.
+          const identity = `${normalizeLot(lot)}|${label}`
           if (seenSievingBag.has(identity)) { duplicatesHidden++; return }
           seenSievingBag.add(identity)
         }

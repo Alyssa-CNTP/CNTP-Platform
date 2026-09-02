@@ -7,6 +7,7 @@
 // the combined debagging inputs, and the summed mass balance. Shared by the
 // detail page so the report always shows the same data.
 
+import { normalizeLot } from '@/lib/production/self-heal-reconcile'
 import { getDb } from '@/lib/supabase/db'
 import { massBalanceToleranceFor } from '@/lib/production/capture-config'
 
@@ -571,7 +572,8 @@ export async function loadOrderDay(sessionId: string): Promise<OrderDay | null> 
     .filter((d: any) => {
       const label = String(d.notes ?? '').trim()
       if (d.is_spillage || !FARM_BAG_TYPES.has(d.product_type) || !label) return true
-      const key = `${d.session_id}|${String(d.lot_number ?? '').trim()}|${label}`
+      // Lot compared by identity, not by how it was typed — see normalizeLot.
+      const key = `${d.session_id}|${normalizeLot(d.lot_number)}|${label}`
       if (seenFarmBag.has(key)) { debagDuplicatesHidden++; return false }
       seenFarmBag.add(key)
       return true

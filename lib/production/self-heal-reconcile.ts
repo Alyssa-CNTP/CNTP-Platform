@@ -32,9 +32,22 @@
  * ledger row is returned once for each occurrence beyond what is held.
  */
 
+/**
+ * A lot number as it IDENTIFIES a lot, rather than as it was typed.
+ *
+ * Live data holds the same lot written both ways in one session — `MAT-0375`
+ * and `  MAT- 0375`, an operator's stray space. Compared literally those are
+ * two different lots, so a bag copied either side of the correction would not
+ * be recognised as a copy. All whitespace goes and the rest is upper-cased;
+ * combined with the bag label, that cannot merge two genuinely different bags.
+ */
+export function normalizeLot(lot: string | null | undefined): string {
+  return String(lot ?? '').replace(/\s+/g, '').toUpperCase()
+}
+
 /** Identity of a debagging row as the ledger and the screen both express it. */
 export function debagRowKey(bagNo: string, lot: string, nett: number): string {
-  return `${String(bagNo ?? '').trim()}|${String(lot ?? '').trim()}|${nett}`
+  return `${String(bagNo ?? '').trim()}|${normalizeLot(lot)}|${nett}`
 }
 
 /**
