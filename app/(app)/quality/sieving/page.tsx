@@ -1161,6 +1161,35 @@ export default function SievingPage() {
   const [unidentifiedBags, setUnidentifiedBags] = useState<any[]>([])
   const [showUnidentified, setShowUnidentified] = useState(false)
   const unidentifiedBagCount = unidentifiedBags.length
+
+  // ── Bags closed WITHOUT being sampled ────────────────────────────────────
+  // qms.bag_qc_waivers. A waived bag drops out of v_pending_bag_qc, so without
+  // this the queue would simply be shorter and nothing on screen would say 42
+  // bags had been closed unsampled. That is the same failure as hiding the
+  // duplicate rows: the number gets better and the reason disappears. Shown
+  // with who accepted it, because a waiver is a Quality decision on record --
+  // it is not a pass, and must never read as one.
+  const [waivers, setWaivers] = useState<{ reason: string; waived_by: string; n: number }[]>([])
+  const waivedCount = waivers.reduce((t, w) => t + w.n, 0)
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      const { data, error } = await db.schema('qms').from('bag_qc_waivers')
+        .select('reason, waived_by')
+      // The table may not exist yet (migration 20260902_003 unapplied) —
+      // that is not an error worth surfacing to a QC mid-shift.
+      if (cancelled || error || !data) return
+      const m = new Map<string, { reason: string; waived_by: string; n: number }>()
+      for (const w of data as any[]) {
+        const k = `${w.reason}|${w.waived_by}`
+        const cur = m.get(k)
+        if (cur) cur.n++
+        else m.set(k, { reason: w.reason, waived_by: w.waived_by, n: 1 })
+      }
+      setWaivers(Array.from(m.values()).sort((a, b) => b.n - a.n))
+    })()
+    return () => { cancelled = true }
+  }, [db, pendingBags])
   const loadPendingBags = useCallback(async () => {
     setPendingLoading(true)
     const { data, error } = await db.schema('qms').from('v_pending_bag_qc')
@@ -1851,15 +1880,34 @@ export default function SievingPage() {
           full viewport even when expanded. */}
       {/* Also render when every pending row was unidentifiable — otherwise the
           panel disappears and hides the fact that anything was held back. */}
-      {(bagAlerts.length > 0 || unidentifiedBagCount > 0) && (
+      {(bagAlerts.length > 0 || unidentifiedBagCount > 0 || waivedCount > 0) && (
         <div style={{position:'fixed',top:70,right:16,zIndex:5000,display:'flex',flexDirection:'column',gap:8,maxWidth:340,maxHeight:'min(60vh, calc(100vh - 90px))',pointerEvents:'none'}}>
           <button onClick={()=>setAlertsCollapsed(c=>!c)}
             style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,background:'#166534',border:'none',borderRadius:10,padding:'9px 12px',color:'#fff',fontSize:12,fontWeight:700,cursor:'pointer',boxShadow:'0 12px 30px rgba(0,0,0,.15)',pointerEvents:'auto',flexShrink:0}}>
-            <span>📦 {bagAlerts.length} bag{bagAlerts.length>1?'s':''} awaiting QC{unidentifiedBagCount > 0 ? ` · ${unidentifiedBagCount} unidentified hidden` : ''}</span>
+            <span>📦 {bagAlerts.length} bag{bagAlerts.length>1?'s':''} awaiting QC{unidentifiedBagCount > 0 ? ` · ${unidentifiedBagCount} unidentified hidden` : ''}{waivedCount > 0 ? ` · ${waivedCount} closed unsampled` : ''}</span>
             <span style={{opacity:.85}}>{alertsCollapsed?'▲':'▼'}</span>
           </button>
           {!alertsCollapsed && (
             <div style={{display:'flex',flexDirection:'column',gap:8,overflowY:'auto',pointerEvents:'auto'}}>
+              {waivedCount > 0 && (
+                <div style={{background:'#fff',border:'1px solid #fed7aa',borderLeft:'4px solid #ea580c',borderRadius:10,boxShadow:'0 12px 30px rgba(0,0,0,.15)',padding:'12px 14px'}}>
+                  <div style={{fontWeight:700,fontSize:12,color:'#9a3412'}}>
+                    ⊘ {waivedCount} bag{waivedCount>1?'s':''} closed without sampling
+                  </div>
+                  <div style={{fontSize:11,color:'#6b7280',marginTop:4}}>
+                    These have no Final QC. They were taken out of the queue by a deliberate
+                    decision, not by passing — that decision is what is recorded against them.
+                  </div>
+                  <div style={{marginTop:8,display:'flex',flexDirection:'column',gap:6}}>
+                    {waivers.map((w,i)=>(
+                      <div key={i} style={{fontSize:11,color:'#374151',borderTop:'1px solid #f5f5f4',paddingTop:6}}>
+                        <strong>{w.n}</strong> · {w.reason}
+                        <br/><span style={{color:'#6b7280'}}>accepted by {w.waived_by}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
               {unidentifiedBagCount > 0 && (
                 <div style={{background:'#fff',border:'1px solid #d6d3d1',borderLeft:'4px solid #a8a29e',borderRadius:10,boxShadow:'0 12px 30px rgba(0,0,0,.15)',padding:'12px 14px'}}>
                   <button onClick={()=>setShowUnidentified(v=>!v)}

@@ -34,6 +34,15 @@ Monday 31-08 ran Export, then Export Blend after the changeover, and the order s
 - **Neither table showed a grade at all.** `prod_debagging.grade` was already correct per row and simply was not rendered; output bags had no grade because `bag_tags.destination` was never selected. Both tables now carry a **Grade** column, and a group holding more than one grade shows the per-grade kg split on its header. A single-grade run gains no noise.
 - Confirmed against the floor's sheet for 31-08: **13 Export, 8 Export Blend**, matching the stored grades exactly. The data was right; only the display was missing.
 
+### Quality's awaiting-QC queue — closing a bag that was never sampled
+
+The queue stood at 62. About 20 were the changeover's serial-less twins and Step 3b deleted those; they were never physical bags. The other **42 are real bags with no Final QC at all** — Step 8a established that no final `sd_run` carries their serial, and the runs that do exist for the same lot and day belong to bags that already cleared. There was no broken link to repair (Step 8b looked and found none). QC samples some bags per lot; the queue asks for a Final QC per **bag**, so every bag the sampling plan doesn't cover sits there permanently.
+
+- **Not fixed by writing the missing `sd_runs`.** A final run carries a needle count, a leaf shade and a QC's name; manufacturing 42 of them to empty a screen would put fabricated readings into the FSSC record against a real operator. Declined.
+- **New `qms.bag_qc_waivers`** (`20260902_003`) records an explicit, attributable decision instead: this bag was not sampled, here is who accepted that and why. `v_pending_bag_qc` skips a waived bag — `CREATE OR REPLACE` with `SELECT *`, so no dependent view is dropped and `v_bag_qc_status`/`v_bag_events` are untouched (rebuilding those is what once took the queue from 8 rows to 847). Deleting the waiver row puts the bag back.
+- **It never reads as a pass.** The Sieving QC panel now shows `N closed unsampled` with the reason and who accepted it. A shorter queue with no visible reason is the same failure as silently hiding the duplicate rows.
+- **The standing problem is policy, not data:** per-bag QC vs per-lot sampling. Waiving each backlog is not a fix — `qc_required` needs to reflect what the sampling plan actually requires. Flagged for Quality.
+
 ### Repair script — now covers `prod_bagging` and `draft_data`
 
 `supabase/migrations/20260902_001_repair_sieving_changeover_duplicates.sql`. **Not applied by CI — run by hand, one step at a time.** Steps 1, 2 and 6 are read-only.
