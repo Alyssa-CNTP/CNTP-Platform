@@ -67,6 +67,25 @@ export const flags = {
    *     unset / empty                                (none — the default)
    */
   dbSerialSections: sectionSetFlag('NEXT_PUBLIC_FF_DB_SERIAL_ALLOCATION'),
+
+  /**
+   * Resolve Acumatica item codes against the synced master inventory
+   * (features/acumatica-items) instead of building them from the templates in
+   * lib/production/acumatica-codes.ts.
+   *
+   * A plain boolean, not a per-section set like the serial flag: an item code
+   * is not printed on anything and is not an identity — it is a field on a row
+   * that can be corrected afterwards, so the blast radius of a bad flip is a
+   * re-save rather than a re-labelled pallet.
+   *
+   * ON is the more truthful behaviour, not merely the newer one: the templates
+   * can emit ids that do not exist in Acumatica (20BGGE-001-RC and the whole
+   * Granule -002 family), and the resolver refuses to. Expect codes that used
+   * to appear silently to become a visible "not in the master inventory"
+   * warning — that is the point, and those bags were failing the import
+   * already.
+   */
+  acumaticaResolver: envFlag('NEXT_PUBLIC_FF_ACUMATICA_RESOLVER', false),
 } as const
 
 export type FeatureFlag = keyof typeof flags

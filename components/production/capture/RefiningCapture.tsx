@@ -9,7 +9,7 @@ import { markBagConsumed, sanitizeSerial, voidBagTag } from '@/lib/production/sc
 import { validateBagScan, type ScanValidationResult } from '@/lib/production/validate-scan'
 import { SECTION_CONFIG } from '@/lib/production/live-types'
 import type { OutputBag, Variant as ShortVariant } from '@/lib/production/live-types'
-import { getAcumaticaCode } from '@/lib/production/acumatica-codes'
+import { useItemCodes } from '@/lib/production/use-item-codes'
 import { loadAllInventory } from '@/lib/production/inventory'
 import { ItemPicker } from '@/components/production/capture/ItemPicker'
 import { ScanBox, BagScanModal } from '@/components/production/capture/BagScanIn'
@@ -553,6 +553,7 @@ export function RefiningCapture({
   const sectionLabel = SECTION_CONFIG[sectionId]?.name ?? 'this section'
   const [items, setItems] = useState<InventoryItem[]>([])
   const variantShort = variantToShort(variantWord as any) as ShortVariant
+  const itemCodes = useItemCodes()
 
   useEffect(() => { loadAllInventory().then(setItems) }, [])
 
@@ -703,7 +704,7 @@ export function RefiningCapture({
       }
     }
     const now = nowISO()
-    const acCode = getAcumaticaCode(productType, variantShort, 'A')
+    const acCode = itemCodes.codeFor(productType, variantShort, 'A')
     const bag: OutputBag = {
       id: crypto.randomUUID(), serial_number: serial, product_type: productType,
       variant: variantShort, grade: 'A', weight_kg: n(weight),

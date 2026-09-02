@@ -19,7 +19,8 @@ import {
   VARIANT_LABELS, GRADE_LABELS, BLENDER_INPUT_COLUMNS,
 } from '@/lib/production/live-types'
 import type { ScannedBag, OutputBag, Variant, Grade } from '@/lib/production/live-types'
-import { getAcumaticaCode, getInputAcumaticaCode, formatCodeLabel } from '@/lib/production/acumatica-codes'
+import { formatCodeLabel } from '@/lib/production/acumatica-codes'
+import { useItemCodes } from '@/lib/production/use-item-codes'
 
 // ── SA Official Languages ─────────────────────────────────────────────────────
 const SA_LANGS = [
@@ -319,6 +320,11 @@ function CaptureInner() {
       })
   }, [sectionId, blendCodesLoaded])
 
+  // Acumatica item codes — resolved against the synced master inventory when
+  // NEXT_PUBLIC_FF_ACUMATICA_RESOLVER is on, built from the old templates when
+  // it is not. See lib/production/use-item-codes.ts.
+  const itemCodes = useItemCodes()
+
   // Output form
   const [showOutForm, setShowOutForm] = useState(false)
   const [outForm, setOutForm] = useState({
@@ -415,7 +421,7 @@ function CaptureInner() {
       return
     }
     const serial = genSerial()
-    const inputCode = getInputAcumaticaCode(regForm.grade, regForm.variant)
+    const inputCode = itemCodes.inputCodeFor(regForm.grade, regForm.variant)
     const bag: ScannedBag = {
       id:             crypto.randomUUID(),
       serial_number:  serial,
@@ -451,7 +457,7 @@ function CaptureInner() {
       flash('Product type and weight are required', 'warn')
       return
     }
-    const inputCode = getInputAcumaticaCode(unknownForm.grade, unknownForm.variant)
+    const inputCode = itemCodes.inputCodeFor(unknownForm.grade, unknownForm.variant)
     const bag: ScannedBag = {
       id:            crypto.randomUUID(),
       serial_number: unknownSerial,
@@ -483,7 +489,7 @@ function CaptureInner() {
       return
     }
     const serial = genSerial()
-    const acu = getAcumaticaCode(outForm.product_type, outForm.variant, outForm.grade)
+    const acu = itemCodes.codeFor(outForm.product_type, outForm.variant, outForm.grade)
     const now = new Date().toISOString()
     const bag: OutputBag = {
       id:            crypto.randomUUID(),
@@ -1013,7 +1019,7 @@ function CaptureInner() {
                 </div>
                 <div className="divide-y divide-stone-100">
                   {granuleDustInputs.map((row, i) => {
-                    const acu = getAcumaticaCode(row.dustType, row.variant, 'A')
+                    const acu = itemCodes.codeFor(row.dustType, row.variant, 'A')
                     return (
                       <div key={row.dustType} className="px-4 py-3 space-y-2">
                         <div className="flex items-center justify-between">
@@ -1227,13 +1233,29 @@ function CaptureInner() {
                   <Pill<Grade> value={outForm.grade} options={GRADES} labels={GRADE_LABELS} onChange={v => setOutForm(f => ({...f, grade: v}))}/>
                 </div>
                 {sectionId !== 'blender' && (() => {
-                  const liveCode = getAcumaticaCode(outForm.product_type, outForm.variant, outForm.grade)
-                  if (!liveCode) return null
+                  const liveCode = itemCodes.codeFor(outForm.product_type, outForm.variant, outForm.grade)
+                  if (liveCode) {
+                    return (
+                      <div className="flex items-center gap-2.5 px-3 py-2.5 bg-stone-50 border border-stone-200 rounded-xl">
+                        <span className="text-[10px] font-semibold text-stone-400 uppercase tracking-wider flex-shrink-0">Acumatica</span>
+                        <span className="font-mono text-[13px] font-bold text-stone-800">{liveCode.inventoryId}</span>
+                        <span className="text-[11px] text-stone-500 flex-1 truncate">{liveCode.description}</span>
+                      </div>
+                    )
+                  }
+                  // No code. Previously this rendered nothing, so "this product
+                  // has no Acumatica item" and "the lookup failed" looked
+                  // identical — an empty space. problemFor() is non-null only
+                  // for the second, and only when the resolver is actually
+                  // running and can say which id it looked for.
+                  const problem = itemCodes.problemFor(outForm.product_type, outForm.variant, outForm.grade)
+                  if (!problem) return null
                   return (
-                    <div className="flex items-center gap-2.5 px-3 py-2.5 bg-stone-50 border border-stone-200 rounded-xl">
-                      <span className="text-[10px] font-semibold text-stone-400 uppercase tracking-wider flex-shrink-0">Acumatica</span>
-                      <span className="font-mono text-[13px] font-bold text-stone-800">{liveCode.inventoryId}</span>
-                      <span className="text-[11px] text-stone-500 flex-1 truncate">{liveCode.description}</span>
+                    <div className="flex items-start gap-2.5 px-3 py-2.5 bg-amber-50 border border-amber-200 rounded-xl">
+                      <span className="text-[10px] font-semibold text-amber-700 uppercase tracking-wider flex-shrink-0 mt-px">Acumatica</span>
+                      <span className="text-[11px] text-amber-800 flex-1">
+                        {problem} The bag still saves — it will have no item code until this is added in Acumatica.
+                      </span>
                     </div>
                   )
                 })()}
@@ -1569,7 +1591,7 @@ function CaptureInner() {
                   <div className="px-4 py-3">
                     <p className="text-[10px] font-semibold text-stone-400 uppercase tracking-wide mb-2">Acumatica codes</p>
                     {Object.entries(byType).map(([type, { count, kg }]) => {
-                      const acu = getAcumaticaCode(type, outForm.variant, outForm.grade)
+                      const acu = itemCodes.codeFor(type, outForm.variant, outForm.grade)
                       return (
                         <div key={type} className="flex items-center justify-between py-1">
                           <span className="font-mono text-[11px] text-stone-500">{acu?.inventoryId ?? type}</span>

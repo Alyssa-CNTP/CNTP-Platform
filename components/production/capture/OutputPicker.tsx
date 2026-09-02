@@ -1,8 +1,8 @@
 'use client'
 
-import { useState, useEffect, type ReactNode } from 'react'
+import { useState, useEffect, useMemo, type ReactNode } from 'react'
 import { Search, Sparkles, X, Printer, Check } from 'lucide-react'
-import { suggestOutputs, loadAllInventory, filterInventory, recentBatches } from '@/lib/production/inventory'
+import { suggestOutputs, loadAllInventory, filterInventory, recentBatches, catalogueFrom } from '@/lib/production/inventory'
 import { LABEL_PRINTING_ENABLED, expectedBagWeightFor, isImplausibleWeight, isOpenBagWeight, OPEN_BAG_WEIGHT_THRESHOLD_KG } from '@/lib/production/capture-config'
 import { BatchKeypadField } from '@/components/production/capture/BatchKeypadField'
 import type { InventoryItem } from '@/lib/supabase/database.types'
@@ -65,10 +65,19 @@ export function OutputPicker({ sectionId, variantWord, gradeLetter = 'A', defaul
   // Load the master list once; filtering is then instant on every keystroke.
   useEffect(() => { loadAllInventory().then(setAll) }, [])
 
+  // The master list, indexed for item resolution. Built from the rows already
+  // loaded above, so this costs no extra request. Rebuilt only when they change.
+  const catalogue = useMemo(() => (all.length ? catalogueFrom(all) : null), [all])
+
   // The curated family shortlist for this section + variant + destination
-  // (Fine/Coarse Leaf, Blocks, Heavy/Indent Sticks, Brown/Powder Dust) — codes
-  // come from the canonical getAcumaticaCode map. Waste streams (no code) drop out.
-  const outputs = suggestOutputs(sectionId, variantWord, gradeLetter).filter(o => o.code)
+  // (Fine/Coarse Leaf, Blocks, Heavy/Indent Sticks, Brown/Powder Dust).
+  //
+  // Waste streams have no code and are meant to drop out. A product whose code
+  // could not be RESOLVED is a different case and must not be silently dropped
+  // — the operator would just find the output missing from the picker with no
+  // reason given — so those are kept and labelled below.
+  const suggested = suggestOutputs(sectionId, variantWord, gradeLetter, catalogue)
+  const outputs = suggested.filter(o => o.code || o.problem)
   const results = filterInventory(all, query, variantWord)
   function onSearch(q: string) { setQuery(q) }
 
@@ -103,7 +112,7 @@ export function OutputPicker({ sectionId, variantWord, gradeLetter = 'A', defaul
             </div>
             {outputs.map(o => (
               <PickRow key={o.code ?? o.productType} active={picked?.code === o.code}
-                title={o.productType} code={o.code}
+                title={o.productType} code={o.code} problem={o.problem}
                 onClick={() => { setPicked({ productType: o.productType, code: o.code, description: o.description, batchTracked: o.isLeaf }); setWeight(standardWeight(o.productType)) }} />
             ))}
           </>
@@ -169,15 +178,20 @@ function hl(text: string, q?: string) {
   return <>{text.slice(0, i)}<mark className="bg-brand/15 text-brand rounded px-0.5">{text.slice(i, end)}</mark>{text.slice(end)}</>
 }
 
-function PickRow({ active, title, code, match, highlight, onClick }: {
-  active: boolean; title: string; code: string | null; match?: number; highlight?: string; onClick: () => void
+function PickRow({ active, title, code, match, highlight, problem, onClick }: {
+  active: boolean; title: string; code: string | null; match?: number; highlight?: string
+  problem?: string | null; onClick: () => void
 }) {
   return (
     <button onClick={onClick}
-      className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl border text-left transition-colors ${active ? 'border-brand bg-brand/5' : 'border-stone-200 hover:border-brand/40'}`}>
+      className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl border text-left transition-colors ${active ? 'border-brand bg-brand/5' : problem ? 'border-amber-200 hover:border-amber-300 bg-amber-50/40' : 'border-stone-200 hover:border-brand/40'}`}>
       <div className="flex-1 min-w-0">
         <div className="text-[13px] text-text truncate">{hl(title, highlight)}</div>
         {code && <div className="font-mono text-[11px] text-text-muted">{hl(code, highlight)}</div>}
+        {/* Still selectable on purpose: the material was made and has to be
+            recorded. The bag saves without an item code, and this says why,
+            rather than the output quietly missing from the list. */}
+        {!code && problem && <div className="text-[11px] text-amber-700 mt-0.5">No Acumatica item — {problem}</div>}
       </div>
       {match != null && <span className="text-[11px] px-2 py-0.5 rounded-full bg-ok/10 text-ok shrink-0">{match}%</span>}
     </button>
