@@ -2,6 +2,92 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-02 — Alyssa (Serial scheme wired: Sieving, Granule, Refining 1/2, Blender, Small Blender)
+
+**Files changed:** `lib/core/serials.ts`, `lib/core/serials.scheme.test.ts`, `lib/production/serial-allocator.ts`, `components/production/capture/{Sieving,Granule,Refining,Blender}Capture.tsx`, `app/(app)/production/capture/[section]/page.tsx`, `app/(app)/quality/sieving/page.tsx`, `ARCHITECTURE.md`
+
+Every bagging section now takes its serial number from `production.next_bag_seq`
+instead of scanning `bag_tags` for a max and adding one. The Pasteuriser is still
+out of scheme by design.
+
+### What changes on the floor
+
+New bags carry the new format. Old bags keep theirs — nothing is rewritten, and a
+serial already printed on a bag in the warehouse is that bag's identity.
+
+Sequences restart at 001 for each new counting scope on the changeover day, so **do
+not read a bag count off the highest number that day**. Reporting counts `bag_tags`
+rows and is unaffected.
+
+### The counters that were wrong before
+
+**Refining 1 and 2 shared one counter for the whole section.** Indent and White Dust
+came off the same sequence, so neither number counted its own product. Now per
+product type, per day. R1 and R2 are also separated properly: they share
+`SectionKind 'refining'` but are different work centres, and one counter would have
+put R2's bought-in material under R1's numbering.
+
+**Granule counted dust and granules together.** A lot's granule sequence jumped every
+time dust was bagged. Dust now has its own codes (`SGD`, `SFD`, `BD`, `WD`, `ID`,
+`LD`, `AD`, `DE`) and its own counters. The matcher tests dust *before* granules,
+which is load-bearing: "SG Dust" contains the token identifying SG granules, so the
+other order puts dust and product on one counter under one indistinguishable serial.
+
+### Quality reads both formats
+
+`app/(app)/quality/sieving/page.tsx` had its own `serialOrderKey` requiring exactly
+six date digits. Every new serial would have returned null, and a null key
+short-circuits the out-of-order QC reminder to "nothing earlier is pending" — so QC
+done out of bagging order would simply stop being flagged, with no error and nothing
+different on screen. It now uses core's parser, which reads both formats, so a
+changeover day orders as one run instead of splitting in two.
+
+`productOfSerial` is deliberately unchanged. Its map omits BD, PD and HS because
+those are not QC products and there is no tab to send them to.
+
+### Spec correction: no serial contains a slash
+
+ARCHITECTURE §5 specified the Blender run separator as `{DDMMYYYY}/{n}`. A serial is
+used as a URL path segment at `/api/production/live/bag/[serial]` and in the Bag
+Tracking deep links, and a slash splits the route param. The Blender's previous
+format had already chosen `-` for this reason and said so in a comment. Corrected to
+`-`, with a test asserting no builder emits a slash.
+
+### Two additions the spec's product list did not cover
+
+Sieving's **`BE`** (bucket-elevator spillage) and the Granule dusts above — both are
+things the lines actually bag. And because the picker searches the Acumatica master
+inventory, an unmapped product is routine rather than a broken install:
+`typeCodeFor()` still returns null for callers needing certainty, while
+`resolveTypeCode()` derives a code and reports `configured: false`. The bag still
+bags, and the screen says the code was derived, because a guessed code is
+indistinguishable from a real one once printed.
+
+The same amber banner reports a locally-allocated number when the database is
+unreachable — the offline fallback works, but it is not collision-proof and is not
+allowed to look like the safe path.
+
+### Blender run numbers read both formats
+
+The run number is still derived rather than allocated — it is a property of the
+day's production, not a per-bag counter. It now matches both serial formats, because
+a production day can start on one and end on the other; reading only one would
+restart run numbering at 1 mid-day and silently fork a second "run 1" for the same
+blend.
+
+**Verification:** 149 unit tests pass (up from 140), boundary lint clean, 32 type
+errors (baseline), `next build` compiles 237 pages. The build was run with
+`--webpack`; Turbopack cannot resolve the junctioned `node_modules` in a scratch
+worktree, so the deploy's own Turbopack build is the one that has not been
+reproduced locally for this commit.
+
+**Migration:** `20260902_001_bag_serial_allocation.sql` is applied to staging.
+Production needs it before this is promoted. Note the seed covered the Granule
+granule scopes (`GLSG`/`GLSF`/`GLEXP`) only — the new dust scopes start at 001,
+which produces no collision because the serial strings differ in shape.
+
+---
+
 ## 2026-09-02 — Alyssa (Bag serial scheme: core formats, anchored parser, database-side allocation)
 
 **Files changed:** `lib/core/serials.ts`, `lib/core/serials.scheme.test.ts` (new), `lib/production/serial-allocator.ts` (new), `supabase/migrations/20260902_001_bag_serial_allocation.sql` (new)
