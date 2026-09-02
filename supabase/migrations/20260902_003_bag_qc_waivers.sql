@@ -18,9 +18,20 @@
 --     other serials -- bags that have already cleared the queue.
 --
 -- So there is no broken link to repair. Step 8b looked for one and found
--- nothing to relink. QC sampled some bags of each lot and not others, and the
--- queue asks for a Final QC per BAG. Every bag the sampling plan did not cover
--- therefore sits in the queue permanently.
+-- nothing to relink.
+--
+-- THE CAUSE, from the floor: these are bags from the period when serials were
+-- being generated incorrectly and skipping -- numbers allocated to bags that
+-- were never printed, sequences jumping, counters shared across products. That
+-- allocator has since been rewritten (lib/core/serials.ts), and the bad rows it
+-- left were removed BY HAND from the database in earlier sessions. The sample
+-- records went with the rows they pointed at. So most of these 42 will never
+-- have a sample: there is nothing left to link them to, and re-sampling them is
+-- not the answer either.
+--
+-- Separately and still true: the queue asks for a Final QC per BAG while QC
+-- samples per LOT, so bags the sampling plan does not cover keep arriving here.
+-- That is a policy question, deferred by agreement to a later session.
 --
 --
 -- WHY NOT JUST WRITE THE MISSING sd_runs
@@ -110,11 +121,13 @@ notify pgrst, 'reload schema';
 --
 --   insert into qms.bag_qc_waivers (bag_serial_no, reason, waived_by, note)
 --   select v.bag_serial_no,
---          'REPLACE ME -- e.g. covered by the lot sampling plan; not sampled per bag',
+--          'Serial issued by the faulty allocator; sample record removed with the '
+--          || 'bad rows during the serial cleanup. No sample exists or can exist.',
 --          'REPLACE ME -- the QC or Quality manager accepting this',
---          'Backlog 2026-08-21 to 2026-09-02. No final sd_run exists for these '
+--          'Backlog 2026-08-21 to 2026-09-02. No final sd_run carries these '
 --          || 'serials; the runs for the same lot and day belong to other bags. '
---          || 'Closed without sampling, not passed.'
+--          || 'Closed without sampling, not passed. See the 2026-09-02 CHANGELOG '
+--          || 'entry on the skipping-serial corrections.'
 --   from qms.v_pending_bag_qc v
 --   where coalesce(btrim(v.bag_serial_no), '') <> ''
 --     and v.bagged_at::date <= date '2026-09-01'   -- leave today's alone
@@ -131,12 +144,15 @@ notify pgrst, 'reload schema';
 --   from qms.bag_qc_waivers group by 1, 2, 3 order by 1 desc;
 --
 --
--- THE STANDING PROBLEM, WHICH THIS DOES NOT FIX
--- ---------------------------------------------
+-- THE STANDING PROBLEM, WHICH THIS DOES NOT FIX -- DEFERRED BY AGREEMENT
+-- ----------------------------------------------------------------------
 -- The queue asks for a Final QC per BAG while QC samples per LOT. Every bag the
 -- plan does not cover will keep arriving here, and waiving them one backlog at
 -- a time is not a policy. The real fix is to decide what the queue should
 -- require -- N bags per lot, or per pallet, or per tonne -- and then have
--- qc_required reflect that. Worth a conversation with Quality; it is a change
--- to what the system asks for, not to what it records.
+-- qc_required reflect that. It is a change to what the system ASKS FOR, not to
+-- what it records, and it needs Quality in the room.
+--
+-- Agreed on 2026-09-02 to build this in a later session. The waiver clears the
+-- backlog today without pretending the question is settled.
 -- ============================================================================

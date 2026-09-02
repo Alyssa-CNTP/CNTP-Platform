@@ -2,6 +2,32 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-02 — Alyssa (Bag serials generated wrong and skipped: manual database corrections, logged after the fact)
+
+**Files changed:** none — this was done directly in the database, in earlier sessions, with no migration file. Logged here because it happened and nothing recorded it.
+
+Before the serial scheme was rewritten (see the *Serial scheme wired* entry below, and `lib/core/serials.ts`), bag serials were minted by scanning `bag_tags` for the highest number and adding one. That produced **wrong and skipping serials**: numbers allocated to bags that were never printed, sequences jumping, and counters shared across products that should each have had their own. The rewrite fixed the cause; the bad rows it left behind were **removed by hand from the database, across several sessions**, before this one.
+
+### Why this matters and why it is in the log
+
+The removals were correct, but they were done as ad-hoc statements: no migration, no backup table, and no record of which serials went or when. For an FSSC-relevant table that is a traceability gap — the rows are gone and nothing says a person decided that, or why. Worth writing the specifics in below while they are still known.
+
+**Still to fill in — only Alyssa has these:** the dates the corrections ran, which serials were removed, and from which tables (`bag_tags` / `prod_bagging` / `scan_events`). If any of it is recoverable from session history it belongs here rather than in a transcript.
+
+### The consequence found today
+
+Quality's awaiting-QC queue held **42 bags with no Final QC at all** — 2026-08-21 through 2026-09-02. Not a broken link: no final `sd_run` carries any of those 42 serials, and the runs that do exist for the same lot and day belong to bags that already cleared (Step 8a in `20260902_001`). On 26-08 GS-0417 Fine Leaf, three runs exist for bags `013/014/015` and the six still pending are `016`–`021`.
+
+**These are that period's bags.** Their serials came from the faulty allocator, and the sampled counterparts were among the rows removed by hand — so most of them will never have a sample, because the sample record went with the row it pointed at. They are not going to clear by being sampled again.
+
+`qms.bag_qc_waivers` (`20260902_003`) is how they close: an attributable "not sampled, here is who accepted that and why", never a pass. The reason text in that file now names this cause rather than the sampling plan.
+
+### Deferred, deliberately
+
+The queue asks for a Final QC per **bag** while QC samples per **lot**, so bags the sampling plan does not cover will keep arriving in it. That needs `qc_required` to reflect what the plan actually requires, and it is a Quality policy decision, not a data fix. **Agreed to build in a later session** — the waiver clears today's backlog without pretending the policy question is answered.
+
+---
+
 ## 2026-09-02 — Alyssa (Sieving: stop the changeover duplication at source; one mass balance on Capture Overview; repair script for both tables)
 
 **Files changed:** `components/production/capture/SievingCapture.tsx`, `components/production/capture/CaptureOverview.tsx`, `app/(app)/production/capture/[section]/page.tsx`, `lib/production/self-heal-reconcile.ts` (new), `supabase/migrations/20260902_001_repair_sieving_changeover_duplicates.sql` (new — **not applied**, run by hand)
