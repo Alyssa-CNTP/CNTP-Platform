@@ -2403,19 +2403,29 @@ function CaptureScreen() {
             <>
               <div className="flex items-start gap-2 px-3 py-2.5 bg-info/5 border border-info/20 rounded-xl text-[12px] text-info">
                 <Info size={14} className="shrink-0 mt-0.5" />
-                <span>{runId ? 'Totals are combined across the whole production run (all shifts), grouped by product, variant and grade.' : 'Totals are grouped and combined across both shifts where variant and grade match.'} Copy or print for Acumatica data entry.</span>
+                <span>Totals are this record&apos;s own capture — the same debagging and bagging rows as the Capture tab, grouped by product, variant and grade. Copy or print for Acumatica data entry.</span>
               </div>
               <CaptureOverview
-                productions={[
-                  // Tagged with which shift each batch belongs to — Sieving's
-                  // bucket-elevator figure means opposite things on the two
-                  // shifts (morning consumes last night's carry-over, afternoon
-                  // leaves a new one for tomorrow) and must never be summed as
-                  // if it were one figure. See CaptureOverview's debag grouping.
-                  ...productions.map(p => ({ ...p, shift: shiftBal })),
-                  ...siblingProductions.map(p => ({ ...p, shift: shiftBal })),
-                  ...otherShiftProductions.map(p => ({ ...p, shift: otherShiftBal })),
-                ]}
+                productions={
+                  // THIS record's own capture, and nothing else — the same rows
+                  // the Capture tab shows, so the two screens can never disagree.
+                  //
+                  // It used to add siblingProductions and otherShiftProductions,
+                  // which made the Overview answer a different question from the
+                  // Debagging/Bagging cards a tab away: the card counts this
+                  // session, the Overview counted this session plus its siblings
+                  // plus the other shift. On 2026-09-01 morning that read 274
+                  // bags against the card's 17, and on the afternoon record the
+                  // two agreed only because nothing else happened to be in scope
+                  // — the same screen, agreeing or disagreeing depending on data
+                  // it never showed you.
+                  //
+                  // Still tagged with the shift: Sieving's bucket elevator means
+                  // opposite things on the two shifts (morning consumes last
+                  // night's carry-over, afternoon leaves a new one for tomorrow),
+                  // and CaptureOverview's debag grouping reads that tag.
+                  productions.map(p => ({ ...p, shift: shiftBal }))
+                }
                 sectionId={sectionId}
                 sectionName={meta.name}
                 sectionColor={meta.colorHex}
