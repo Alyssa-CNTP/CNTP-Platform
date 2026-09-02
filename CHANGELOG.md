@@ -2,6 +2,22 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-02 — Alyssa (Restored: an output bag may only be tagged with a batch debagged this session)
+
+**Files changed:** `components/production/capture/SievingCapture.tsx`, `components/production/capture/OutputPicker.tsx`, `app/(app)/production/capture/[section]/page.tsx`, `scripts/verify-output-batch-hints.py` (new)
+
+Reported from the floor: the restriction that only a debagged batch is offered when bagging out had disappeared. **A regression from today's changeover-duplication fix.**
+
+`batchHints` was read off the **mounted batch's** own `debag` array. That worked by accident — the self-heal used to copy every sibling batch's debag rows into whichever batch was on screen, so the array was always full. Removing that duplication removed the accidental source, and a batch with no debag rows of its own then produced no hints at all. `OutputPicker` treats no hints as nothing to restrict against, so it fell back to **every recent batch at the section with the check off** — which is exactly the free-typed, mistyped batch the guard exists to prevent.
+
+The rule was always "debagged **this session**", so it is now sourced from the session — every batch of it — rather than from whichever batch happens to be mounted. The earlier-session, same-variant-and-grade carve-out is unchanged.
+
+**And it no longer fails silently.** With genuinely nothing debagged yet the field still allows free entry — blocking the floor from bagging would be worse — but the screen now says the batch cannot be checked and to capture the debagging first. A lost guard looked identical to a working one, which is why this went unnoticed.
+
+`scripts/verify-output-batch-hints.py` — 9 checks including the exact regression case (debagging on batch 1, bagging on batch 2) and proof the typo batch is no longer offered.
+
+---
+
 ## 2026-09-02 — Alyssa (Debagging's Per batch table stops calling the bucket elevator "(no batch)")
 
 **Files changed:** `app/(app)/production/orders/[id]/page.tsx`
