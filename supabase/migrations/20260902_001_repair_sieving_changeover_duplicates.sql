@@ -303,12 +303,14 @@ having count(distinct round(pd.kg_nett::numeric, 3)) > 1;
 -- Step 2d. READ ONLY. The bags that SURVIVE, per session
 -- ===========================================================================
 -- Check this against the floor's paper sheet for the day before running Step
--- 3. The count here is what the production order will read afterwards, so a
--- disagreement with the sheet is a reason to stop, not to proceed.
+-- 3. A disagreement with the sheet is a reason to stop, not to proceed.
 --
--- 2026-09-01 morning is the one to look at hardest: the dedup leaves 19 bags
--- there against 17 bulk bags on the capture list, so two identities need
--- accounting for before the rest is deleted.
+-- COUNTS LABELLED BAGS ONLY. Rows with a blank bag label are never
+-- deduplicated (two unlabelled bags are two bags), so they are also never
+-- deleted -- and they are not counted here either. The affected sessions each
+-- hold one, so the post-repair ROW count is this figure plus one:
+--   2026-09-01 morning  18 labelled + 1 unlabelled = 19 rows (267 today)
+--   2026-08-31 morning  21 labelled + 1 unlabelled = 22 rows (37 today)
 select s.date, s.shift, pd.session_id,
        count(*) as bags_after_repair,
        round(sum(pd.kg_nett)::numeric, 1) as kg_after_repair,
@@ -616,3 +618,40 @@ from qms.v_pending_bag_qc v
 where coalesce(btrim(v.bag_serial_no), '') <> ''
 group by 1, 2
 order by 1, 2;
+
+
+-- 7c. Were the remaining bags already sampled, under a link that broke?
+-- ---------------------------------------------------------------------------
+-- Before asking QC to sample 42 bags going back to 21 August, check whether
+-- they were sampled already. qms.v_pending_bag_qc clears a bag when a final
+-- sd_run matches on bagging_id OR on serial_number. bagging_id is
+-- prod_bagging.id, and that is NOT stable: persist() delete-then-inserts these
+-- rows on every save, so a bagging_id recorded earlier points at a row that no
+-- longer exists. The only fallback is serial_number -- so a final run captured
+-- without one leaves its bag in the queue permanently.
+--
+-- Read it this way:
+--   final_runs_that_day around or above pending_bags  -> likely sampled, link
+--       broken; the fix is to relink, NOT to sample again.
+--   final_runs_that_day = 0                           -> genuinely never
+--       sampled; that is real QC work.
+--   final_runs_without_serial > 0                     -> those runs can never
+--       clear a bag by the serial fallback, whatever else is true.
+select d.day, d.product, d.pending_bags,
+       coalesce(f.final_runs, 0)                as final_runs_that_day,
+       coalesce(f.final_runs_without_serial, 0) as final_runs_without_serial
+from (
+  select v.bagged_at::date as day, v.product, count(*) as pending_bags
+  from qms.v_pending_bag_qc v
+  where coalesce(btrim(v.bag_serial_no), '') <> ''
+  group by 1, 2
+) d
+left join (
+  select fr.date as day, fr.product,
+         count(*) as final_runs,
+         count(*) filter (where coalesce(btrim(fr.serial_number), '') = '') as final_runs_without_serial
+  from qms.sd_runs fr
+  where fr.run_type = 'final'
+  group by 1, 2
+) f on f.day = d.day and f.product = d.product
+order by d.day, d.product;
