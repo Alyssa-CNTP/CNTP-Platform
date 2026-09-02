@@ -161,7 +161,7 @@ const LBL = 'text-[10px] font-semibold text-stone-500 uppercase tracking-widest'
 export function SievingCapture({
   assignment, variantWord, gradeLetter = 'A', shift = 'morning', locked, value, onChange, genSerial, operatorId, date,
   sectionId = 'sieving', sessionId,
-  otherBatchDebagKeys = [], otherBatchOutputSerials = [],
+  otherBatchDebagKeys = [], otherBatchOutputSerials = [], sessionDebagLots = [],
 }: {
   assignment: ShiftAssignment
   variantWord: string
@@ -181,6 +181,20 @@ export function SievingCapture({
   // batch is on screen — see lib/production/self-heal-reconcile.ts.
   otherBatchDebagKeys?: string[]
   otherBatchOutputSerials?: string[]
+  // Every lot debagged anywhere in THIS session, across all of its batches.
+  //
+  // An output bag may only be tagged with a batch that was actually fed in, and
+  // that list was read off the mounted batch's own `debag` array. It worked by
+  // accident: the self-heal used to copy every sibling batch's debag rows into
+  // whichever batch was on screen, so the array was always full. Fixing that
+  // duplication (see lib/production/self-heal-reconcile.ts) removed the
+  // accidental source, and a batch with no debag rows of its own then produced
+  // no hints at all -- at which point OutputPicker falls back to every recent
+  // batch with the restriction off. The guard was lost silently.
+  //
+  // The rule was always "debagged THIS session", so it is now sourced from the
+  // session rather than from whichever batch happens to be mounted.
+  sessionDebagLots?: string[]
 }) {
   const [tab, setTab]       = useState<'debag' | 'bag'>('debag')
   const [picking, setPicking] = useState(false)
@@ -854,6 +868,7 @@ export function SievingCapture({
                 defaultBatch={[...value.debag].reverse().find(r => r.lot.trim())?.lot.trim() ?? ''}
                 batchHints={Array.from(new Set([
                   ...value.debag.map(r => r.lot.trim()).filter(Boolean),
+                  ...sessionDebagLots,
                   ...matchingBatches,
                 ]))}
                 onAdd={addOutput} onClose={() => setPicking(false)} submitting={addingOutput} />

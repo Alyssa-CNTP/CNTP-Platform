@@ -336,6 +336,17 @@ function CaptureScreen() {
     return { debagKeys, outputSerials }
   }, [productions, activeIdx])
 
+  // Every lot debagged anywhere in this session, across ALL its batches --
+  // what an output bag is allowed to be tagged with. Read from the session
+  // rather than the mounted batch, because a changeover puts the debagging on
+  // one batch and the bagging on another. See SievingCapture's sessionDebagLots.
+  const sessionDebagLots = useMemo(
+    () => Array.from(new Set(
+      productions.flatMap(p => ((p.data as SievingData | undefined)?.debag ?? [])
+        .map(r => (r.lot ?? '').trim())
+        .filter(Boolean)))),
+    [productions])
+
   // Sieving: once any bulk bag has been locked ("Done — lock this bag") under
   // this batch's variant/grade, that choice is what's on record for it — the
   // Variant/Grade selects must stop being live-editable, or a change here
@@ -2377,6 +2388,7 @@ function CaptureScreen() {
                         sessionId={sessionId}
                         otherBatchDebagKeys={siblingBatchKeys.debagKeys}
                         otherBatchOutputSerials={siblingBatchKeys.outputSerials}
+                        sessionDebagLots={sessionDebagLots}
                       />
                   }
                   {!locked && !isPasteuriser(sectionId) && (

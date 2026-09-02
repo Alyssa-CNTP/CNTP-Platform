@@ -55,6 +55,12 @@ export function OutputPicker({ sectionId, variantWord, gradeLetter = 'A', defaul
   // list — an output can never be tagged with a batch that wasn't debagged
   // this session, which is what let typos (dash vs dot, wrong case, dropped
   // digits) silently corrupt the record.
+  // Fail OPEN, but never quietly. With no hints there is nothing to restrict
+  // against, and blocking the floor from bagging would be worse than allowing a
+  // free-typed batch -- but the operator has to be told the check is not running,
+  // or a lost guard looks exactly like a working one. This is how the
+  // restriction went missing after the changeover-duplication fix and nobody
+  // could see it.
   const restrictBatch = batchHints.length > 0
   const [query, setQuery]     = useState('')
   const [all, setAll]         = useState<InventoryItem[]>([])
@@ -133,8 +139,13 @@ export function OutputPicker({ sectionId, variantWord, gradeLetter = 'A', defaul
                 <div className="space-y-1">
                   <label className="text-[10px] font-semibold text-stone-500 uppercase tracking-widest">Batch *</label>
                   <BatchKeypadField value={batch} onChange={setBatch} options={batchOptions} placeholder="Tap to enter" className={INP} label="Batch" restrictToOptions={restrictBatch} />
-                  {restrictBatch && (
+                  {restrictBatch ? (
                     <p className="text-[11px] text-text-muted">Must match a batch debagged this session.</p>
+                  ) : (
+                    <p className="text-[11px] text-warn">
+                      Nothing has been debagged in this session yet, so the batch cannot be checked
+                      against it — type carefully, or capture the debagging first.
+                    </p>
                   )}
                 </div>
               )}
