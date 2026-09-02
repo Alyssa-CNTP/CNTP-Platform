@@ -697,23 +697,24 @@ export function CaptureOverview({
                 <div className={`flex items-center justify-between px-3 py-2 ${withinTol ? 'bg-ok/5' : 'bg-warn/5'}`}>
                   <span className="inline-flex items-center gap-1.5 text-[12px] font-bold text-stone-700">
                     <Scale size={14} className="text-stone-500" /> Mass balance
+                    <span className="font-normal text-[10.5px] text-stone-400">output − input</span>
                   </span>
                   <span className="inline-flex items-center gap-1.5 font-mono font-bold text-[14px]">
                     <span className={withinTol ? 'text-ok' : 'text-warn'}>
                       {balanceKg >= 0 ? '+' : ''}{balanceKg.toFixed(1)} kg
+                      {mbInputKg > 0 && <span className="font-normal text-[12px]"> ({balancePct >= 0 ? '+' : ''}{balancePct.toFixed(1)}%)</span>}
                     </span>
                     {withinTol ? <CheckCircle2 size={14} className="text-ok" /> : <AlertTriangle size={14} className="text-warn" />}
                   </span>
                 </div>
-                <div className="grid grid-cols-2 sm:grid-cols-4 divide-x divide-stone-100 border-t border-stone-100 bg-white">
+                <div className="grid grid-cols-3 divide-x divide-stone-100 border-t border-stone-100 bg-white">
                   {[
                     { label: 'Total input',  value: `${mbInputKg.toFixed(1)} kg` },
                     { label: 'Total output', value: `${mbOutputKg.toFixed(1)} kg` },
-                    { label: 'Balance (out − in)', value: `${balancePct >= 0 ? '+' : ''}${balancePct.toFixed(1)}%`, warn: !withinTol },
-                    { label: 'Yield', value: yieldPct != null ? `${yieldPct}%` : '—' },
+                    { label: 'Yield',        value: yieldPct != null ? `${yieldPct}%` : '—' },
                   ].map(t => (
                     <div key={t.label} className="px-3 py-2.5">
-                      <div className={`font-mono font-bold text-[15px] leading-tight ${t.warn ? 'text-warn' : 'text-stone-800'}`}>{t.value}</div>
+                      <div className="font-mono font-bold text-[15px] leading-tight text-stone-800">{t.value}</div>
                       <div className="text-[9.5px] text-stone-400 uppercase tracking-wide">{t.label}</div>
                     </div>
                   ))}
