@@ -295,3 +295,36 @@ describe('order key (Quality QC ordering)', () => {
     expect(serialOrderKey(null)).toBeNull()
   })
 })
+
+// The Granule Line bags dust as well as granules, under the same lot. Getting
+// this order wrong puts them on one counter under one indistinguishable serial.
+describe('Granule dust vs granules', () => {
+  it('never gives dust the granule code', () => {
+    expect(typeCodeFor('GL', 'SG Dust')).toBe('SGD')
+    expect(typeCodeFor('GL', 'SF Dust')).toBe('SFD')
+    expect(typeCodeFor('GL', 'SG Granules')).toBe('SG')
+    expect(typeCodeFor('GL', 'Fine Granules')).toBe('SF')
+  })
+
+  it('counts dust separately from the granules of the same lot', () => {
+    const lot = { qualifier: 'RSGG-05626', date: '2026-09-02' }
+    expect(serialScope({ workCentre: 'GL', typeCode: 'SG', ...lot }))
+      .not.toBe(serialScope({ workCentre: 'GL', typeCode: 'SGD', ...lot }))
+  })
+
+  it('maps the other dust types the line actually bags', () => {
+    expect(typeCodeFor('GL', 'Brown Dust')).toBe('BD')
+    expect(typeCodeFor('GL', 'Indent Dust')).toBe('ID')
+    expect(typeCodeFor('GL', 'Leaf Dust')).toBe('LD')
+    expect(typeCodeFor('GL', 'ALT Dust')).toBe('AD')
+    expect(typeCodeFor('GL', 'Dust Extraction')).toBe('DE')
+  })
+
+  it('round-trips a three-letter dust code', () => {
+    const s = formatBagSerial({ workCentre: 'GL', typeCode: 'SGD', qualifier: 'RSGG-05626', date: '2026-09-02', seq: 3 })
+    expect(s).toBe('GLSGD-RSGG-05626-02092026-003')
+    const p = parseBagSerial(s)!
+    expect(p.typeCode).toBe('SGD')
+    expect(p.qualifier).toBe('RSGG-05626')
+  })
+})

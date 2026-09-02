@@ -47,6 +47,8 @@ import { itemFromCode } from '@/lib/production/bom'
 import type { ShiftAssignment } from '@/lib/supabase/database.types'
 import { n } from '@/lib/core/num'
 import { granuleColumnTotals, blendTotal, granuleTotals } from '@/lib/core/mass-balance/granule'
+import { resolveTypeCode } from '@/lib/core/serials'
+import { allocateBagSerial } from '@/lib/production/serial-allocator'
 export { granuleColumnTotals, blendTotal, granuleTotals }
 
 // ── Dust columns — PR-FM-026/7 pellet-mill-feed columns, each with its own colour ─
@@ -189,30 +191,18 @@ export function emptyGranuleData(): GranuleData {
 // is never left without a unique, findable tag. Sequence continues across days
 // for one lot.
 
-// dateStr is the session's own pinned date (YYYY-MM-DD), not a fresh
-// `new Date()` — only matters for the no-lot fallback stem below, but a
-// session spanning midnight (the afternoon/night shift runs 16h00–01h00)
-// must keep stamping bags under the date the session is filed under, same
-// reasoning as Sieving's nextSievingSerial().
-async function nextGranuleSerial(lot: string, localSerials: string[], dateStr: string): Promise<string> {
-  const [y, m, d] = dateStr.split('-')
-  const ddmmyy = `${d}${m}${y.slice(-2)}`
-  const lotStem = lot.trim()
-  const stem = lotStem || `GL-${ddmmyy}`
-  const seqOf = (s: string) => { const m = String(s).match(/-(\d{1,4})$/); return m ? parseInt(m[1]) : 0 }
-  let maxSeq = localSerials.reduce((mx, s) => Math.max(mx, seqOf(s)), 0)
-  try {
-    // With a lot, number continues per-lot (matches old rows via lot_number);
-    // without one, number continues per section-day via the GL- serial prefix.
-    const { data } = lotStem
-      ? await getDb().schema('production').from('bag_tags')
-          .select('serial_number').eq('lot_number', lotStem).limit(4000)
-      : await getDb().schema('production').from('bag_tags')
-          .select('serial_number').ilike('serial_number', `${stem}-%`).limit(4000)
-    ;(data ?? []).forEach((r: any) => { maxSeq = Math.max(maxSeq, seqOf(r.serial_number)) })
-  } catch { /* offline — fall back to local max */ }
-  return `${stem}-${String(maxSeq + 1).padStart(3, '0')}`
-}
+// Serial minting moved to lib/core/serials.ts + lib/production/serial-allocator.ts
+// (ARCHITECTURE.md §5). What used to live here was a private ddmmyy stem, a
+// private seqOf, and a max+1 scan of bag_tags capped at limit(4000).
+//
+// Granule is the one section whose counting scope is NOT the day: it is the
+// LOT, because the same lot routinely runs across several days and has to read
+// as one continuous sequence. The serial still carries the date of the bag, so
+// 'GLSG-RSGG-05626-02092026-041' says both which lot it belongs to and when it
+// was made. See "The production run day" in ARCHITECTURE.md §5.
+//
+// Dust counts SEPARATELY from granules within the same lot (SGD vs SG), which
+// the old shared-stem numbering did not do.
 
 // ── Style constants ─────────────────────────────────────────────────────────────
 
@@ -619,8 +609,8 @@ export function GranuleCapture({
   const patch = (p: Partial<GranuleData>) => onChange({ ...value, ...p })
 
   const item = value.item || GRANULE_OUTPUT_ITEMS[0]
-  // Trimmed at this single source — nextGranuleSerial already trims its own
-  // copy for the serial stem, but every bag_tags.lot_number write below used
+  // Trimmed at this single source — serialScope() trims its own copy for the
+  // counting scope, but every bag_tags.lot_number write below used
   // the raw value, so a stray leading/trailing space (e.g. a supervisor's typo
   // on Assign, or older un-normalised data) made the stored lot silently
   // mismatch the serial's lot stem and broke exact-match lookups (Batch
@@ -673,6 +663,39 @@ export function GranuleCapture({
   const [outTarget, setOutTarget] = useState(DEFAULT_TARGET_KG)
   const [outWeight, setOutWeight] = useState('')
   const [adding, setAdding] = useState(false)
+  // Degraded-path notice — an unmapped product whose code had to be derived, a
+  // number allocated locally because the database was unreachable, or a
+  // missing lot. None of them are allowed to be silent.
+  const [serialNotice, setSerialNotice] = useState<string | null>(null)
+
+  /**
+   * Mint a serial for a Granule bag, or null if it cannot be minted.
+   *
+   * The LOT is the counting scope here, so without one there is no sequence
+   * for the bag to belong to and core throws rather than emit 'GLSG--...'.
+   * That is the right answer for a programming error and the wrong one for a
+   * bag on the scale, so the check happens here: the operator is told what is
+   * missing instead of losing the bag to an exception.
+   */
+  async function allocateGranuleSerial(
+    productType: string, lotNo: string, dateStr: string, localSerials: string[],
+  ) {
+    if (!lotNo.trim()) {
+      setSerialNotice('This session has no lot number, and a Granule bag is numbered per lot. Set the lot on Assign before bagging.')
+      return null
+    }
+    const { code: typeCode, configured } = resolveTypeCode('GL', productType)
+    const alloc = await allocateBagSerial(
+      { workCentre: 'GL', typeCode, qualifier: lotNo, date: dateStr },
+      localSerials,
+    )
+    if (!configured) {
+      setSerialNotice(`"${productType}" has no serial code configured — ${typeCode} was derived from its name. Tell IT so it gets a proper one.`)
+    } else if (alloc.source === 'local') {
+      setSerialNotice('Offline — this bag was numbered locally. Check for a duplicate serial once the tablet reconnects.')
+    }
+    return alloc
+  }
   // Supervisor sets the lot at assignment, but the operator is the one who can
   // actually see the physical batch on the floor — a typo or a wrong batch
   // tagged upstream only gets caught here. Ask once per session, before the
@@ -683,7 +706,9 @@ export function GranuleCapture({
   async function addOutputBag() {
     if (n(outWeight) <= 0 || isImplausibleWeight(n(outWeight)) || adding) return
     setAdding(true)
-    const serial = await nextGranuleSerial(lot, value.outputs.map(o => o.serial), date)
+    const alloc = await allocateGranuleSerial(item, lot, date, value.outputs.map(o => o.serial))
+    if (!alloc) { setAdding(false); return }
+    const serial = alloc.serial
     const now = nowISO()
     const acCode = getAcumaticaCode(item, variantShort, 'A')
     try {
@@ -747,7 +772,12 @@ export function GranuleCapture({
   async function addDustOutput() {
     const weight = computedDustWeight()
     if (weight <= 0) return
-    const serial = await nextGranuleSerial(lot, [...value.outputs.map(o => o.serial), ...value.dustOutputs.map(o => o.serial)], date)
+    // Only this dust type's own serials seed the offline fallback: dust and
+    // granules are separate counters now, so mixing them in would make one
+    // jump every time the other was bagged.
+    const alloc = await allocateGranuleSerial(dustType, lot, date, value.dustOutputs.map(o => o.serial))
+    if (!alloc) return
+    const serial = alloc.serial
     const now = nowISO()
     const acCode = getAcumaticaCode(dustType, variantShort, 'A')
     try {
@@ -982,6 +1012,14 @@ export function GranuleCapture({
       {/* ── BAGGING ──────────────────────────────────────────────────────────── */}
       {tab === 'bag' && (
         <>
+          {serialNotice && (
+            <div className="flex items-start gap-2 px-3 py-2.5 bg-amber-50 border border-amber-200 rounded-xl text-[12px] text-amber-900">
+              <AlertTriangle size={14} className="shrink-0 mt-0.5" />
+              <span className="flex-1">{serialNotice}</span>
+              <button type="button" onClick={() => setSerialNotice(null)}
+                className="shrink-0 text-amber-700 underline">Dismiss</button>
+            </div>
+          )}
           {/* Granule bag list */}
           <div className="bg-white border rounded-2xl overflow-hidden" style={{ borderColor: BAG_COLOR + '30' }}>
             <div className="px-4 py-3 border-b flex items-center justify-between" style={{ borderColor: BAG_COLOR + '20', background: BAG_COLOR + '08' }}>

@@ -227,7 +227,7 @@ export const TYPE_CODES: Readonly<Record<WorkCentre, readonly string[]>> = {
   ST: ['FL', 'CL', 'RB', 'BD', 'PD', 'IS', 'HS', 'BE'],
   R1: ['ID', 'WD', 'PD'],
   R2: ['CHSF', 'CHSC', 'WD', 'PD', 'HS'],
-  GL: ['SG', 'SF', 'EXP'],
+  GL: ['SG', 'SF', 'EXP', 'SGD', 'SFD', 'BD', 'WD', 'ID', 'LD', 'AD', 'DE'],
   BL: [],   // the Blender carries no type code — see formatBagSerial()
   SB: [],   // ...nor the Small Blender
 }
@@ -271,8 +271,23 @@ const TYPE_MATCHERS: Readonly<Record<WorkCentre, ReadonlyArray<readonly [RegExp,
     [/powder dust/i,                          'PD'],
   ],
   GL: [
-    [/export|\bexp\b/i,               'EXP'],
-    [/\bsf\b|fine granule/i,          'SF'],
+    // DUST FIRST, and this order is load-bearing. The Granule Line bags dust
+    // as well as granules, under the same lot. 'SG Dust' contains the token
+    // that identifies SG granules, so matched the other way round it would
+    // take the granule code — putting dust and product on one counter under
+    // one indistinguishable serial. SGD/SFD rather than SG/SF for the same
+    // reason.
+    [/sg dust/i,                         'SGD'],
+    [/sf dust/i,                         'SFD'],
+    [/brown dust|cp dust/i,              'BD'],
+    [/white dust/i,                      'WD'],
+    [/indent dust/i,                     'ID'],
+    [/leaf dust/i,                       'LD'],
+    [/alt dust/i,                        'AD'],
+    [/dust extraction/i,                 'DE'],
+    // ...then the granules themselves.
+    [/export|\bexp\b/i,                  'EXP'],
+    [/\bsf\b|fine granule/i,             'SF'],
     [/\bsg\b|standard granule|granule/i, 'SG'],
   ],
   BL: [],
