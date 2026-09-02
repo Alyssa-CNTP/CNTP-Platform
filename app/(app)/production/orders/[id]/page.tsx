@@ -619,8 +619,10 @@ function InputTypeGroup({ type, rows, multiShift }: { type: string; rows: OrderD
   )
 }
 
-// Totals per batch number, biggest first. Blank lots collapse into one
-// "no batch" line rather than being dropped, so the figures still add up.
+// Totals per batch number, biggest first. A blank key collapses into one
+// "(no batch)" line rather than being dropped, so the figures still add up --
+// which is right for an OUTPUT bag that genuinely has no batch. Debagging's
+// lot-less rows are named for what they are instead; see BatchTotals.
 function batchTotals(rows: { lot: string | null; kg: number }[]): { lot: string; kg: number; n: number }[] {
   const m = new Map<string, { lot: string; kg: number; n: number }>()
   for (const r of rows) {
@@ -634,16 +636,28 @@ function batchTotals(rows: { lot: string | null; kg: number }[]): { lot: string;
 
 // Debagging, totalled per batch number. The per-type tables below it list every
 // bag; this answers "how much of each batch went in" without counting by eye.
+//
+// The bucket elevator and machine spillage carry no lot, and lumping them under
+// a row called "(no batch)" read as though the elevator were a batch by that
+// name. They are not batches at all -- the elevator is yesterday's carry-over
+// and spillage is loss off the machine -- so they are named for what they are,
+// below the batches, under a heading that says so. Still shown, because they
+// are real input and the totals have to add up.
 function BatchTotals({ rows }: { rows: OrderDebagRow[] }) {
-  const batches = batchTotals(rows.map(r => ({ lot: r.lot_number, kg: Number(r.kg_nett) || 0 })))
-  if (batches.length === 0) return null
-  const total = batches.reduce((s, b) => s + b.kg, 0)
+  const batched = rows.filter(r => (r.lot_number || '').trim())
+  const unbatched = rows.filter(r => !(r.lot_number || '').trim())
+  const batches = batchTotals(batched.map(r => ({ lot: r.lot_number, kg: Number(r.kg_nett) || 0 })))
+  // Grouped by what they are (Bucket Elevator / Machine Spillage), via the same
+  // naming the tables below use.
+  const others = batchTotals(unbatched.map(r => ({ lot: inputType(r), kg: Number(r.kg_nett) || 0 })))
+  if (batches.length === 0 && others.length === 0) return null
+  const batchedKg = batches.reduce((s, b) => s + b.kg, 0)
   return (
     <div className="rounded-xl border border-surface-rule overflow-hidden">
       <div className="flex items-center justify-between gap-2 px-3 py-2 bg-surface-dim">
         <span className="text-[12.5px] font-semibold text-text">Per batch</span>
         <span className="font-mono text-[11px] text-text-muted whitespace-nowrap">
-          {batches.length} batch{batches.length === 1 ? '' : 'es'} · {total.toFixed(1)} kg
+          {batches.length} batch{batches.length === 1 ? '' : 'es'} · {batchedKg.toFixed(1)} kg
         </span>
       </div>
       <table className="w-full text-left border-collapse">
@@ -662,8 +676,29 @@ function BatchTotals({ rows }: { rows: OrderDebagRow[] }) {
               <td className="px-3 py-1.5 font-mono text-[12px] text-text text-right tabular-nums">{b.kg.toFixed(1)}</td>
             </tr>
           ))}
+          {others.length > 0 && (
+            <tr>
+              <td colSpan={3} className="px-3 pt-2.5 pb-1 text-[10px] font-mono font-semibold text-text-faint uppercase tracking-[0.06em]">
+                No batch of its own
+              </td>
+            </tr>
+          )}
+          {others.map(o => (
+            <tr key={o.lot}>
+              <td className="px-3 py-1.5 text-[12.5px] text-text-muted whitespace-nowrap">{o.lot}</td>
+              <td className="px-3 py-1.5 font-mono text-[12px] text-text-faint text-right tabular-nums">—</td>
+              <td className="px-3 py-1.5 font-mono text-[12px] text-text-muted text-right tabular-nums">{o.kg.toFixed(1)}</td>
+            </tr>
+          ))}
         </tbody>
       </table>
+      {others.length > 0 && (
+        <p className="px-3 py-2 border-t border-surface-rule/60 bg-surface-dim/40 text-[11px] text-text-muted leading-relaxed">
+          The bucket elevator is yesterday&apos;s carry-over and machine spillage is loss off the
+          machine — neither belongs to a batch, and neither is a bag, so no bag count is shown. Both
+          are counted in Total input.
+        </p>
+      )}
     </div>
   )
 }

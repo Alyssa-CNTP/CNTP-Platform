@@ -2,6 +2,20 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-02 — Alyssa (Debagging's Per batch table stops calling the bucket elevator "(no batch)")
+
+**Files changed:** `app/(app)/production/orders/[id]/page.tsx`
+
+Reported from the 1 September order. The `Per batch` table added earlier today collapsed every lot-less row into one line labelled `(no batch)` — and in Debagging those rows are the **bucket elevator and machine spillage**. It read as though the elevator were a batch by that name.
+
+They are not batches at all: the elevator is yesterday's carry-over and spillage is loss off the machine. They are now listed below the batches under a **`No batch of its own`** heading, named for what they are, with no bag count (neither is a bag) and a line saying both are still counted in Total input.
+
+The `batches · kg` figure in the header is now the batched weight only, so it matches the rows beneath it rather than silently including the elevator.
+
+The shared `batchTotals` helper keeps its `(no batch)` fallback — that is the right label for an **output** bag that genuinely has no batch, which is a different case.
+
+---
+
 ## 2026-09-02 — Alyssa (An output bag's grade follows the lot it was sieved from)
 
 **Files changed:** `lib/production/order-detail.ts`, `app/(app)/production/orders/[id]/page.tsx`, `scripts/verify-output-grade-from-lot.py` (new)
