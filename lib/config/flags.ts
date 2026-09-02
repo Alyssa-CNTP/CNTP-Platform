@@ -22,6 +22,20 @@ function envFlag(name: string, fallback: boolean): boolean {
   return raw === 'true' || raw === '1'
 }
 
+/**
+ * A per-section rollout flag: a comma-separated list of section ids, or 'all'.
+ *
+ * Unset means none. 'true'/'1' are accepted as synonyms for 'all' so an
+ * environment already set to the old boolean form does not silently mean
+ * "no sections" after this changed shape.
+ */
+function sectionSetFlag(name: string): ReadonlySet<string> {
+  const raw = (process.env[name] ?? '').trim().toLowerCase()
+  if (!raw) return new Set()
+  if (raw === 'all' || raw === 'true' || raw === '1') return new Set(['*'])
+  return new Set(raw.split(',').map(s => s.trim()).filter(Boolean))
+}
+
 export const flags = {
   /**
    * Supervisor adjustment page — Tier 1 corrections on open sessions,
@@ -38,11 +52,31 @@ export const flags = {
   ledgerAuthoritative: envFlag('NEXT_PUBLIC_FF_LEDGER_AUTHORITATIVE', false),
 
   /**
-   * Allocate bag serial sequences via the next_bag_serial database function
-   * rather than reading a max in app code. Rolled out one section at a time;
-   * the old app-side seeding remains as the fallback while this is false.
+   * Sections that mint serials under the current scheme (ARCHITECTURE.md §5),
+   * with the sequence allocated by production.next_bag_seq. Everything else
+   * keeps the historic per-section format and the app-side max+1 seeding.
+   *
+   * A SET, not a boolean, because the flag's own contract is "rolled out one
+   * section at a time" and a boolean cannot express that. Serials are printed
+   * onto physical bags: a bad rollout is not undone by reverting code, so the
+   * blast radius has to be one line in the environment, one section wide.
+   *
+   *     NEXT_PUBLIC_FF_DB_SERIAL_ALLOCATION=sieving
+   *     NEXT_PUBLIC_FF_DB_SERIAL_ALLOCATION=sieving,granule
+   *     NEXT_PUBLIC_FF_DB_SERIAL_ALLOCATION=all      (every section)
+   *     unset / empty                                (none — the default)
    */
-  dbSerialAllocation: envFlag('NEXT_PUBLIC_FF_DB_SERIAL_ALLOCATION', false),
+  dbSerialSections: sectionSetFlag('NEXT_PUBLIC_FF_DB_SERIAL_ALLOCATION'),
 } as const
 
 export type FeatureFlag = keyof typeof flags
+
+/**
+ * Does this section mint serials under the current scheme yet?
+ *
+ * The one place the rollout is decided. Call it with the SECTION ID
+ * ('refining1', not 'refining') — the two Refining lines roll out separately.
+ */
+export function usesDbSerials(sectionId: string): boolean {
+  return flags.dbSerialSections.has('*') || flags.dbSerialSections.has(String(sectionId))
+}

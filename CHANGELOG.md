@@ -2,6 +2,54 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-02 — Alyssa (Serial scheme goes behind a per-section rollout flag)
+
+**Files changed:** `lib/config/flags.ts`, `lib/config/flags.test.ts` (new), `lib/production/serial-legacy.ts` (new), `components/production/capture/{Sieving,Granule,Refining,Blender}Capture.tsx`
+
+Correcting an omission in the wiring above. `flags.ts` already carried
+`dbSerialAllocation`, written during Phase 0, whose own comment said *"rolled out one
+section at a time; the old app-side seeding remains as the fallback"*. The wiring
+ignored it and hard-switched all five sections at once.
+
+That is the wrong risk to take here specifically. A serial is printed onto a physical
+bag: reverting the code does not un-print it, so the only real rollback is "stop
+minting the new format", and that has to be one line in the environment rather than a
+deploy.
+
+**The flag is now a set of section ids, not a boolean** — a boolean cannot express
+"one section at a time":
+
+    NEXT_PUBLIC_FF_DB_SERIAL_ALLOCATION=sieving
+    NEXT_PUBLIC_FF_DB_SERIAL_ALLOCATION=sieving,granule
+    NEXT_PUBLIC_FF_DB_SERIAL_ALLOCATION=all
+    unset                                        (the default — nothing changes)
+
+`all`, `true` and `1` are synonyms, so an environment already set to the old boolean
+form cannot silently come to mean "no sections". Refining 1 and 2 roll out separately,
+as do the two blenders — they are different work centres and one can be proven before
+the other moves.
+
+**`lib/production/serial-legacy.ts`** holds the four historic generators, moved rather
+than rewritten. They are not good code — the `max + 1` scan is the documented cause of
+bags going missing (§1B) — but they are the fallback, and gathering them in one module
+means the old behaviour has one owner while it lives and deleting it later is deleting a
+file rather than hunting four copies.
+
+**This ships dark.** With the flag unset, every section behaves exactly as it does on
+staging today. The one change that is NOT behind the flag is the Quality Sieving
+ordering fix, deliberately: it makes that page read both formats, which is a
+prerequisite for turning any section on and is correct either way.
+
+**Verification:** 155 unit tests pass (up from 149), boundary lint clean, 32 type errors
+(baseline), `next build` compiles.
+
+**To roll out:** set the env var to one section, deploy, watch a shift's bags, then add
+the next. Suggested order — `sieving` (feeds Quality, already proven), then `granule`
+(lot-scoped, the one with seeded counters), then `refining1`, `refining2`, `blender`,
+`smallblender`.
+
+---
+
 ## 2026-09-02 — Alyssa (Serial scheme wired: Sieving, Granule, Refining 1/2, Blender, Small Blender)
 
 **Files changed:** `lib/core/serials.ts`, `lib/core/serials.scheme.test.ts`, `lib/production/serial-allocator.ts`, `components/production/capture/{Sieving,Granule,Refining,Blender}Capture.tsx`, `app/(app)/production/capture/[section]/page.tsx`, `app/(app)/quality/sieving/page.tsx`, `ARCHITECTURE.md`

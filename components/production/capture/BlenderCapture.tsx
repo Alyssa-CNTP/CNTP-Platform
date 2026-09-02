@@ -22,6 +22,8 @@ import { n } from '@/lib/core/num'
 import { blenderTotals } from '@/lib/core/mass-balance/blender'
 import { workCentreFor } from '@/lib/core/serials'
 import { allocateBagSerial } from '@/lib/production/serial-allocator'
+import { legacyBlendSerial } from '@/lib/production/serial-legacy'
+import { usesDbSerials } from '@/lib/config/flags'
 export { blenderTotals }
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -609,8 +611,8 @@ export function BlenderCapture({
    */
   async function genBlendSerial(): Promise<string> {
     if (!bomId) return genSerial()
-    const wc = workCentreFor(sectionId)
-    if (!wc) return genSerial()
+    // Rolled out per section. Both blenders roll out independently.
+    const wc = usesDbSerials(sectionId) ? workCentreFor(sectionId) : null
 
     if (runNoRef.current === null) {
       let runNo = value.outputRunNo
@@ -620,6 +622,11 @@ export function BlenderCapture({
         patch({ outputRunNo: runNo })
       }
       runNoRef.current = runNo
+    }
+
+    if (!wc) {
+      const { start, end } = productionDayRange(date)
+      return legacyBlendSerial(bomId, runNoRef.current, value.outputs.map(o => o.serial), start, end)
     }
 
     const alloc = await allocateBagSerial(

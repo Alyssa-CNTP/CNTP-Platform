@@ -15,6 +15,8 @@ import { logBucketElevator, outstandingBucketElevator, variantFamily } from '@/l
 import { n } from '@/lib/core/num'
 import { resolveTypeCode } from '@/lib/core/serials'
 import { allocateBagSerial } from '@/lib/production/serial-allocator'
+import { legacySievingSerial } from '@/lib/production/serial-legacy'
+import { usesDbSerials } from '@/lib/config/flags'
 import { sievingTotals } from '@/lib/core/mass-balance/sieving'
 import { debagRowKey, missingDebagRows } from '@/lib/production/debag-reconcile'
 export { sievingTotals }
@@ -400,21 +402,26 @@ export function SievingCapture({
 
   // ── Bagging — picker → serial → tag → label ──────────────────────────────
   async function addOutput(p: PickedOutput) {
-    // Number comes from the database (production.next_bag_seq), not from a
-    // max over bag_tags. localSerials is only the offline fallback.
-    const { code: typeCode, configured } = resolveTypeCode('ST', p.productType)
-    const alloc = await allocateBagSerial(
-      { workCentre: 'ST', typeCode, date },
-      value.outputs.map(o => o.serial),
-    )
-    const serial = alloc.serial
-    // Both of these are worth saying out loud rather than swallowing: an
-    // unmapped product got a guessed code that looks exactly like a real one,
-    // and a locally-allocated number is not collision-proof.
-    if (!configured || alloc.source === 'local') {
-      setSerialNotice(!configured
-        ? `"${p.productType}" has no serial code configured — ${typeCode} was derived from its name. Tell IT so it gets a proper one.`
-        : 'Offline — this bag was numbered locally. Check for a duplicate serial once the tablet reconnects.')
+    // Rolled out per section (NEXT_PUBLIC_FF_DB_SERIAL_ALLOCATION). Until
+    // 'sieving' is in that list this mints the historic format the old way —
+    // a serial is printed onto a physical bag, so stopping the new format has
+    // to be one line in the environment, not a code revert.
+    const localSerials = value.outputs.map(o => o.serial)
+    let serial: string
+    if (!usesDbSerials('sieving')) {
+      serial = await legacySievingSerial(p.productType, localSerials, date)
+    } else {
+      const { code: typeCode, configured } = resolveTypeCode('ST', p.productType)
+      const alloc = await allocateBagSerial({ workCentre: 'ST', typeCode, date }, localSerials)
+      serial = alloc.serial
+      // Both of these are worth saying out loud rather than swallowing: an
+      // unmapped product got a guessed code that looks exactly like a real
+      // one, and a locally-allocated number is not collision-proof.
+      if (!configured || alloc.source === 'local') {
+        setSerialNotice(!configured
+          ? `"${p.productType}" has no serial code configured — ${typeCode} was derived from its name. Tell IT so it gets a proper one.`
+          : 'Offline — this bag was numbered locally. Check for a duplicate serial once the tablet reconnects.')
+      }
     }
     const grade  = gradeLetter || 'A'
     const now    = new Date().toISOString()

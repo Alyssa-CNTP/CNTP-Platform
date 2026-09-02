@@ -49,6 +49,8 @@ import { n } from '@/lib/core/num'
 import { granuleColumnTotals, blendTotal, granuleTotals } from '@/lib/core/mass-balance/granule'
 import { resolveTypeCode } from '@/lib/core/serials'
 import { allocateBagSerial } from '@/lib/production/serial-allocator'
+import { legacyGranuleSerial } from '@/lib/production/serial-legacy'
+import { usesDbSerials } from '@/lib/config/flags'
 export { granuleColumnTotals, blendTotal, granuleTotals }
 
 // ── Dust columns — PR-FM-026/7 pellet-mill-feed columns, each with its own colour ─
@@ -679,7 +681,14 @@ export function GranuleCapture({
    */
   async function allocateGranuleSerial(
     productType: string, lotNo: string, dateStr: string, localSerials: string[],
-  ) {
+  ): Promise<{ serial: string } | null> {
+    // Rolled out per section (NEXT_PUBLIC_FF_DB_SERIAL_ALLOCATION). Until
+    // 'granule' is in that list, the historic per-lot numbering stands — which
+    // counted granules and dust on one sequence. That is the behaviour being
+    // fixed, and it is also the behaviour to fall back to if the fix misfires.
+    if (!usesDbSerials('granule')) {
+      return { serial: await legacyGranuleSerial(lotNo, localSerials, dateStr) }
+    }
     if (!lotNo.trim()) {
       setSerialNotice('This session has no lot number, and a Granule bag is numbered per lot. Set the lot on Assign before bagging.')
       return null

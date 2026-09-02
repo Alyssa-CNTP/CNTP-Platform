@@ -17,6 +17,7 @@ import type { ShiftAssignment, InventoryItem } from '@/lib/supabase/database.typ
 import { n } from '@/lib/core/num'
 import { resolveTypeCode, workCentreFor } from '@/lib/core/serials'
 import { allocateBagSerial } from '@/lib/production/serial-allocator'
+import { usesDbSerials } from '@/lib/config/flags'
 import { refiningTotals } from '@/lib/core/mass-balance/refining'
 export { refiningTotals }
 
@@ -681,7 +682,9 @@ export function RefiningCapture({
     // Refining 2 are both kind 'refining' but are different work centres with
     // different type codes, and sharing a counter would put R2's bought-in
     // material under R1's numbering.
-    const wc = workCentreFor(sectionId)
+    // Rolled out per section, and R1/R2 roll out separately — they are
+    // different work centres, so one can be proven before the other moves.
+    const wc = usesDbSerials(sectionId) ? workCentreFor(sectionId) : null
     let serial: string
     if (!wc) {
       serial = genSerial()
