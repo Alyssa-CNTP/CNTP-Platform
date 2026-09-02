@@ -52,10 +52,12 @@
 -- Steps 1 and 2 are read-only: run them first and read the output. Steps 3 and
 -- 4 change data, and step 4 must not be skipped. Step 6 verifies.
 --
--- START WITH STEP 1b. Steps 1, 2a and 2c filter to product_type in ('Farm
--- Bag','500kg Farm Bag'); 1b assumes nothing and shows where the rows actually
--- are, so a repair cannot come back clean simply because it was looking in the
--- wrong place. 1c finds the duplicated session without needing its id.
+-- START WITH STEP 1a: confirm you are on the PRODUCTION database. Run this
+-- against staging and every step comes back clean, which looks exactly like
+-- "already fixed". Then 1b -- steps 1, 2a and 2c filter to product_type in
+-- ('Farm Bag','500kg Farm Bag'), while 1b assumes nothing and shows where the
+-- rows actually are, so a repair cannot come back clean merely because it was
+-- looking in the wrong place. 1c finds the duplicated session without its id.
 --
 -- Run ONE STEP AT A TIME. Do not paste the whole file in at once.
 -- ============================================================================
@@ -75,6 +77,38 @@ create table if not exists production.repair_20260902_backup (
 
 comment on table production.repair_20260902_backup is
   'Rows and draft_data documents removed/rewritten by the 2026-09-02 Sieving changeover-duplication repair. Keep until the repair is confirmed on the floor.';
+
+
+-- ===========================================================================
+-- Step 1a. READ ONLY. RUN THIS FIRST. Which database am I connected to?
+-- ===========================================================================
+-- The duplication is on PRODUCTION. Run the repair against staging and every
+-- step comes back clean, which is indistinguishable from "already fixed" --
+-- so confirm the database before reading anything below as good news.
+--
+-- Supabase project refs (see CLAUDE.md and .env.local):
+--   staging     qjqkpockmujecjgmdple
+--   production  sxzjjcyuzyfneesnsjna
+-- The ref is in the dashboard URL of the SQL editor you are typing into.
+--
+-- This query is the evidence, not the label. On the production database the
+-- Sieving Tower ran on 2026-08-31 AND 2026-09-01, and 31-08 carries far more
+-- debagging rows than distinct bags. A database with no 2026-09-01 sieving
+-- session, or with a single-figure row count on 31-08, is not the one the
+-- floor is capturing into.
+select s.date, s.shift, s.id as session_id, s.status,
+       count(pd.id) filter (
+         where pd.product_type in ('Farm Bag', '500kg Farm Bag')
+           and pd.is_spillage = false
+       ) as debag_rows,
+       count(pb.id) as bagging_rows
+from production.prod_sessions s
+left join production.prod_debagging pd on pd.session_id = s.id
+left join production.prod_bagging   pb on pb.session_id = s.id
+where s.section_id = 'sieving'
+  and s.date >= date '2026-08-28'
+group by s.date, s.shift, s.id, s.status
+order by s.date, s.shift;
 
 
 -- ===========================================================================
