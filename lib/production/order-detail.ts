@@ -197,6 +197,7 @@ export interface OrderDay {
   freshTopUps: OrderFreshTopUpRow[] // today's production added into an older bag, shift-tagged
   debags: OrderDebagRow[]           // all shifts, morning first, changeover duplicates removed
   debagDuplicatesHidden: number      // how many duplicate farm-bag rows were dropped
+  duplicateOutputsHidden: number     // how many serial-less duplicate output rows were dropped
   massBalance: OrderMassBalance | null   // whole-run (summed per-shift)
   reopenRequests: OrderReopenRequest[]   // union across shifts
   notes: OrderNote[]                // union across shifts, newest first
@@ -262,7 +263,7 @@ function sumMassBalance(shifts: OrderShiftBlock[], sectionId: string): OrderMass
 function mergeOutputBags(
   tags: any[], bagging: any[],
   firstEvent: Map<string, { action: string; related_serial_number: string | null }>,
-): OrderBagRow[] {
+): { rows: OrderBagRow[]; duplicateOutputsHidden: number } {
   const voided = new Set(tags.filter(t => t.status === 'voided').map(t => t.serial_number))
   const active = tags.filter(t => t.status !== 'voided')
 
@@ -305,7 +306,27 @@ function mergeOutputBags(
       session_id: pb.session_id, bornViaRebag: false, rebagSourceSerial: null,
     })
   }
+  // A serial-less prod_bagging row that mirrors a bag already on the spine is a
+  // COPY, not a by-product. persist() nulls a repeated serial to get past
+  // prod_bagging_session_serial_uniq and keeps the row, so the changeover fault
+  // left one of these beside each real bag — they show on the order as "—" rows
+  // at the same time and weight, and they inflate the bag count and kg.
+  //
+  // Matched on session + product + weight + bagging time together. A genuine
+  // no-serial row (by-product, Pasteuriser range row) does not coincide with a
+  // tagged bag on all four, so it is kept.
+  const spineKey = (r: { session_id: any; product_type: any; kg: number; bagging_time: any }) =>
+    `${r.session_id}|${r.product_type ?? ''}|${r.kg.toFixed(3)}|${r.bagging_time ?? ''}`
+  const spine = new Set(rows.map(spineKey))
+  let duplicateOutputsHidden = 0
+
   for (const pb of pbNoSerial) {
+    const key = spineKey({
+      session_id: pb.session_id, product_type: pb.product_type ?? null,
+      kg: Number(pb.kg) || 0, bagging_time: pb.bagging_time ?? null,
+    })
+    if (spine.has(key)) { duplicateOutputsHidden++; continue }
+    spine.add(key)
     rows.push({
       ...base, id: pb.id, output_group: pb.output_group ?? null,
       bag_serial_no: null, product_type: pb.product_type ?? null,
@@ -321,7 +342,7 @@ function mergeOutputBags(
     return ta - tb
   })
   rows.forEach((r, i) => { r.bag_no = i + 1 })
-  return rows
+  return { rows, duplicateOutputsHidden }
 }
 
 function group<T>(rows: T[], key: (r: T) => string): Map<string, T[]> {
@@ -442,7 +463,7 @@ export async function loadOrderDay(sessionId: string): Promise<OrderDay | null> 
   }))
 
   // Whole-day output bags, then attribute each to its shift.
-  const bags = mergeOutputBags(allTags, (bagsRes.data as any[]) ?? [], firstEventBySerial)
+  const { rows: bags, duplicateOutputsHidden } = mergeOutputBags(allTags, (bagsRes.data as any[]) ?? [], firstEventBySerial)
   bags.forEach(b => { b.shift = shiftBySession.get(b.session_id) ?? '' })
 
   // Fallback: output bags in draft_data that exist in neither bag_tags nor
@@ -661,6 +682,7 @@ export async function loadOrderDay(sessionId: string): Promise<OrderDay | null> 
     freshTopUps,
     debags,
     debagDuplicatesHidden,
+    duplicateOutputsHidden,
     massBalance: sumMassBalance(shifts, section_id),
     reopenRequests: ((reopenRes.data as any[]) ?? []) as OrderReopenRequest[],
     notes: ((notesRes.data as any[]) ?? []).map((n: any) => ({ ...n, shift: shiftBySession.get(n.session_id) ?? '' })) as OrderNote[],
