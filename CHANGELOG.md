@@ -2,6 +2,38 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-02 — Alyssa (Debagging's Per batch table stops calling the bucket elevator "(no batch)")
+
+**Files changed:** `app/(app)/production/orders/[id]/page.tsx`
+
+Reported from the 1 September order. The `Per batch` table added earlier today collapsed every lot-less row into one line labelled `(no batch)` — and in Debagging those rows are the **bucket elevator and machine spillage**. It read as though the elevator were a batch by that name.
+
+They are not batches at all: the elevator is yesterday's carry-over and spillage is loss off the machine. They are now listed below the batches under a **`No batch of its own`** heading, named for what they are, with no bag count (neither is a bag) and a line saying both are still counted in Total input.
+
+The `batches · kg` figure in the header is now the batched weight only, so it matches the rows beneath it rather than silently including the elevator.
+
+The shared `batchTotals` helper keeps its `(no batch)` fallback — that is the right label for an **output** bag that genuinely has no batch, which is a different case.
+
+---
+
+## 2026-09-02 — Alyssa (An output bag's grade follows the lot it was sieved from)
+
+**Files changed:** `lib/production/order-detail.ts`, `app/(app)/production/orders/[id]/page.tsx`, `scripts/verify-output-grade-from-lot.py` (new)
+
+Reported from the 31-08 report: the debagging list shows which lots are Export Blend, but the Fine Leaf bags sieved from them still read Export.
+
+A lot's grade is settled when it is **debagged** — the operator picks Export or Export Blend per bulk bag, and everything sieved from that lot is that grade. An output bag's grade came from `bag_tags.destination`, which defaults to the batch's grade when the bag is added — so after the changeover misfired, bags off Export Blend lots kept being tagged Export.
+
+On 31-08, `GS-22-157` and `MAT-0336` were both debagged as Export Blend, and `STFL-310826-010` and `-012` came off them reading Export. `GS-20-238` happened to be tagged right, which is why one Export Blend bag showed and two did not — **Export Blend Fine Leaf output was 300 kg when it should have been 900 kg**.
+
+- **The lot now wins**, because debagging is where the grade was decided and it is what the floor's own sheet matches.
+- **Except where it cannot.** `GS-0313` was debagged twice that morning, once as Export (`X-1602`) and once as Export Blend (`1073`). A lot debagged under two grades says nothing about a bag sieved from it, so the tag stands and the row is marked `lot mixed` rather than guessed at.
+- **The override is never silent.** A grade taken from the lot is shown in the warning colour, marked `from lot`, with what the tag actually said — because someone holding a label that reads Export needs to see why the report says Export Blend. The panel also states how many bags were corrected and that **their printed labels are wrong and need reprinting**.
+
+`scripts/verify-output-grade-from-lot.py` checks the rule against the real 31-08 rows: the two wrong bags, the one already right, both `GS-0313` cases, every correctly-tagged Export bag, a lot absent from the sheet, an untagged bag, and the corrected Export Blend total. **15 checks, all passing.**
+
+---
+
 ## 2026-09-02 — Alyssa (HOTFIX: a bag's kg on an order is the bag now, minus later top-ups)
 
 **Files changed:** `lib/production/order-detail.ts`, `scripts/verify-order-day-kg.py` (new)

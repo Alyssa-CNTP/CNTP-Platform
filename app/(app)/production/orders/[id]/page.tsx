@@ -403,6 +403,17 @@ export default function ProductionOrderDetailPage() {
             duplicateOutputsHidden > 0 ? ` · ${duplicateOutputsHidden} duplicate row${duplicateOutputsHidden === 1 ? '' : 's'} hidden` : ''
           }`} />
         <PanelBody>
+          {bags.filter(b => b.gradeSource === 'lot').length > 0 && (
+            <p className="mb-3 text-[11.5px] text-text-muted leading-relaxed">
+              {bags.filter(b => b.gradeSource === 'lot').length} bag
+              {bags.filter(b => b.gradeSource === 'lot').length === 1 ? '' : 's'} below take
+              their grade from the lot they were sieved from, not from the bag&apos;s own tag —
+              marked <span className="text-warn font-medium">from lot</span>. A lot&apos;s grade is
+              settled when it is debagged, so a bag off an Export Blend lot is Export Blend even if
+              the tag still said Export. The printed label on those bags is wrong and needs
+              reprinting.
+            </p>
+          )}
           {bags.length === 0 && bucketCarryOverKg === 0 ? <Empty>No output bags recorded.</Empty> : (
             <div className="space-y-4">
               {groupBy(bags, b => b.product_type || 'Other').map(g => (
@@ -608,8 +619,10 @@ function InputTypeGroup({ type, rows, multiShift }: { type: string; rows: OrderD
   )
 }
 
-// Totals per batch number, biggest first. Blank lots collapse into one
-// "no batch" line rather than being dropped, so the figures still add up.
+// Totals per batch number, biggest first. A blank key collapses into one
+// "(no batch)" line rather than being dropped, so the figures still add up --
+// which is right for an OUTPUT bag that genuinely has no batch. Debagging's
+// lot-less rows are named for what they are instead; see BatchTotals.
 function batchTotals(rows: { lot: string | null; kg: number }[]): { lot: string; kg: number; n: number }[] {
   const m = new Map<string, { lot: string; kg: number; n: number }>()
   for (const r of rows) {
@@ -623,16 +636,28 @@ function batchTotals(rows: { lot: string | null; kg: number }[]): { lot: string;
 
 // Debagging, totalled per batch number. The per-type tables below it list every
 // bag; this answers "how much of each batch went in" without counting by eye.
+//
+// The bucket elevator and machine spillage carry no lot, and lumping them under
+// a row called "(no batch)" read as though the elevator were a batch by that
+// name. They are not batches at all -- the elevator is yesterday's carry-over
+// and spillage is loss off the machine -- so they are named for what they are,
+// below the batches, under a heading that says so. Still shown, because they
+// are real input and the totals have to add up.
 function BatchTotals({ rows }: { rows: OrderDebagRow[] }) {
-  const batches = batchTotals(rows.map(r => ({ lot: r.lot_number, kg: Number(r.kg_nett) || 0 })))
-  if (batches.length === 0) return null
-  const total = batches.reduce((s, b) => s + b.kg, 0)
+  const batched = rows.filter(r => (r.lot_number || '').trim())
+  const unbatched = rows.filter(r => !(r.lot_number || '').trim())
+  const batches = batchTotals(batched.map(r => ({ lot: r.lot_number, kg: Number(r.kg_nett) || 0 })))
+  // Grouped by what they are (Bucket Elevator / Machine Spillage), via the same
+  // naming the tables below use.
+  const others = batchTotals(unbatched.map(r => ({ lot: inputType(r), kg: Number(r.kg_nett) || 0 })))
+  if (batches.length === 0 && others.length === 0) return null
+  const batchedKg = batches.reduce((s, b) => s + b.kg, 0)
   return (
     <div className="rounded-xl border border-surface-rule overflow-hidden">
       <div className="flex items-center justify-between gap-2 px-3 py-2 bg-surface-dim">
         <span className="text-[12.5px] font-semibold text-text">Per batch</span>
         <span className="font-mono text-[11px] text-text-muted whitespace-nowrap">
-          {batches.length} batch{batches.length === 1 ? '' : 'es'} · {total.toFixed(1)} kg
+          {batches.length} batch{batches.length === 1 ? '' : 'es'} · {batchedKg.toFixed(1)} kg
         </span>
       </div>
       <table className="w-full text-left border-collapse">
@@ -651,8 +676,29 @@ function BatchTotals({ rows }: { rows: OrderDebagRow[] }) {
               <td className="px-3 py-1.5 font-mono text-[12px] text-text text-right tabular-nums">{b.kg.toFixed(1)}</td>
             </tr>
           ))}
+          {others.length > 0 && (
+            <tr>
+              <td colSpan={3} className="px-3 pt-2.5 pb-1 text-[10px] font-mono font-semibold text-text-faint uppercase tracking-[0.06em]">
+                No batch of its own
+              </td>
+            </tr>
+          )}
+          {others.map(o => (
+            <tr key={o.lot}>
+              <td className="px-3 py-1.5 text-[12.5px] text-text-muted whitespace-nowrap">{o.lot}</td>
+              <td className="px-3 py-1.5 font-mono text-[12px] text-text-faint text-right tabular-nums">—</td>
+              <td className="px-3 py-1.5 font-mono text-[12px] text-text-muted text-right tabular-nums">{o.kg.toFixed(1)}</td>
+            </tr>
+          ))}
         </tbody>
       </table>
+      {others.length > 0 && (
+        <p className="px-3 py-2 border-t border-surface-rule/60 bg-surface-dim/40 text-[11px] text-text-muted leading-relaxed">
+          The bucket elevator is yesterday&apos;s carry-over and machine spillage is loss off the
+          machine — neither belongs to a batch, and neither is a bag, so no bag count is shown. Both
+          are counted in Total input.
+        </p>
+      )}
     </div>
   )
 }
@@ -709,10 +755,24 @@ function OutputTypeGroup({ type, rows, multiShift }: { type: string; rows: Order
                 are both bagged against a batch number, and a serial alone does
                 not say which material it came from. */}
             <span className="text-[11px] text-text-muted shrink-0 whitespace-nowrap">{b.lot_number || '—'}</span>
-            {/* The grade this bag was TAGGED for. On a changeover run this is
+            {/* The grade, and where it came from. On a changeover run this is
                 the only thing that says which bag is Export and which is
-                Export Blend -- the order header cannot, it covers both. */}
-            <span className="text-[11px] text-text-muted shrink-0 whitespace-nowrap">{b.grade || '—'}</span>
+                Export Blend -- the order header cannot, it covers both.
+                A grade taken from the lot rather than the bag's own tag is
+                marked, with what the tag said, so the override is never
+                silent: someone reading a label that says Export needs to see
+                why the report says Export Blend. */}
+            <span className="text-[11px] shrink-0 whitespace-nowrap">
+              <span className={b.gradeSource === 'lot' ? 'text-warn font-medium' : 'text-text-muted'}>
+                {b.grade || '—'}
+              </span>
+              {b.gradeSource === 'lot' && (
+                <span className="text-[9.5px] text-text-faint"> from lot{b.gradeTagged ? ` (tagged ${b.gradeTagged})` : ''}</span>
+              )}
+              {b.gradeSource === 'ambiguous' && (
+                <span className="text-[9.5px] text-text-faint" title="This lot was debagged under more than one grade, so the bag's own tag stands."> lot mixed</span>
+              )}
+            </span>
             {multiShift && <span className="text-[10px] text-text-faint shrink-0 capitalize">{b.shift}</span>}
             {b.output_group && <span className="font-mono text-[10px] text-text-faint shrink-0">grp {b.output_group}</span>}
             <span className="font-mono text-text-muted shrink-0 tabular-nums w-16 text-right">{b.kg.toFixed(1)} kg</span>
