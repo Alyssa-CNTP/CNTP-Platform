@@ -1497,8 +1497,25 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
   // creation, so editing the master spec afterwards never touches a batch
   // already in progress until this is run — this is the deliberate "pull the
   // latest numbers in and re-check my recorded values against them" action.
-  async function reloadSpec() {
-    const b = activeBatch
+  // Takes a batch id rather than reading activeBatch, so the same action works
+  // from the Active Runs header AND from an expanded row in History &
+  // Performance — a spec can change long after a run is finished, which is
+  // exactly when you need to re-check a historical batch against it.
+  // Deep link into Customer Specs → Sieve Specs, pre-filtered to this batch's
+  // product family, so "what is this run actually being judged against?" (and
+  // "change that limit") is one click from the run instead of a hunt.
+  // Only the family is passed: Customer Specs filters on an exact string match
+  // against the values that exist in customer_specs, so sending a batch's
+  // customer through would silently filter the list to nothing whenever the
+  // spec row is the generic (blank-customer) one, which is the common case.
+  function specHref(b: Batch) {
+    const q = new URLSearchParams({ tab: 'sieve' })
+    if (b.product_family) q.set('family', b.product_family)
+    return `/quality/customer-specs?${q.toString()}`
+  }
+
+  async function reloadSpecFor(batchId: string) {
+    const b = batches.find(x => x.id === batchId)
     if (!b) return
     const { data } = await db.schema('qms').from('customer_specs').select('*')
       .ilike('product_family', b.product_family)
@@ -1511,7 +1528,26 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
           ?? rows[0])
       : null
     if (!spec) { alert(`No spec found for ${b.product_family} ${b.grade} · ${b.variant} — nothing changed.`); return }
-    if (!confirm(`Reload the current ${b.product_family} ${b.grade} · ${b.variant} spec into this batch?\n\nThis overwrites this batch's spec values with what's saved in Specifications now, and every sample's in-spec check updates immediately.`)) return
+
+    // A batch number can be split across more than one record (History merges
+    // them back into a single row and keeps only the first record's id — see
+    // completedBatches). Re-specing just that one would leave the other halves
+    // of the same batch judged against the old limits, so target them all.
+    const key = (s?: string) => (s || '').trim().toLowerCase()
+    const targets = batches.filter(x => x.id === batchId || (!!key(b.batch_number) && key(x.batch_number) === key(b.batch_number)))
+    const targetIds = new Set(targets.map(x => x.id))
+
+    // Re-specing an APPROVED batch invalidates the approval: the Pass/Fail on
+    // it was a judgement against the old numbers, and silently keeping that
+    // verdict while swapping the spec underneath it would leave a batch marked
+    // "Pass · approved by X" that nobody ever passed against these limits.
+    // So a finalised batch goes back to the Lab Manager for a fresh decision.
+    const finalised = targets.filter(x => !!x.final_result)
+    const wasFinal = finalised.length > 0
+    const warning = wasFinal
+      ? `\n\n⚠ This batch is already finalised as "${finalised[0].final_result}"${finalised[0].approved_by ? ` (approved by ${finalised[0].approved_by})` : ''}.\n\nThat approval was made against the OLD spec, so reloading will clear it and send the batch back to the Lab Manager for a new review.`
+      : ''
+    if (!confirm(`Reload the current ${b.product_family} ${b.grade} · ${b.variant} spec into this batch?\n\nThis overwrites this batch's spec values with what's saved in Specifications now, and every sample's in-spec check updates immediately.${warning}`)) return
     const ss = spec.sieve_specs ?? {}
     const newBatchSpecs = {
       moisture_max: spec.moisture_max ?? '',
@@ -1525,12 +1561,44 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
       gt60_min: ss.gt60?.min ?? spec.gt60_min ?? '', gt60_max: ss.gt60?.max ?? spec.gt60_max ?? '',
       dust_min: ss.dust?.min ?? spec.dust_min ?? '', dust_max: ss.dust?.max ?? spec.dust_max ?? '',
     }
+    const nowIso = new Date().toISOString()
     setBatches(p => {
-      const updated = p.map(x => x.id !== activeBatchId ? x : { ...x, _spec: spec, batch_specs: newBatchSpecs })
-      const batch = updated.find(x => x.id === activeBatchId)
-      if (batch) saveBatchToDB(batch)
+      const updated = p.map(x => {
+        if (!targetIds.has(x.id)) return x
+        const wasFinal = !!x.final_result
+        const next: any = {
+          ...x,
+          _spec: spec,
+          batch_specs: newBatchSpecs,
+          // Audit trail — a quality record has to be able to answer "which
+          // spec was this judged against, and when did that change?" long
+          // after the fact. Appended, never overwritten.
+          spec_reloads: [
+            ...((x as any).spec_reloads || []),
+            { at: nowIso, by: whoAmI(), doc_no: spec.doc_no ?? null, spec_id: spec.id ?? null, was_final: wasFinal, cleared_result: wasFinal ? x.final_result : null },
+          ],
+        }
+        if (wasFinal) {
+          // Straight back into the Lab Manager's queue, not to draft — the
+          // capture work is done and unchanged; it's only the verdict that
+          // has to be made again against the new numbers.
+          next.final_result   = undefined
+          next.finalised_at   = undefined
+          next.approved_by    = undefined
+          next.final_reason   = undefined
+          next.batch_status   = 'awaiting_approval'
+          next.allocated_at   = nowIso
+          next.allocated_by   = whoAmI()
+          next.oos_flags      = computePastOosFlags({ ...x, batch_specs: newBatchSpecs, _spec: spec } as Batch)
+        }
+        return next
+      })
+      updated.filter(x => targetIds.has(x.id)).forEach(x => saveBatchToDB(x))
       return updated
     })
+    if (wasFinal) {
+      alert(`Spec reloaded. This batch's previous approval has been cleared and it is back with the Lab Manager for review against the new spec.`)
+    }
   }
 
   const activeBatch    = batches.find(b => b.id === activeBatchId) || null
@@ -1692,12 +1760,20 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                         ? <span className="badge badge-ok text-[9px]">✓ Spec: {activeBatch.product_family} {activeBatch.grade} · {activeBatch.variant}</span>
                         : <span className="badge badge-warn text-[9px]">⚠ Default spec</span>
                       }
-                      {!activeBatch.final_result && (
-                        <button onClick={reloadSpec} title="Re-fetch the current Specifications values for this product/grade/variant and re-check this batch's samples against them"
-                          className="text-[9px] font-semibold text-info border-b border-dashed border-info/50">
-                          🔄 Reload Spec
-                        </button>
-                      )}
+                      {/* Available on a FINALISED batch too — a spec can change
+                          after a run is approved, and that's exactly when you
+                          need to re-check it. reloadSpecFor() clears the old
+                          approval and sends it back for review in that case. */}
+                      <button onClick={() => reloadSpecFor(activeBatch.id)}
+                        title="Re-fetch the current Specifications values for this product/grade/variant and re-check this batch's samples against them"
+                        className="text-[9px] font-semibold text-info border-b border-dashed border-info/50">
+                        🔄 Reload Spec
+                      </button>
+                      <a href={specHref(activeBatch)} target="_blank" rel="noopener noreferrer"
+                        title="Open this product's spec in Customer Specs — to read the limits, or change them and then reload the spec here"
+                        className="text-[9px] font-semibold text-info border-b border-dashed border-info/50">
+                        📋 View spec
+                      </a>
                     </div>
                   </div>
 
@@ -2126,6 +2202,17 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                                       className="px-3 py-1.5 rounded-lg border border-surface-rule text-[11px] font-semibold">✏️ Edit Run</button>
                                     <button onClick={e => { e.stopPropagation(); exportPasteuriserBatch(b) }}
                                       className="px-3 py-1.5 rounded-lg border border-ok/30 bg-ok/8 text-ok text-[11px] font-semibold">⬇ Export Excel</button>
+                                    {/* A spec can be changed long after a run is
+                                        finished — this is where you re-check a
+                                        historical batch against the new limits.
+                                        reloadSpecFor() clears the old approval
+                                        and sends the batch back for review. */}
+                                    <button onClick={e => { e.stopPropagation(); reloadSpecFor(b.id) }}
+                                      title="Re-fetch the current Specifications values for this product/grade/variant and re-check this batch against them. Clears the existing approval and sends the batch back to the Lab Manager."
+                                      className="px-3 py-1.5 rounded-lg border border-info/30 bg-info/8 text-info text-[11px] font-semibold">🔄 Reload Spec</button>
+                                    <a href={specHref(b)} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()}
+                                      title="Open this product's spec in Customer Specs — to read the limits, or change them and then reload the spec here"
+                                      className="px-3 py-1.5 rounded-lg border border-info/30 bg-info/8 text-info text-[11px] font-semibold">📋 View spec</a>
                                   </div>
                                   {(() => {
                                     // Chronological already (samples are sorted at load — see parseRec()
