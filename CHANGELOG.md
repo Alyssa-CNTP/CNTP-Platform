@@ -2,6 +2,42 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-02 — Gustav (Pasteuriser: reload spec from History and on finalised runs)
+
+**Files changed:** `app/(app)/quality/pasteuriser/page.tsx`, `app/(app)/quality/customer-specs/page.tsx`
+
+A customer spec — especially the sieve fractions — can change long after a run
+is finished. Until now **Reload Spec** only existed on an *unfinalised* Active
+Run, so there was no way to re-check a completed batch against the new limits,
+and no link from a run to the spec it is actually judged against.
+
+- `reloadSpec()` → **`reloadSpecFor(batchId)`**, so the same action works from
+  the Active Runs header *and* from an expanded row in History & Performance.
+- **Reload Spec** and **View spec** buttons added to the History expanded-row
+  toolbar, next to Edit Run / Export Excel.
+- The `!final_result` gate was removed in Active Runs — a finalised run can be
+  re-specced too, which is exactly when it is usually needed.
+- **Re-specing a finalised batch now invalidates its approval** instead of
+  silently keeping a Pass/Fail that was made against the old numbers:
+  `final_result`, `finalised_at`, `approved_by` and `final_reason` are cleared,
+  `batch_status` goes to `awaiting_approval`, `oos_flags` are recomputed against
+  the new spec, and the batch lands back in the Lab Manager's queue. The confirm
+  dialog spells this out before it happens.
+- **`spec_reloads[]` audit trail** appended (never overwritten) on every reload:
+  when, by whom, which spec doc/id, and what verdict was cleared — a quality
+  record has to be able to answer "which spec was this judged against?" later.
+- A batch number split across several records is re-specced **as a whole**, not
+  just the first record. History merges those rows into one and keeps only the
+  first record's id, so targeting that one alone would have left the other
+  halves judged against the old limits.
+- **View spec** deep-links to Customer Specs → Sieve Specs pre-filtered to the
+  product family. `customer-specs` reads `?tab=&family=&customer=` in a
+  `useEffect` rather than a `useState` initialiser — the page is server-rendered
+  and the server has no query string, so seeding state during render would trip
+  a hydration mismatch. Only the family is passed, because the filters are exact
+  string matches and a batch's customer would filter the list to nothing
+  whenever the spec row is the generic blank-customer one.
+
 ## 2026-09-02 — Alyssa (The batch list is actually this session's, and the Overview mass balance shows on the afternoon shift)
 
 **Files changed:** `lib/production/inventory.ts`, `components/production/capture/SievingCapture.tsx`, `components/production/capture/CaptureOverview.tsx`
