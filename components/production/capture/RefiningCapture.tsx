@@ -1,11 +1,12 @@
 'use client'
 
 import { useState, useEffect, useRef, useCallback } from 'react'
+import { variantForDb } from '@/lib/core/variants'
 import { Plus, Trash2, Printer, PenLine, Package, PackageCheck, Lock, Pencil, Check, Search, X, AlertTriangle } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { printLabelAuto } from '@/lib/production/label-print'
 import { variantToShort, massBalanceToleranceKg, withinMassBalanceTolerance, isImplausibleWeight, isOpenBagWeight, OPEN_BAG_WEIGHT_THRESHOLD_KG } from '@/lib/production/capture-config'
-import { markBagConsumed, sanitizeSerial, voidBagTag } from '@/lib/production/scan-utils'
+import { lookupBagForAutofill, markBagConsumed, sanitizeSerial, voidBagTag } from '@/lib/production/scan-utils'
 import { validateBagScan, type ScanValidationResult } from '@/lib/production/validate-scan'
 import { SECTION_CONFIG } from '@/lib/production/live-types'
 import type { OutputBag, Variant as ShortVariant } from '@/lib/production/live-types'
@@ -167,35 +168,7 @@ function useSystemBags(sectionId: string, variantWord: string): SystemBag[] {
   return bags
 }
 
-// ── Scan/lookup helper ────────────────────────────────────────────────────────
-// Accepts both legacy DD-MM-SEQ format AND system ST-DDMMYY-NNN format.
 
-async function lookupSerial(serial: string): Promise<{
-  lot_number: string; weight_kg: string; product_type: string; variant: string
-} | null> {
-  if (!serial.trim()) return null
-  try {
-    const { data } = await getDb()
-      .schema('production')
-      .from('bag_tags')
-      .select('lot_number, weight_kg, product_type, variant')
-      .eq('serial_number', serial.trim())
-      .maybeSingle()
-    if (!data) return null
-    return {
-      lot_number:   data.lot_number  || '',
-      weight_kg:    data.weight_kg   ? String(data.weight_kg) : '',
-      product_type: data.product_type || '',
-      variant:      data.variant || '',
-    }
-  } catch (e) {
-    // A thrown error here is a real DB/network failure, not a genuinely-absent
-    // bag — log it so "serial only, fields blank" can be told apart from a
-    // truly-unregistered bag when diagnosing scan issues.
-    console.error('[RefiningCapture] serial lookup failed', e)
-    return null
-  }
-}
 
 // ── Scan row ─────────────────────────────────────────────────────────────────
 
@@ -219,7 +192,7 @@ function ScanRow({
   const triggerLookup = useCallback(async () => {
     if (!row.serial.trim()) return
     setLooking(true)
-    const result = await lookupSerial(row.serial)
+    const result = await lookupBagForAutofill(row.serial, 'RefiningCapture')
     setLooking(false)
     if (result) {
       if (result.product_type) onUpdate('productType', result.product_type)
@@ -596,7 +569,7 @@ export function RefiningCapture({
         // Register all manually-entered bags in bag_tags for traceability
         getDb().schema('production').from('bag_tags').upsert({
           serial_number: row.serial, section_id: sectionId, session_id: null,
-          product_type: row.productType, variant: variantWord || null,
+          product_type: row.productType, variant: variantForDb(variantWord),
           weight_kg: n(row.weight) || null, lot_number: row.lot || null,
           status: 'consumed', consumed_at_section: sectionId,
           location_updated_at: t,
@@ -716,7 +689,7 @@ export function RefiningCapture({
     try {
       await getDb().schema('production').from('bag_tags').upsert({
         serial_number: serial, section_id: sectionId, session_id: null,
-        product_type: productType, variant: variantWord || null,
+        product_type: productType, variant: variantForDb(variantWord),
         weight_kg: n(weight), lot_number: null, is_open: leaveOpen,
         acumatica_id: acCode?.inventoryId || null, status: 'in_stock', consumed: false, printed_at: now,
       } as any, { onConflict: 'serial_number' })

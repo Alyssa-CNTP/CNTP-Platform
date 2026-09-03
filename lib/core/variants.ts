@@ -193,3 +193,27 @@ export function variantSuffix(v: string | null | undefined): string | null {
   const canonical = normaliseVariant(v)
   return canonical ? SUFFIX[canonical] : null
 }
+
+/**
+ * The value to write to a `variant` column. Call this on the way into ANY
+ * insert/update — if the operator picked Organic, the row must read exactly
+ * `'Organic'`.
+ *
+ * `production.prod_sessions`, `bag_tags`, `prod_debagging`, `prod_bagging`,
+ * `shift_assignments` and `production_runs` all carry
+ *
+ *     CHECK (variant IN ('Conventional','Organic','RA-Conventional',
+ *                        'RA-Organic','FT-ORG','FT-CON'))
+ *
+ * so a short code like `'ORG'` is not stored wrongly — the whole write is
+ * REJECTED. That surfaces on the floor as "it won't save", with nothing naming
+ * the variant as the cause. Canonicalising here turns that into a correct row.
+ *
+ * Returns `null` for anything unrecognised, because the columns are nullable
+ * and the CHECK is `NOT VALID` — legacy rows predating the current list exist
+ * and can be read back into a draft. A null loses one field; sending the raw
+ * value loses the entire row.
+ */
+export function variantForDb(v: string | null | undefined): Variant | null {
+  return normaliseVariant(v)
+}

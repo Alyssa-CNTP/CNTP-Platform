@@ -2,6 +2,56 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-03 — Alyssa (Variant written exactly as selected; Phase 1 core dedup closed)
+
+**Files changed:** `lib/core/variants.ts`, `lib/core/variants.test.ts`,
+`lib/production/scan-utils.ts`, `app/(app)/production/capture/[section]/page.tsx`,
+`app/(app)/production/live/capture/page.tsx`,
+`components/production/capture/{Blender,Granule,Refining,Sieving}Capture.tsx`,
+`docs/capture-phases.md`
+
+### If Organic is selected, the row must read exactly `Organic`
+
+`prod_sessions`, `bag_tags`, `prod_debagging`, `prod_bagging`, `shift_assignments`
+and `production_runs` all carry
+
+    CHECK (variant IN ('Conventional','Organic','RA-Conventional',
+                       'RA-Organic','FT-ORG','FT-CON'))
+
+so a short code such as `ORG` is not stored wrongly — **the whole write is
+rejected**. On a tablet that reads as "it won't save", with nothing naming the
+variant as the cause. `variantForDb()` in core canonicalises on the way in and
+is now applied at every variant write: 20 sites in the capture page, 8 across
+the capture components, 3 in Live Capture.
+
+Live Capture was the live one: its form state is typed with the **short** codes
+(`'CON'`, `'ORG'`) and wrote them straight into `bag_tags.variant`.
+
+Canonicalisation also happens at the **source**, so everything downstream
+inherits it: the assignment's variant, and any draft restored from
+`draft_data` or localStorage. A draft can be months old and carry a spelling
+that predates the current constraint; `withCanonicalVariants()` fixes it on the
+way back in, so what the operator sees and what a later save writes are the
+same word. An unrecognisable variant becomes blank, which the capture page
+already treats as "the operator must pick one" rather than defaulting.
+
+### Phase 1 (populate core) is closed
+
+- **`lookupSerial` deduplicated.** Two byte-identical private copies in
+  `GranuleCapture` and `RefiningCapture` are now
+  `scan-utils.lookupBagForAutofill()`. Deliberately **not** migrated onto
+  `validateBagScan()` — that additionally refuses consumed, cross-variant and
+  finished-product bags, which neither section does today, so it changes what
+  the floor may scan and belongs in its own change.
+- **`n()` was already finished.** The old status line ("11 files down to 7") was
+  counting every local `const n = ...`. The two remaining comma-decimal parsers
+  are different functions and must stay that way: `granule-quality.num()`
+  returns `number | null` so a missing QC reading is not averaged as 0%, and
+  `shift-report-builder.num()` is null-safe and finite-checked, which `n()`
+  deliberately is not.
+
+402 unit tests pass. Type errors unchanged at the 36 baseline. Build clean.
+
 ## 2026-09-03 — Alyssa (Variant identity becomes core; four copies of the segregation rule reconciled)
 
 **Files changed:** `lib/core/variants.ts` (new), `lib/core/variants.test.ts` (new),

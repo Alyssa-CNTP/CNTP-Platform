@@ -1,5 +1,6 @@
 'use client'
 import React, { useState, useCallback, useRef, Suspense } from 'react'
+import { variantForDb } from '@/lib/core/variants'
 import { useSearchParams, useRouter } from 'next/navigation'
 import { format } from 'date-fns'
 import {
@@ -516,7 +517,7 @@ function CaptureInner() {
         section_id:      bag.section_id,
         section_name:    bag.section_name,
         product_type:    bag.product_type,
-        variant:         bag.variant,
+        variant:         variantForDb(bag.variant),
         qc_grade:        bag.grade,
         weight_kg:       bag.weight_kg,
         lot_number:      bag.lot_number,
@@ -574,7 +575,7 @@ function CaptureInner() {
           section_id:      b.section_id,
           section_name:    b.section_name,
           product_type:    b.product_type,
-          variant:         b.variant,
+          variant:         variantForDb(b.variant),
           qc_grade:        b.grade,
           weight_kg:       b.weight_kg,
           lot_number:      b.lot_number,
@@ -595,7 +596,7 @@ function CaptureInner() {
           producer:        b.raw!.producer || null,
           date_of_receipt: b.raw!.date_of_receipt,
           grade:           b.grade ?? null,
-          variant:         b.variant ?? null,
+          variant:         variantForDb(b.variant),
           dry:             b.raw!.dry,
           third_party:     b.raw!.third_party,
           weight_kg:       b.weight_kg,

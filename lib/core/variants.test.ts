@@ -6,6 +6,7 @@ import {
   isOrganicVariant,
   sameVariantFamily,
   mayPoolMaterial,
+  variantForDb,
   variantSuffix,
   type Variant,
 } from './variants'
@@ -133,6 +134,51 @@ describe('the five spellings that used to be misfiled', () => {
     expect(variantFamily(v)).toBe('organic')
     expect(isOrganicVariant(v)).toBe(true)
     expect(mayPoolMaterial(v)).toBe(false)
+  })
+})
+
+describe('variantForDb — what actually lands in the column', () => {
+  /**
+   * prod_sessions, bag_tags, prod_debagging, prod_bagging, shift_assignments
+   * and production_runs all CHECK variant IN (the six canonical words), so a
+   * short code is not stored wrongly — the write is REJECTED, and the floor
+   * sees "it won't save" with nothing naming the variant as the cause.
+   */
+  it('turns every spelling the UI can hold into the exact stored word', () => {
+    expect(variantForDb('ORG')).toBe('Organic')
+    expect(variantForDb('Organic')).toBe('Organic')
+    expect(variantForDb('O')).toBe('Organic')
+    expect(variantForDb('RA-ORG')).toBe('RA-Organic')
+    expect(variantForDb('FT ORG')).toBe('FT-ORG')
+    expect(variantForDb('CON')).toBe('Conventional')
+  })
+
+  it('only ever emits a value the CHECK constraint accepts', () => {
+    const ALLOWED = new Set<string>(VARIANTS)
+    const everySpelling = [
+      'Conventional', 'CON', 'C', 'Organic', 'ORG', 'O',
+      'RA-Conventional', 'RA-CON', 'RC', 'RA Conventional',
+      'RA-Organic', 'RA-ORG', 'RO', 'RA Organic',
+      'FT-CON', 'FT CON', 'FC', 'FT-Conventional', 'Fairtrade Conventional',
+      'FT-ORG', 'FT ORG', 'FO', 'FT-Organic', 'Fairtrade Organic',
+      'Rooibos', 'typo', '', '   ', null, undefined,
+    ]
+    for (const v of everySpelling) {
+      const out = variantForDb(v)
+      expect(out === null || ALLOWED.has(out)).toBe(true)
+    }
+  })
+
+  it('is null, not the raw string, for anything unrecognised', () => {
+    // A null loses one field. Passing the raw value through fails the CHECK and
+    // loses the whole row, which is what "it won't save" looks like on a tablet.
+    expect(variantForDb('Rooibos')).toBeNull()
+    expect(variantForDb('')).toBeNull()
+    expect(variantForDb(null)).toBeNull()
+  })
+
+  it('is idempotent — writing back what was read never changes it', () => {
+    for (const v of VARIANTS) expect(variantForDb(variantForDb(v))).toBe(v)
   })
 })
 

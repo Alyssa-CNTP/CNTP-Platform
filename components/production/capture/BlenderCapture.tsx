@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef } from 'react'
+import { variantForDb } from '@/lib/core/variants'
 import { Plus, Trash2, Package, PackageCheck, Lock, Pencil, Check, Search, X, AlertTriangle, Printer, PenLine, Shuffle } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { printLabelAuto } from '@/lib/production/label-print'
@@ -710,7 +711,7 @@ export function BlenderCapture({
       if (finalRow.inputMode === 'manual') {
         getDb().schema('production').from('bag_tags').upsert({
           serial_number: finalRow.serial, section_id: sectionId, session_id: null,
-          product_type: finalRow.productType, variant: variantWord || null,
+          product_type: finalRow.productType, variant: variantForDb(variantWord),
           weight_kg: n(finalRow.weight) || null, lot_number: finalRow.lot || null,
           status: 'consumed', consumed_at_section: sectionId,
           location_updated_at: t,
@@ -790,7 +791,7 @@ export function BlenderCapture({
     // audit-trail miss is a lesser problem than an unfindable bag).
     const { error: tagErr } = await getDb().schema('production').from('bag_tags').upsert({
       serial_number: serial, section_id: sectionId, session_id: null,
-      product_type: bomId ? `Blend ${bomId}` : 'Blended Batch', variant: variantWord || null,
+      product_type: bomId ? `Blend ${bomId}` : 'Blended Batch', variant: variantForDb(variantWord),
       weight_kg: n(weight), lot_number: lot,
       acumatica_id: bomId || null, status: 'in_stock', consumed: false, printed_at: now,
       is_open: isOpenBagWeight(n(weight)),
