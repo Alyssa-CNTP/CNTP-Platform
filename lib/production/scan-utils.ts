@@ -97,10 +97,10 @@ export async function lookupBagForAutofill(serial: string, who = 'capture'): Pro
       .maybeSingle()
     if (!data) return null
     return {
-      lot_number:   (data as any).lot_number   || '',
-      weight_kg:    (data as any).weight_kg    ? String((data as any).weight_kg) : '',
-      product_type: (data as any).product_type || '',
-      variant:      (data as any).variant      || '',
+      lot_number:   data.lot_number   || '',
+      weight_kg:    data.weight_kg    ? String(data.weight_kg) : '',
+      product_type: data.product_type || '',
+      variant:      data.variant      || '',
     }
   } catch (e) {
     // A thrown error is a real DB/network failure, not an absent bag — log it so
