@@ -2,6 +2,23 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-03 — Alyssa (Voiding a bag now retires it from the awaiting-QC queue)
+
+**Files changed:** `supabase/migrations/20260903_002_pending_qc_excludes_voided_bags.sql` (new), `supabase/migrations/20260903_001_remove_test_bag_STFL_270826_034.sql` (new, optional)
+
+Found chasing the TEST-001 phantom bag in Quality's notifications. `STFL-270826-034` was **already voided** and still in the queue — so voiding it again could never have cleared it.
+
+`qms.v_bag_events` ignores `bag_tags.status` in **both** branches: `prod_bagging` first, `bag_tags` as the fallback for serials `prod_bagging` lacks (`20260813_007`). A voided bag therefore still reaches `v_bag_qc_status` and shows as awaiting QC for ever, because nothing in that queue expires. Every voided bag was doing this.
+
+- **The filter went on `v_pending_bag_qc`, not `v_bag_events`.** The event view is the complete record and has a second consumer: the Sieving QC screen reads it for the serial dropdown used to *correct* a serial on an already-sampled or historical run, deliberately across every bagging. Excluding voided bags there would make a voided bag's serial unpickable when fixing an old QC row. The queue is what should not show them.
+- `CREATE OR REPLACE` with `SELECT *` keeps the column list byte-identical, so nothing dependent is dropped and `v_bag_events` / `v_bag_qc_status` are not touched — rebuilding those from the repo is what once took this queue from 8 rows to 847.
+- `coalesce(t.status, '') = 'voided'` rather than `t.status <> 'voided'`: the latter is NULL for a NULL status, and a NULL predicate drops the row — which would have silently hidden every bag whose status was never set.
+- The migration creates `qms.bag_qc_waivers` if absent, so it applies whether or not `20260902_003` has been run.
+
+**This alone clears the TEST-001 bag** — `20260903_001` (physically deleting the row, backed up, guarded on `qms.sd_runs`) is now optional. Neither changes any production figure: the order page already excludes voided bags, and that bag has no `prod_bagging` row.
+
+---
+
 ## 2026-09-02 — Alyssa (The Bagging panel's total now adds up to its own rows)
 
 **Files changed:** `app/(app)/production/orders/[id]/page.tsx`, `scripts/verify-output-panel-totals.py` (new)
