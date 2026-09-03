@@ -2,6 +2,77 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-03 — Alyssa (HOTFIX: the capture page has been down since 01-09 — a hook below the render gates)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `app/(app)/admin/inventory-import/page.tsx`, `eslint.hooks.mjs` (new), `lib/config/hooks-rule.test.ts` (new), `package.json`
+
+> **CI step still to add by hand.** The `~/.claude_github_token` PAT has no
+> `workflow` scope, so a commit touching `.github/workflows/ci.yml` is rejected.
+> The gate runs locally (`npm run lint:hooks`) but is NOT yet enforced in CI —
+> add the `Rules of Hooks` step next to `Core/Feature boundary`.
+
+### The fault
+
+Sieving capture on staging: **"This page couldn't load"**, with
+
+    Uncaught Error: Minified React error #310
+      at Object.ol [as useMemo]
+
+React #310 is *"Rendered more hooks than during the previous render."*
+
+`CaptureScreen()` in `production/capture/[section]/page.tsx` has three render
+gates — `if (loading)`, `if (!assignment)`, `if (!meta.built)` — and a
+`useMemo` (`otherBatchRows`) sat **below** them. First render: `loading` is
+true, gate returns, N hooks. Second render: `loading` is false, execution
+reaches the `useMemo`, N+1 hooks. React throws and the whole screen goes.
+
+It failed on every section that HAD an assignment — which is to say, whenever
+capture would otherwise have worked. With no assignment it hit the second gate
+and never reached the hook, so it looked intermittent.
+
+Introduced by `d30b479` (#867) on **2026-09-01**, the Sieving changeover fix.
+Two days live.
+
+**Fixed by moving the hook above the gates.** Its inputs (`kind`, `productions`,
+`activeIdx`) are all defined hundreds of lines earlier, so there was never a
+reason for it to be down there. No behaviour change.
+
+A second instance of the same bug, found while sweeping:
+`admin/inventory-import/page.tsx` had a `useCallback` below an `if (role !==
+'admin') return`. It crashed for admins — exactly the people allowed to use the
+page — as `role` resolved. Also moved up.
+
+### Why nothing caught it
+
+**`react-hooks/rules-of-hooks` was already enabled, and it did report it:**
+
+    1810:26  error  React Hook "useMemo" is called conditionally... Did you
+    accidentally call a React Hook after an early return?
+
+It changed nothing, because the full lint is a **ratchet** in CI — it fails only
+when the total rises above a baseline of ~3,000 pre-existing errors, and one
+more does not move a baseline anyone reads.
+
+A ratchet is right for stylistic debt paid down slowly. It is wrong for a rule
+whose violations white-screen a page an operator is mid-shift on.
+
+So Rules of Hooks now gets what the Core/Feature boundary already has:
+`eslint.hooks.mjs`, `npm run lint:hooks`, and a **hard zero** in CI. The repo is
+at zero violations. `noInlineConfig` means an `eslint-disable` comment cannot
+put a page-killer back — Rules of Hooks has no legitimate per-line exception.
+`exhaustive-deps` is deliberately NOT in this gate: it has a large backlog and
+real false positives, and an unpassable gate gets ignored, which is how the
+ratchet failed.
+
+`lib/config/hooks-rule.test.ts` pins it, including that the gate rejects the
+exact shape that broke capture and cannot be silenced by a disable comment.
+Mutation-checked: a planted violation exits 1.
+
+**Verification:** 348 unit tests (up from 306), both hard gates clean, 36 type
+errors (unchanged), `next build` compiles.
+
+---
+
 ## 2026-09-03 — Gustav (Customer name aliases: one customer, many spellings)
 
 **Files changed:** `supabase/migrations/20260903_002_customer_aliases.sql` (new), `lib/quality/customer-spec-match.ts`, `lib/quality/customer-spec-match.test.ts`, `app/(app)/quality/pasteuriser/page.tsx`, `app/(app)/quality/customer-specs/page.tsx`

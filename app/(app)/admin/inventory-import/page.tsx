@@ -98,6 +98,19 @@ export default function InventoryImportPage() {
   const [result,    setResult]    = useState<ImportResult | null>(null)
   const [error,     setError]     = useState<string | null>(null)
 
+  // Above the admin gate below, and it has to stay there: a hook called after an
+  // early return runs on some renders and not others, which is React error #310
+  // ("Rendered more hooks than during the previous render") and takes the page
+  // down. `role` starts unresolved and then becomes 'admin', so this crashed for
+  // exactly the people allowed to use the page. handleFile is a hoisted function
+  // declaration, so referring to it from up here is fine.
+  const onDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    setDragging(false)
+    const file = e.dataTransfer.files[0]
+    if (file) handleFile(file)
+  }, [])
+
   // ── Block non-admins ──────────────────────────────────────────────────────
   if (role !== 'admin') {
     return (
@@ -126,12 +139,6 @@ export default function InventoryImportPage() {
     setPreview(items)
   }
 
-  const onDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault()
-    setDragging(false)
-    const file = e.dataTransfer.files[0]
-    if (file) handleFile(file)
-  }, [])
 
   const onFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
