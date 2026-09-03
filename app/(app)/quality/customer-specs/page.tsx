@@ -10,12 +10,17 @@ import { getDb } from '@/lib/supabase/db'
 import { useDraftAutosave, readDraft, clearDraft } from '@/lib/hooks/useDraftAutosave'
 import DraftRecoveryBanner from '@/components/shared/DraftRecoveryBanner'
 import CoaSpecsTab from '@/components/quality/CoaSpecsTab'
-import { cleanCustomerName, findDuplicateSpec, customerOptions, normCustomerKey } from '@/lib/quality/customer-spec-match'
+import { cleanCustomerName, findDuplicateSpec, customerOptions, normCustomerKey, docVersionOf } from '@/lib/quality/customer-spec-match'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface Spec {
   id: number; product_family: string; grade: string; variant: string; customer: string | null
+  // The controlled document a row's values come from. Part of the identity: one
+  // customer may hold several specs for one product (Entyce has IPS-ENT-001..007)
+  // and only this separates them. doc_version is its trailing number, shown as
+  // the spec version — the highest is the one that applies.
+  doc_no: string | null; doc_version: number | null; product_description: string | null
   sieve_type: string
   gt6_min: number|null;  gt6_max: number|null
   gt10_min: number|null; gt10_max: number|null
@@ -54,6 +59,7 @@ const GRADES: Record<string,string[]> = {
 const VARIANTS = ['Conventional','Organic','RA-Conventional','RA-Organic']
 const EMPTY = () => ({
   product_family:'Rooibos',grade:'Super Grade',variant:'Conventional',customer:'',sieve_type:'standard',
+  doc_no:'',product_description:'',
   gt6_min:'',gt6_max:'',gt10_min:'',gt10_max:'',gt12_min:'',gt12_max:'',
   gt16_min:'',gt16_max:'',gt20_min:'',gt20_max:'',gt40_min:'',gt40_max:'',gt60_min:'',gt60_max:'',
   dust_min:'',dust_max:'',moisture_max:'',bulk_density_min:'',bulk_density_max:'',bd_target:'',notes:'',
@@ -164,13 +170,15 @@ export default function CustomerSpecsPage() {
   // collide with another row, and a trailing space in one of them is how
   // production ended up with three Entyce rows carrying different limits — so
   // they are cleaned on the way in and checked against the rest of the table.
-  const IDENTITY_COLS = ['customer','product_family','grade','variant']
+  const IDENTITY_COLS = ['customer','product_family','grade','variant','doc_no']
 
   async function saveField(id:number,col:string,val:any){
     let value = val
     if (IDENTITY_COLS.includes(col)) {
       value = cleanCustomerName(val)                     // trim + collapse, case kept
-      if (col !== 'customer' && !value) { alert('Product family, grade and variant cannot be blank.'); return }
+      // Document numbers are stored uppercase to match the unique index.
+      if (col === 'doc_no') value = value.toUpperCase()
+      if (col !== 'customer' && col !== 'doc_no' && !value) { alert('Product family, grade and variant cannot be blank.'); return }
       const row = specs.find(r=>r.id===id)
       if (row) {
         const dup = findDuplicateSpec(specs, {...row, [col]: value}, id)
@@ -180,7 +188,12 @@ export default function CustomerSpecsPage() {
           `The pasteuriser and the COA will then pick one of the two by database row order. Continue?`)) return
       }
     }
-    const {data:updated,error}=await db.schema('qms').from('customer_specs').update({[col]:value}).eq('id',id).select().single()
+    // doc_version is derived, never typed — it is the trailing number of the
+    // document, so it has to move with it or the "latest wins" rule reads a
+    // stale version.
+    const patch:Record<string,unknown>={[col]:value}
+    if (col==='doc_no') patch.doc_version=docVersionOf(String(value))
+    const {data:updated,error}=await db.schema('qms').from('customer_specs').update(patch).eq('id',id).select().single()
     if(error){alert('Save failed: '+error.message);return}
     setSpecs(p=>p.map(r=>r.id===id?(updated as Spec):r))
   }
@@ -201,6 +214,10 @@ export default function CustomerSpecsPage() {
       product_family: cleanCustomerName(addForm.product_family),
       grade:          cleanCustomerName(addForm.grade),
       variant:        cleanCustomerName(addForm.variant),
+      // Uppercased: document numbers are printed uppercase and the unique index
+      // keys on upper(btrim(doc_no)), so storing 'ips-ent-007' would look
+      // distinct here while colliding in the database.
+      doc_no:         cleanCustomerName(addForm.doc_no).toUpperCase() || null,
     }
     // Warn, don't refuse. The client spec sheet has SEVEN Entyce documents, six
     // of them under the same family/grade/variant with different sieve limits,
@@ -219,6 +236,8 @@ export default function CustomerSpecsPage() {
     ;['gt6_min','gt6_max','gt10_min','gt10_max','gt12_min','gt12_max','gt16_min','gt16_max','gt20_min','gt20_max','gt40_min','gt40_max','gt60_min','gt60_max','dust_min','dust_max','moisture_max','bulk_density_min','bulk_density_max','bd_target']
       .forEach(k=>{body[k]=numOrNull(body[k])})
     body.customer=ident.customer;body.notes=addForm.notes||null
+    body.doc_version=docVersionOf(ident.doc_no)
+    body.product_description=cleanCustomerName(addForm.product_description)||null
     const {data:saved,error}=await db.schema('qms').from('customer_specs').insert(body).select().single()
     if(error){setAddErr(error.message);setAddSaving(false);return}
     clearDraft(draftKey)
@@ -237,7 +256,7 @@ export default function CustomerSpecsPage() {
   const dupGroups=(()=>{
     const by=new Map<string,Spec[]>()
     specs.forEach(r=>{
-      const k=[r.customer,r.product_family,r.grade,r.variant].map(v=>normCustomerKey(v)).join('|')
+      const k=[r.customer,r.product_family,r.grade,r.variant,r.doc_no].map(v=>normCustomerKey(v)).join('|')
       by.set(k,[...(by.get(k)??[]),r])
     })
     return [...by.values()].filter(g=>g.length>1)
@@ -374,6 +393,27 @@ export default function CustomerSpecsPage() {
                       style={{...fld,marginTop:4}}/>
                   )}
                 </div>
+                <div>
+                  <label style={{fontSize:10,fontWeight:700,color:'#374151',display:'block',marginBottom:3,textTransform:'uppercase'}}>Spec Doc No</label>
+                  <input value={addForm.doc_no} placeholder="e.g. IPS-ENT-007"
+                    onChange={e=>patchAdd({doc_no:e.target.value})}
+                    onBlur={e=>patchAdd({doc_no:cleanCustomerName(e.target.value).toUpperCase()})}
+                    style={fld}/>
+                  {/* The trailing number is the version, and the highest one is
+                      the spec that applies — so it is worth showing what was
+                      understood before the row is saved. */}
+                  <div style={{fontSize:9,color:docVersionOf(addForm.doc_no)!=null?'#047857':'#9ca3af',marginTop:2}}>
+                    {docVersionOf(addForm.doc_no)!=null
+                      ? `Version ${docVersionOf(addForm.doc_no)} — supersedes lower numbers for this customer and product`
+                      : 'No version — leave blank for an in-house spec with no controlled document'}
+                  </div>
+                </div>
+                <div>
+                  <label style={{fontSize:10,fontWeight:700,color:'#374151',display:'block',marginBottom:3,textTransform:'uppercase'}}>Product Description</label>
+                  <input value={addForm.product_description} placeholder="as named on the spec doc"
+                    onChange={e=>patchAdd({product_description:e.target.value})}
+                    style={fld}/>
+                </div>
               </div>
               <div style={{fontWeight:700,fontSize:11,color:'#374151',marginBottom:2}}>Sieve Specifications (%)</div>
               <div style={{borderRadius:7,overflow:'hidden',border:'1px solid #e5e7eb'}}>
@@ -443,6 +483,7 @@ export default function CustomerSpecsPage() {
                     <th style={{padding:'6px 8px',textAlign:'left',color:'#fff',fontSize:9,textTransform:'uppercase',whiteSpace:'nowrap'}}>Grade</th>
                     <th style={{padding:'6px 6px',color:'#fff',fontSize:9,textTransform:'uppercase'}}>Variant</th>
                     <th style={{padding:'6px 8px',color:'#fde68a',fontSize:9,fontWeight:800,borderLeft:'1px solid #2d5f8f',whiteSpace:'nowrap',background:'#1a3f60'}}>CUSTOMER</th>
+                    <th style={{padding:'6px 8px',color:'#fde68a',fontSize:9,fontWeight:800,borderLeft:'1px solid #2d5f8f',whiteSpace:'nowrap',background:'#1a3f60'}}>DOC NO</th>
                     {sieveColsFor(family).map(c=>(
                       <th key={c.key} colSpan={2} style={{padding:'4px 4px',textAlign:'center',color:'#bfdbfe',fontSize:9,borderLeft:'1px solid #2d5f8f'}}>{c.label}%</th>
                     ))}
@@ -452,6 +493,7 @@ export default function CustomerSpecsPage() {
                   </tr>
                   <tr style={{background:'#f0f4f8',borderBottom:'1px solid #dbeafe'}}>
                     <th/><th/><th style={{fontSize:9,color:'#6b7280',borderLeft:'1px solid #e5e7eb'}}>name</th>
+                    <th style={{fontSize:9,color:'#6b7280',borderLeft:'1px solid #e5e7eb'}}>version</th>
                     {sieveColsFor(family).map(c=>(
                       <>{/* Fragment needs key on outer element */}
                         <th key={c.key+'min'} style={{fontSize:8,color:'#9ca3af',textAlign:'center',borderLeft:'1px solid #e5e7eb'}}>min</th>
@@ -473,6 +515,15 @@ export default function CustomerSpecsPage() {
                         {canWrite
                           ?<EC id={row.id} col="customer" value={row.customer??null} width={90} onSave={saveField} savedKey={`${row.id}_customer`}/>
                           :<span style={{fontFamily:'monospace',fontSize:10}}>{row.customer||'—'}</span>}
+                      </td>
+                      <td style={{padding:'5px 6px',fontSize:10,borderLeft:'1px solid #f3f4f6',whiteSpace:'nowrap'}}
+                          title={row.product_description||undefined}>
+                        {canWrite
+                          ?<EC id={row.id} col="doc_no" value={row.doc_no??null} width={100} onSave={saveField} savedKey={`${row.id}_doc_no`}/>
+                          :<span style={{fontFamily:'monospace',fontSize:10}}>{row.doc_no||'—'}</span>}
+                        {row.doc_no&&docVersionOf(row.doc_no)!=null&&(
+                          <span style={{marginLeft:4,fontSize:9,color:'#047857',fontWeight:700}}>v{docVersionOf(row.doc_no)}</span>
+                        )}
                       </td>
                       {sieveColsFor(family).map(c=>(
                         <>
@@ -531,7 +582,7 @@ export default function CustomerSpecsPage() {
             <div style={{overflowX:'auto',background:'#fff',borderRadius:8,border:'1px solid #fcd34d'}}>
               <table style={{width:'100%',borderCollapse:'collapse',fontSize:10}}>
                 <thead><tr style={{background:'#92400e',color:'#fff'}}>
-                  {['Family','Grade','Variant','Customer','Moist Max','BD Min','BD Max','Notes'].map(h=>(
+                  {['Family','Grade','Variant','Customer','Doc No','Moist Max','BD Min','BD Max','Notes'].map(h=>(
                     <th key={h} style={{padding:'6px 8px',textAlign:'left',fontWeight:600,whiteSpace:'nowrap',fontSize:9}}>{h}</th>
                   ))}
                 </tr></thead>
@@ -542,6 +593,7 @@ export default function CustomerSpecsPage() {
                       <td style={{padding:'4px 8px'}}>{r.grade}</td>
                       <td style={{padding:'4px 8px'}}><VariantBadge v={r.variant}/></td>
                       <td style={{padding:'4px 8px',color:r.customer?'#1f4e79':'#9ca3af',fontStyle:r.customer?'normal':'italic'}}>{r.customer||'generic'}</td>
+                      <td style={{padding:'4px 8px',fontFamily:'monospace',fontSize:10}} title={r.product_description||undefined}>{r.doc_no||'—'}</td>
                       <td style={{padding:'4px 8px',fontFamily:'monospace'}}>{r.moisture_max??'—'}</td>
                       <td style={{padding:'4px 8px',fontFamily:'monospace'}}>{r.bulk_density_min??'—'}</td>
                       <td style={{padding:'4px 8px',fontFamily:'monospace'}}>{r.bulk_density_max??'—'}</td>

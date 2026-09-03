@@ -564,9 +564,9 @@ VALUES — copy EXACTLY what is printed in that sample's Result cell. Do NOT rou
 overall_status: "Pass" unless a printed result exceeds a stated limit.`,
 
   heavy_metals: `INSTRUCTIONS: Extract ALL heavy metals data from this COA. Output ONLY raw JSON. No markdown.
-Extract: batch_no, report_reference, lab, sample_date, date_issued, analytes (array with analyte, result, unit, spec, status for EVERY metal listed in the document, including Lead, Cadmium, Mercury, Arsenic, Aluminum, Copper and any others present), overall_status.
+Extract: batch_no, report_reference, lab, sample_date, date_issued, analytes (array with analyte, result, unit, spec, status for EVERY metal listed in the document, including Lead, Cadmium, Mercury, Arsenic, Chromium, Aluminum, Copper and any others present), overall_status.
 For each analyte: keep the result exactly as printed in the RESULT column, including the comparison operator — e.g. a printed "<0.010" (below the lab's reporting/detection limit for that sample) MUST be kept as the string "<0.010", NOT collapsed to "None detected". Only use "None detected" if the document truly has no value or threshold printed for that analyte (a genuinely blank cell). Extract spec/limit from the document if present.
-EU limits (mg/kg): Lead ≤3.0, Cadmium ≤1.0, Mercury ≤0.02, Arsenic ≤1.0. Include all metals found — do NOT skip any.`,
+EU limits (mg/kg): Lead ≤3.0, Cadmium ≤1.0, Mercury ≤0.02, Arsenic ≤1.0. Chromium has NO harmonised EU maximum level for tea — do not invent one; take its spec only from the document, and leave spec empty if the document prints none. Include all metals found — do NOT skip any.`,
 
   eto: `INSTRUCTIONS: Extract Ethylene Oxide data. Output ONLY raw JSON. No markdown.
 Extract: batch_no, report_reference, lab, sample_date, date_issued, analytes (array with analyte, result, unit, spec, status), overall_status.
@@ -696,7 +696,7 @@ const SECTION_PATTERNS: { type: string; label: string; re: RegExp }[] = [
   { type: 'glyphosate',           label: 'Glyphosate',           re: /\bglyphosate\b|\bglufosinate\b|aminomethylphosphonic/i },
   { type: 'chlorate_perchlorate', label: 'Chlorate/Perchlorate', re: /\bchlorate\b|\bperchlorate\b/i },
   { type: 'pa_final',             label: 'PA/TA alkaloids',      re: /pyrrolizidine|tropane\s+alkaloid|\batropine\b|\bscopolamine\b/i },
-  { type: 'heavy_metals',         label: 'Heavy metals',         re: /heavy\s+metals|\bcadmium\b|\bmercury\b|\barsenic\b/i },
+  { type: 'heavy_metals',         label: 'Heavy metals',         re: /heavy\s+metals|\bcadmium\b|\bmercury\b|\barsenic\b|\bchromium\b/i },
   { type: 'aflatoxins',           label: 'Aflatoxins',           re: /aflatoxin|ochratoxin/i },
   { type: 'mosh_moah',            label: 'MOSH/MOAH',            re: /\bmosh\b|\bmoah\b|mineral\s+oil\s+(saturated|aromatic)/i },
   { type: 'micro',                label: 'Microbiology',         re: /total\s+plate\s+count|aerobic\s+plate\s+count|\bsalmonella\b|listeria\s+monocytogenes|enterobacteriaceae/i },

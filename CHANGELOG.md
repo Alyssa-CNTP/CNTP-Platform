@@ -2,6 +2,93 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-03 — Gustav (Spec doc numbers: latest document wins; Chromium added to heavy metals)
+
+**Files changed:** `supabase/migrations/20260903_001_customer_specs_doc_no_and_dedupe.sql` (new), `lib/quality/heavy-metals.ts` (new), `lib/quality/heavy-metals.test.ts` (new), `lib/quality/customer-spec-match.ts`, `lib/quality/customer-spec-match.test.ts`, `app/(app)/quality/customer-specs/page.tsx`, `app/(app)/quality/pasteuriser/page.tsx`, `app/(app)/quality/coa/page.tsx`, `components/quality/CoaSpecsTab.tsx`, `app/(app)/quality/lab-results/page.tsx`, `app/api/upload/route.ts`
+
+### Doc numbers: the table could not represent the real spec sheet
+
+The client spec file has **seven Entyce documents**, IPS-ENT-001…007, **six of
+them under one family/grade/variant** with different sieve limits — separated
+only by document number and product description, and `qms.customer_specs` had a
+column for **neither**. So every attempt to enter a second legitimate spec
+produced an indistinguishable duplicate, and the lookup picked one by row order.
+
+**Migration `20260903_001`** (applied to staging; production pending):
+
+- `doc_no`, `doc_version`, `product_description`, `spec_revisions` columns.
+- Trims the identity columns on every row — including `product_family =
+  'Botanicals '` / `grade = 'Phytoblend '`, a row no `.ilike('Botanicals')`
+  lookup could reach.
+- **Consolidates Entyce onto IPS-ENT-007 and Edelweiss onto IPS-EDE-002**, per
+  the lab's rule that the latest document applies. Neither matched its document
+  exactly, so the limits are **corrected**, not just de-duplicated: Entyce
+  `>20 max` 20 → **25** and `BD max` 320 → **300**.
+- `spec_revisions` records the discarded rows' values, so the consolidation is
+  auditable rather than a silent overwrite.
+- **Unique index on the normalised identity including `doc_no`** — two specs may
+  coexist as different documents, and may not when they differ only by
+  whitespace or case.
+
+Every statement keys on **content, never on row ids**: staging carries the Entyce
+triple but not the Edelweiss pair, so the ids differ between the two databases.
+
+Staging after the migration: Entyce → one row, Edelweiss → one row, **zero**
+remaining duplicate keys, **zero** rows with edge whitespace.
+
+### "The latest document wins"
+
+`docVersionOf()` reads the trailing number (`IPS-ENT-007` → 7), **anchored to the
+end** so digits inside a customer code cannot win, and parsed as digits so `007`
+and `7` are one version. Several documents for one customer are no longer
+"ambiguous" — the highest applies and the rest are reported as **superseded**.
+Only a genuine tie on version is ambiguous. `doc_no` joins the duplicate key, so
+a legitimate second document is allowed while the same document twice is not.
+
+**UI:** Doc No is an editable column in the sieve table with the version beside
+it and the product description on hover; the add form takes both and previews the
+version it parsed; the pasteuriser names the document on a loaded spec and says
+"latest of N documents".
+
+### Chromium added to heavy metals
+
+The element list was written out by hand in **four** places, so adding one meant
+finding all four — and missing one meant a customer could enter a limit the COA
+never printed. New `lib/quality/heavy-metals.ts` is the single list, now
+including **Chromium**, used by `CoaSpecsTab`'s spec editor, its badge, and both
+COA call sites.
+
+Chromium is also added to the Gemini extraction prompt and to the **primary**
+heavy-metals classifier regex, so a chromium-only report is recognised (the broad
+fallback already matched it). **No EU limit is asserted for chromium** — there is
+no harmonised maximum level for it in tea, and the prompt now says so explicitly
+rather than letting the model invent one.
+
+`specFieldRequired()` also fixes a real inconsistency: `CoaSpecsTab`'s badge used
+plain truthiness, so a spec reading **`NOT REQUIRED`** — the spec sheet's own
+convention, in hundreds of cells — still lit the "Metals" badge. It now matches
+the COA builder's own `req()` rule. A hard `0` still counts as a real limit.
+
+### Fixed in my own earlier commit
+
+`productKey()` joined its parts with a **literal NUL byte** instead of a space,
+which made the file read as binary to `grep`. Now joined on `|`, which also stops
+`'Rooibos'` + `'Super Grade'` colliding with `'Rooibos Super'` + `'Grade'`.
+
+### Still open
+
+The **backfill of `doc_no` for the other 43 spec rows** is not done. The customer
+names in the sheet and the database do not reliably correspond — `'Afri Tea and
+Coffee\'s'` vs `'Afri Tea and Coffee Blenders'`, `'East West Tea Company
+(EWTC)'` vs `'East West Tea Company'` — and four customers in the database
+(Lipton and Infusion, Lupicia, OTG, Tanganda) are **not in the sheet at all**.
+Guessing 14 mappings would put wrong document numbers on quality records, so
+those rows keep a null `doc_no` and the UI shows them as having no controlled
+document. A confirmed mapping table would let this be finished mechanically.
+
+Tests **258/258** (59 in `customer-spec-match`, 16 in `heavy-metals`). Lint 3022,
+at baseline. Typecheck introduces nothing.
+
 ## 2026-09-03 — Gustav (Specs resolve on a normalised customer name; customer + QC required on a new run)
 
 **Files changed:** `lib/quality/customer-spec-match.ts` (new), `lib/quality/customer-spec-match.test.ts` (new), `app/(app)/quality/pasteuriser/page.tsx`, `app/(app)/quality/customer-specs/page.tsx`, `.github/workflows/ci.yml`

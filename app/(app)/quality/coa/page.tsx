@@ -33,6 +33,7 @@ import { jsPDF } from 'jspdf'
 import { loadImage } from '@/lib/pdf/load-image'
 import { useDraftAutosave, readDraft, clearDraft } from '@/lib/hooks/useDraftAutosave'
 import DraftRecoveryBanner from '@/components/shared/DraftRecoveryBanner'
+import { wantsHeavyMetals, heavyMetalSpecParts } from '@/lib/quality/heavy-metals'
 
 // ─── Standard wording (identical across every COA) ────────────────────────────
 
@@ -907,7 +908,7 @@ function buildModel(src: any, spec: any): CoaModel {
   other.push({ label: 'Foreign Material', spec: (spec && req(sp.other?.foreign_material)) ? String(sp.other.foreign_material) : '<1%', result: '0.0%' })
   const wantResidue = spec ? req(sp.other?.residue_reg) : src.found.residue
   const wantPa      = spec ? req(sp.contaminants?.pyrrolizidine_alkaloids) : src.found.pa
-  const wantHm      = spec ? ['lead','cadmium','mercury','arsenic','copper'].some(k => req(sp.contaminants?.[k])) : src.found.heavyMetals
+  const wantHm      = spec ? wantsHeavyMetals(sp.contaminants) : src.found.heavyMetals
   const wantMosh    = spec ? req(sp.contaminants?.mosh_moah) : src.found.moshMoah
   // coa_specs already carried a chlorate_perchlorate contaminant field — this
   // is the row that finally renders it, now that a lab result can supply one.
@@ -920,7 +921,7 @@ function buildModel(src: any, spec: any): CoaModel {
   const wantGlyphosate = src.isOrganic || (spec ? req(sp.contaminants?.glyphosate) : src.found.glyphosate)
   if (wantResidue) other.push({ label: 'Pesticide residue', spec: (spec && req(sp.other?.residue_reg)) ? String(sp.other.residue_reg) : COA_WORDING.residueRegulation, result: src.results.residue })
   if (wantPa)      other.push({ label: 'Pyrrolizidine Alkaloids', spec: (spec && req(sp.contaminants?.pyrrolizidine_alkaloids)) ? String(sp.contaminants.pyrrolizidine_alkaloids) : '<50 μg', result: src.results.pa })
-  if (wantHm)      other.push({ label: 'Heavy Metals', spec: spec ? ['lead','cadmium','mercury','arsenic','copper'].filter(k => req(sp.contaminants?.[k])).map(k => `${k[0].toUpperCase()+k.slice(1)} ${sp.contaminants[k]}`).join('; ') : '', result: src.results.hm })
+  if (wantHm)      other.push({ label: 'Heavy Metals', spec: spec ? heavyMetalSpecParts(sp.contaminants).join('; ') : '', result: src.results.hm })
   if (wantMosh)    other.push({ label: 'MOSH/MOAH', spec: (spec && req(sp.contaminants?.mosh_moah)) ? String(sp.contaminants.mosh_moah) : '', result: src.results.mosh })
   if (wantChlor)   other.push({ label: 'Chlorate/Perchlorate', spec: (spec && req(sp.contaminants?.chlorate_perchlorate)) ? String(sp.contaminants.chlorate_perchlorate) : '', result: src.results.chlorate })
   if (wantGlyphosate) other.push({ label: 'Glyphosate', spec: (spec && req(sp.contaminants?.glyphosate)) ? String(sp.contaminants.glyphosate) : (src.isOrganic ? 'None Detected' : ''), result: src.results.glyphosate })
