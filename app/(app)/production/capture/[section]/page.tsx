@@ -1429,15 +1429,39 @@ function CaptureScreen() {
 
     const rowErrors: string[] = []
 
-    // Insert-then-delete for prod_debagging: write new rows first so a failed
-    // insert never wipes existing data.  prod_debagging has no unique constraint
-    // on (session_id, bag_no), so temporary duplicates are harmless — the old
-    // rows are removed once the insert succeeds.
+    // Delete-then-insert for prod_debagging, with a restore if the insert fails.
+    //
+    // This used to be insert-THEN-delete, so that a failed insert could never
+    // wipe existing rows. That reasoning still holds, but it rested on a comment
+    // saying prod_debagging "has no unique constraint on (session_id, bag_no), so
+    // temporary duplicates are harmless". That stopped being true: a unique index
+    // named prod_debagging_session_bag_uidx now exists in the live databases (in
+    // no migration file, like prod_bagging_session_bag_uidx before it — see
+    // 20260901_001). Once it existed, every save collided with the very rows it
+    // was about to replace:
+    //
+    //     POST /prod_debagging 409
+    //     duplicate key value violates unique constraint
+    //     "prod_debagging_session_bag_uidx" — [23505]
+    //
+    // and the operator's debagging rows silently stopped persisting while the
+    // mass balance on screen kept updating from draft_data.
+    //
+    // So the order flips, and the safety property is kept explicitly instead of
+    // structurally: the previous rows are read in FULL first, and put back if the
+    // insert fails. Deliberately not an upsert with an ON CONFLICT target — that
+    // resolves the index through PostgREST's cached constraint metadata, which is
+    // what emptied Sieving Tower's bagging rows for a day, and it would also bind
+    // this code to an index definition the repo does not declare.
     const { data: prevDebagRows } = await db.schema('production').from('prod_debagging')
-      .select('id').eq('session_id', sid)
-    const prevDebagIds = ((prevDebagRows as any[]) ?? []).map((r: any) => r.id as string)
+      .select('*').eq('session_id', sid)
+    const prevDebag = (prevDebagRows as any[]) ?? []
+    const prevDebagIds = prevDebag.map((r: any) => r.id as string)
 
     if (debag.length) {
+      if (prevDebagIds.length) {
+        await db.schema('production').from('prod_debagging').delete().in('id', prevDebagIds)
+      }
       let insDebag = await db.schema('production').from('prod_debagging').insert(debag as any)
       if (insDebag.error && /PGRST204|schema cache/i.test(`${insDebag.error.code} ${insDebag.error.message}`)) {
         // PostgREST schema cache is stale after the local_or_export→grade rename
@@ -1451,9 +1475,14 @@ function CaptureScreen() {
         insDebag = await db.schema('production').from('prod_debagging').insert(fallback as any)
       }
       if (insDebag.error) {
+        // Put back exactly what was deleted. Losing the operator's captured
+        // inputs to a failed write is the failure mode this whole block is
+        // shaped around; a restore that itself fails is reported too.
+        if (prevDebag.length) {
+          const restore = await db.schema('production').from('prod_debagging').insert(prevDebag as any)
+          if (restore.error) rowErrors.push(`inputs: could not restore previous rows — ${rowErrText(restore.error)}`)
+        }
         rowErrors.push(`inputs: ${rowErrText(insDebag.error)}`)
-      } else if (prevDebagIds.length) {
-        await db.schema('production').from('prod_debagging').delete().in('id', prevDebagIds)
       }
     } else if (prevDebagIds.length) {
       await db.schema('production').from('prod_debagging').delete().in('id', prevDebagIds)
