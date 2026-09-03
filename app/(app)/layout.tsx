@@ -145,7 +145,7 @@ const ROUTE_META: Record<string, {
   '/production/live':        { title: 'Live Production',        variant: 'default',    chips: [{ label: 'Live', color: 'green' }] },
   '/production/live/capture':{ title: 'Capture Session',        variant: 'default' },
   '/production/capture':     { title: 'Production Capture',      variant: 'default' },
-  '/production/dashboard':   { title: 'Production Dashboard',    variant: 'default' },
+  '/production/dashboard':   { title: 'Dashboard',               variant: 'default' },
   '/production/floor-plan':  { title: 'Factory Floor Plan',      variant: 'default' },
   '/production/roster':      { title: 'Shift Rosters',           variant: 'default' },
   '/production/staff':       { title: 'Staff Directory',         variant: 'default', chips: [{ label: 'Operations', color: 'green' }] },

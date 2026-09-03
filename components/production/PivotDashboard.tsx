@@ -293,8 +293,8 @@ export default function PivotDashboard() {
       {/* Domain tabs */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h1 className="text-lg font-semibold text-text">Production &amp; quality — filtered view</h1>
-          <p className="text-[12px] text-text-muted">Aggregates and totals, not the entire shift report — drill in via Needs action or the AI Analyst.</p>
+          <h1 className="text-lg font-semibold text-text">Dashboard</h1>
+          <p className="text-[12px] text-text-muted">Production &amp; quality — aggregates and totals; drill in via Needs action or the AI Analyst.</p>
         </div>
         <div className="flex gap-0.5 bg-surface-dim rounded-xl p-1">
           {([['floor', 'Floor'], ['quality', 'Quality'], ['machine', 'Machine'], ['supply', 'Supply & demand'], ['balance', 'Grade balance'], ['solar', 'Solar']] as [Domain, string][]).map(([k, label]) => (
