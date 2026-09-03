@@ -2,6 +2,67 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-02 — Alyssa (Reliability: a feature must not slow a core screen, or be able to crash it)
+
+**Files changed:** `lib/production/use-item-codes.ts`, `lib/production/use-item-codes.test.ts` (new), `lib/production/inventory.ts`, `lib/production/inventory.suggest.test.ts`, `features/acumatica-items/index.ts`, `ARCHITECTURE.md`
+
+A hardening pass over the resolver wiring from the previous entry. Two real
+defects, both introduced by that change, both found by re-reading it against the
+rule that a feature must never degrade the screen it is added to.
+
+### 1. It fetched the same table twice
+
+`features/acumatica-items` owned a `loadCatalogue()` that queried
+`production.inventory_items` itself. `lib/production/inventory.ts` already caches
+exactly those rows via `loadAllInventory()`, and `RefiningCapture` calls **both**
+— so a Refining capture screen read the same ~630-row table twice on every load,
+once for the item picker and once for code resolution.
+
+The second read existed only to dodge an import cycle (`inventory.ts` imports the
+feature). Taking the rows as an argument removes the cycle *and* the read. **The
+feature now performs no I/O at all**, which also makes it unit-testable with no
+mocks — the same reason `lib/core` may not perform I/O (§2).
+
+`catalogueFrom()` is now memoised on the inventory array's **identity**, so the
+two callers on one screen build the index once and share the object, which also
+keeps it stable for `useMemo` downstream.
+
+### 2. It could have taken the capture screen down
+
+`useItemCodes()` is a **hook**, called by the capture page itself.
+`<FeatureBoundary>` cannot protect it: an error boundary catches a throw from a
+child *component* during render, not one from a hook the page called. Anything
+thrown inside the resolver would have blanked the screen of an operator
+mid-shift, with a half-captured session behind it.
+
+Every resolver call is now wrapped and degrades to the template path on any throw
+— the behaviour that shipped for months. It logs to the console rather than
+swallowing, because silent degradation would let capture run on the old path for
+weeks with nobody knowing why the stricter warnings stopped appearing.
+
+`itemCodesFrom()` is split out from the hook so this is directly testable: the
+tests feed it a catalogue that throws on first touch and assert the operator
+still gets an answer, gets no invented warning, and that the failure is logged.
+
+**`<FeatureBoundary>` currently has zero usages** anywhere in the app, despite
+§3 requiring it. Noted, not fixed here.
+
+### ARCHITECTURE.md §3
+
+Two rules added, both because this is where they were learnt:
+
+- a feature reached through a **hook or a plain function call** cannot be
+  protected by `<FeatureBoundary>`, so its adapter must be total — catch, log,
+  and fall back to the pre-feature behaviour;
+- a feature **takes data as an argument**; the app owns loading. A feature that
+  fetches for itself will duplicate a read the page already made.
+
+**Verification:** 286 unit tests (up from 275 on staging), boundary lint clean,
+36 type errors (unchanged), `next build` compiles. No behaviour change with
+either flag off, which is the default.
+
+---
+
 ## 2026-09-03 — Alyssa (Acumatica REST: switch to Resource Owner Password grant)
 
 **Files changed:** `lib/acumatica/rest.ts`
