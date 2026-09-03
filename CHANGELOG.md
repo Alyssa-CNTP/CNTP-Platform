@@ -2,6 +2,61 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-03 — Alyssa (HOTFIX 2: debagging rows silently stopped saving)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `supabase/migrations/20260903_002_prod_debagging_unique_index_drift.sql` (new)
+
+Found in the console right after the render-gate hotfix went out. Sieving capture
+was returning **409 Conflict** on every save:
+
+    POST /prod_debagging 409
+    duplicate key value violates unique constraint
+    "prod_debagging_session_bag_uidx" — [23505]
+
+The operator's debagging rows were not persisting, while the mass balance on
+screen kept updating correctly from `draft_data` — so nothing looked wrong.
+
+### Cause
+
+The save wrote the new rows BEFORE deleting the old ones, so that a failed
+insert could never wipe existing data. Sound reasoning, resting on a comment
+that said prod_debagging *"has no unique constraint on (session_id, bag_no), so
+temporary duplicates are harmless"*.
+
+That stopped being true. `prod_debagging_session_bag_uidx` now exists in the
+live databases — and, exactly like `prod_bagging_session_bag_uidx` before it, **in
+no migration file**. The moment it existed, every save collided with the very
+rows it was replacing.
+
+### Fix
+
+Delete first, then insert, and **restore the previous rows if the insert fails**
+— the safety property is kept explicitly rather than structurally. The previous
+rows are now read in full (`select('*')`) so they can be put back, and a failed
+restore is reported too.
+
+Deliberately not an upsert with an `ON CONFLICT` target: that resolves the index
+through PostgREST's cached constraint metadata, which is what emptied Sieving
+Tower's bagging rows for a day, and it would bind the code to an index the repo
+does not declare.
+
+`20260903_002` closes the repo/live gap. **It carries a warning:** the index was
+added out of band and its exact columns are unconfirmed, so verify
+`pg_indexes.indexdef` before trusting the file rather than creating a second,
+differently-shaped index.
+
+### Two out-of-band indexes now, same pattern
+
+`20260901_001` (bagging, still unapplied) and this one. Both were added straight
+to the live database; the app was written against the first and against the
+*absence* of the second. That is worth a look as a practice, not just two fixes.
+
+**Verification:** 348 unit tests, both hard gates clean, 36 type errors
+(unchanged), `next build` compiles. Not yet observed on the floor — needs a save
+on the live page to confirm the 409 is gone.
+
+---
+
 ## 2026-09-03 — Alyssa (HOTFIX: the capture page has been down since 01-09 — a hook below the render gates)
 
 **Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `app/(app)/admin/inventory-import/page.tsx`, `eslint.hooks.mjs` (new), `lib/config/hooks-rule.test.ts` (new), `package.json`

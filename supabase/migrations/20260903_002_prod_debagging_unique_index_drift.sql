@@ -1,0 +1,49 @@
+-- ============================================================
+-- CNTP — capture schema drift: prod_debagging (session_id, bag_no) unique index
+-- Run in: Supabase SQL Editor — STAGING first, then PRODUCTION.
+-- Depends on: 20260611_001_production_capture.sql (production.prod_debagging)
+-- ============================================================
+--
+-- Second instance of the same drift as 20260901_001. An index named
+-- prod_debagging_session_bag_uidx exists in the live databases and in NO
+-- migration file. Unlike the prod_bagging one, the app was NOT written against
+-- it — the save path carried a comment stating the opposite:
+--
+--     "prod_debagging has no unique constraint on (session_id, bag_no), so
+--      temporary duplicates are harmless"
+--
+-- On that assumption the save inserted the new rows BEFORE deleting the old, so
+-- a failed insert could never wipe data. Once the index existed, every save
+-- collided with the rows it was about to replace:
+--
+--     POST /prod_debagging 409
+--     duplicate key value violates unique constraint
+--     "prod_debagging_session_bag_uidx" — [23505]
+--
+-- Debagging silently stopped persisting while the on-screen mass balance kept
+-- updating from draft_data. Fixed in the same commit as this file by deleting
+-- first and restoring the previous rows if the insert fails.
+--
+-- This migration only closes the repo/live gap so a database rebuilt from
+-- migrations has the same constraint the code is now written against. It is a
+-- no-op where the index already exists.
+--
+-- !! VERIFY THE LIVE DEFINITION BEFORE TRUSTING THIS FILE. The index was added
+-- out of band and its exact columns are unconfirmed; if the live one is partial
+-- or spans different columns, correct this file to match rather than creating a
+-- second, differently-shaped index:
+--
+--   SELECT indexdef FROM pg_indexes
+--   WHERE schemaname = 'production' AND tablename = 'prod_debagging';
+-- ============================================================
+
+-- Pre-flight: must return zero rows before the index will build.
+--
+--   SELECT session_id, bag_no, count(*)
+--   FROM production.prod_debagging
+--   WHERE bag_no IS NOT NULL
+--   GROUP BY session_id, bag_no
+--   HAVING count(*) > 1;
+
+CREATE UNIQUE INDEX IF NOT EXISTS prod_debagging_session_bag_uidx
+  ON production.prod_debagging(session_id, bag_no);
