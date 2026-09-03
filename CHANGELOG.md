@@ -2,6 +2,36 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-03 — Alyssa (Blender: one unregistered bag stopped all further scanning)
+
+**Files changed:** `components/production/capture/BlenderCapture.tsx`
+
+Fixes the reported "Blender cannot scan in bags" on the Big Blender: in the add/edit
+debagging-bag modal, scanning a serial that isn't in `bag_tags` **silently disabled
+scanning for the rest of that modal's life**. Every subsequent scan did nothing at all —
+no popup, no message.
+
+**Cause.** A `not_found` lookup switches the row to manual entry (`setInputMode('manual')`),
+and the auto-lookup effect was gated on `inputMode !== 'manual'`. Nothing reset that
+verdict when a *different* serial was entered, so the debounced lookup never fired again.
+The `onChange` handler also cleared `scanMsg` on each keystroke, so the stale error
+disappeared too and the operator was left with no feedback whatsoever. Enter and the
+"Look up" button still worked — but a hardware scanner sends neither, which is exactly
+why the auto-fire exists.
+
+**Fix.** The gate was protecting the *mount* case (re-reading `bag_tags` for a row opened
+for editing would overwrite a hand-captured weight or lot), not the not-found case. It now
+gates on that directly — the serial the modal opened with — via an `openedWithSerial` ref.
+All three input paths (typing, scanner burst, camera) go through one `changeSerial()`
+helper that clears the previous bag's `inputMode`/`notInSystem` verdict, so an edited
+serial always gets a fresh lookup. Manual entry after a genuine not-found is unchanged.
+
+**Note — not the whole story on production.** `origin/main` has no scan-first `ScanBox` on
+the Blender at all (PR #708 and the later capture work are on `staging` only), so on
+production this modal is the *only* way to scan into the Blender and this latch made it
+unusable. Refining and Pasteuriser were unaffected either way — they use the scan-first
+`ScanBox`, which has no such gate.
+
 ## 2026-09-03 — Alyssa (production dashboard: Grade Balance tab — Acumatica stock vs floor)
 
 **Files changed:** `app/api/production/grade-balance/route.ts` (new), `components/production/GradeBalanceSection.tsx` (new), `components/production/PivotDashboard.tsx`
