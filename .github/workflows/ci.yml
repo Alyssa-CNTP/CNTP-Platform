@@ -62,7 +62,7 @@ jobs:
       # Ratchet: same idea for lint. Lower the baseline as it comes down.
       - name: Lint (no new errors)
         env:
-          LINT_ERROR_BASELINE: '3026'
+          LINT_ERROR_BASELINE: '3024'
         run: |
           npx eslint --format json --output-file eslint-report.json . || true
           COUNT=$(node -e "const r=require('./eslint-report.json');console.log(r.reduce((t,f)=>t+f.errorCount,0))")
