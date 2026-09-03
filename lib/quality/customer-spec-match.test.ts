@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
-  normCustomerKey, cleanCustomerName, isGenericSpec,
+  normCustomerKey, cleanCustomerName, isGenericSpec, docVersionOf,
   pickSpecForCustomer, findDuplicateSpec, customerOptions,
 } from './customer-spec-match'
 
@@ -71,7 +71,8 @@ describe('pickSpecForCustomer', () => {
   it('reports ambiguity rather than quietly taking the first of three Entyce rows', () => {
     const r = pickSpecForCustomer([entyceSpaced, entyceUpper, entyceClean], 'Entyce')
     expect(r.via).toBe('customer')
-    expect(r.ambiguous.map(x => x.id)).toEqual([33, 46, 47])
+    // Listed newest-id-first, which is the deterministic tie-break order.
+    expect(r.ambiguous.map(x => x.id)).toEqual([47, 46, 33])
     // The limits genuinely differ, which is why silence here was a real bug.
     expect(new Set(r.ambiguous.map(x => x.bd_max))).toEqual(new Set([300, 320]))
   })
@@ -98,14 +99,14 @@ describe('pickSpecForCustomer', () => {
   })
 
   it('returns none for an empty or missing row set', () => {
-    expect(pickSpecForCustomer([], 'Entyce')).toEqual({ spec: null, via: 'none', ambiguous: [] })
+    expect(pickSpecForCustomer([], 'Entyce')).toEqual({ spec: null, via: 'none', ambiguous: [], superseded: [] })
     expect(pickSpecForCustomer(null, 'Entyce').via).toBe('none')
   })
 
   it('flags two generic rows for one product as ambiguous too', () => {
     const r = pickSpecForCustomer([{ id: 1, customer: '' }, { id: 2, customer: null }], 'Nobody')
     expect(r.via).toBe('generic')
-    expect(r.ambiguous.map(x => x.id)).toEqual([1, 2])
+    expect(r.ambiguous.map(x => x.id)).toEqual([2, 1])
   })
 })
 
@@ -158,6 +159,19 @@ describe('findDuplicateSpec', () => {
     })?.id).toBe(38)
   })
 
+  it('lets one customer hold two specs for one product under DIFFERENT doc numbers', () => {
+    // Entyce legitimately has IPS-ENT-001..007 for Rooibos / Super Grade /
+    // Conventional. Refusing the second would refuse real data.
+    const withDoc = [{ id: 47, customer: 'Entyce', product_family: 'Rooibos', grade: 'Super Grade', variant: 'Conventional', doc_no: 'IPS-ENT-007' }]
+    expect(findDuplicateSpec(withDoc, {
+      customer: 'Entyce', product_family: 'Rooibos', grade: 'Super Grade', variant: 'Conventional', doc_no: 'IPS-ENT-003',
+    })).toBeNull()
+    // ...but the SAME doc number twice is still a duplicate, whitespace and all.
+    expect(findDuplicateSpec(withDoc, {
+      customer: 'Entyce ', product_family: 'Rooibos', grade: 'Super Grade', variant: 'Conventional', doc_no: ' ips-ent-007 ',
+    })?.id).toBe(47)
+  })
+
   it('skips the row being edited, so saving a row over itself is not a duplicate', () => {
     expect(findDuplicateSpec(rows, {
       customer: 'Entyce', product_family: 'Rooibos', grade: 'Super Grade', variant: 'Conventional',
@@ -208,5 +222,87 @@ describe('customerOptions', () => {
   it('handles an empty or missing row set', () => {
     expect(customerOptions([])).toEqual([])
     expect(customerOptions(null)).toEqual([])
+  })
+})
+
+describe('docVersionOf', () => {
+  it('reads the trailing number of a controlled doc number', () => {
+    expect(docVersionOf('IPS-ENT-007')).toBe(7)
+    expect(docVersionOf('IPS-KUN-009')).toBe(9)
+    expect(docVersionOf('IPS-BAO-006')).toBe(6)
+  })
+  it('treats 007 and 7 as the same version', () => {
+    expect(docVersionOf('IPS-ENT-7')).toBe(docVersionOf('IPS-ENT-007'))
+  })
+  it('anchors to the END, so digits inside the customer code do not win', () => {
+    expect(docVersionOf('IPS-3M-004')).toBe(4)
+  })
+  it('tolerates padding', () => {
+    expect(docVersionOf('  IPS-ENT-007  ')).toBe(7)
+  })
+  it('is null when there is no document number at all', () => {
+    for (const v of [null, undefined, '', '   ', 'DRAFT']) expect(docVersionOf(v)).toBeNull()
+  })
+})
+
+describe('pickSpecForCustomer — latest document wins', () => {
+  const ent = (v: string, id: number, bdMax: number) => ({
+    id, customer: 'Entyce', doc_no: `IPS-ENT-${v}`, bd_max: bdMax,
+  })
+
+  it('picks IPS-ENT-007 over 001 and 003, in any row order', () => {
+    const rows = [ent('001', 10, 300), ent('007', 12, 340), ent('003', 11, 320)]
+    for (const order of [rows, [...rows].reverse(), [rows[1], rows[0], rows[2]]]) {
+      const r = pickSpecForCustomer(order, 'Entyce')
+      expect(r.spec?.doc_no).toBe('IPS-ENT-007')
+      expect(r.via).toBe('customer')
+    }
+  })
+
+  it('does NOT call several different documents ambiguous — it lists them as superseded', () => {
+    const r = pickSpecForCustomer([ent('001', 10, 300), ent('007', 12, 340)], 'Entyce')
+    expect(r.ambiguous).toEqual([])
+    expect(r.superseded.map(x => x.doc_no)).toEqual(['IPS-ENT-001'])
+  })
+
+  it('still reports a genuine tie on the same version as ambiguous', () => {
+    const r = pickSpecForCustomer([ent('007', 10, 300), ent('007', 12, 340)], 'Entyce')
+    expect(r.ambiguous.map(x => x.id)).toEqual([12, 10])
+  })
+
+  it('treats rows with no doc number as tied — the pre-migration Entyce case', () => {
+    const bare = [
+      { id: 33, customer: 'Entyce ', bd_max: 300 },
+      { id: 46, customer: 'ENTYCE ', bd_max: 300 },
+      { id: 47, customer: 'Entyce',  bd_max: 320 },
+    ]
+    expect(pickSpecForCustomer(bare, 'Entyce').ambiguous.map(x => x.id)).toEqual([47, 46, 33])
+  })
+
+  it('prefers ANY numbered document over an unnumbered row', () => {
+    const r = pickSpecForCustomer([
+      { id: 1, customer: 'Entyce', doc_no: null },
+      { id: 2, customer: 'Entyce', doc_no: 'IPS-ENT-001' },
+    ], 'Entyce')
+    expect(r.spec?.id).toBe(2)
+    expect(r.ambiguous).toEqual([])
+  })
+
+  it('applies the same rule to generic rows', () => {
+    const r = pickSpecForCustomer([
+      { id: 1, customer: '', doc_no: 'IPS-GEN-001' },
+      { id: 2, customer: '', doc_no: 'IPS-GEN-004' },
+    ], 'Nobody')
+    expect(r.via).toBe('generic')
+    expect(r.spec?.doc_no).toBe('IPS-GEN-004')
+  })
+
+  it('a customer document beats a newer generic one', () => {
+    const r = pickSpecForCustomer([
+      { id: 1, customer: '', doc_no: 'IPS-GEN-009' },
+      { id: 2, customer: 'Entyce', doc_no: 'IPS-ENT-001' },
+    ], 'Entyce')
+    expect(r.spec?.id).toBe(2)
+    expect(r.via).toBe('customer')
   })
 })
