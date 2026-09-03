@@ -10,7 +10,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
-    "lint:boundaries": "eslint --config eslint.boundaries.mjs --no-error-on-unmatched-pattern lib/core features"
+    "lint:boundaries": "eslint --config eslint.boundaries.mjs --no-error-on-unmatched-pattern lib/core features",
+    "lint:hooks": "eslint --config eslint.hooks.mjs --quiet ."
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

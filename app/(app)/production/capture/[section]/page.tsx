@@ -1769,6 +1769,36 @@ function CaptureScreen() {
     setSubmitting(false)
   }
 
+  // NOTE: every hook must sit ABOVE the render gates below.
+  //
+  // This useMemo used to live after them. The gates return early while `loading`
+  // is true, so the first render called N hooks and the second called N+1 — React
+  // error #310, "Rendered more hooks than during the previous render", thrown
+  // from useMemo. It took the whole capture screen down with "This page couldn't
+  // load" for every section that had an assignment, which is to say whenever
+  // capture would otherwise have worked.
+  //
+  // Its inputs (kind, productions, activeIdx) are all defined far above, so there
+  // was never a reason for it to be down there.
+  // What the session's OTHER batches already hold, for SievingCapture's self-heal.
+  // prod_debagging and bag_tags are keyed on session_id alone — no batch
+  // discriminator — so a changeover (addProduction) leaves every batch's rows
+  // under one id, and the freshly-mounted empty batch would otherwise read the
+  // whole session as "missing" and restore a copy of it into itself, doubling the
+  // session's inputs on the next save. Only THIS session's batches: the self-heal
+  // queries are session-scoped, so siblings/other shifts are already out of range.
+  //
+  // Guarded on the section kind, never on a field name — `data` is the section
+  // union and only Sieving's arm has these shapes (§4).
+  const otherBatchRows = useMemo(() => {
+    if (kind !== 'sieving') return { debagKeys: [] as string[], outputSerials: [] as string[] }
+    const others = productions.filter((_, i) => i !== activeIdx).map(p => p.data as SievingData)
+    return {
+      debagKeys: others.flatMap(d => (d.debag ?? []).map(r => debagRowKey(r.bag_no, r.lot, r.nett))),
+      outputSerials: others.flatMap(d => (d.outputs ?? []).map(o => o.serial)),
+    }
+  }, [kind, productions, activeIdx])
+
   // ── Render gates ─────────────────────────────────────────────────────────
   if (loading) {
     return <div className="flex items-center justify-center h-64"><Loader2 size={24} className="animate-spin text-text-muted" /></div>
@@ -1797,24 +1827,6 @@ function CaptureScreen() {
   }
 
   const locked = status === 'approved'
-  // What the session's OTHER batches already hold, for SievingCapture's self-heal.
-  // prod_debagging and bag_tags are keyed on session_id alone — no batch
-  // discriminator — so a changeover (addProduction) leaves every batch's rows
-  // under one id, and the freshly-mounted empty batch would otherwise read the
-  // whole session as "missing" and restore a copy of it into itself, doubling the
-  // session's inputs on the next save. Only THIS session's batches: the self-heal
-  // queries are session-scoped, so siblings/other shifts are already out of range.
-  //
-  // Guarded on the section kind, never on a field name — `data` is the section
-  // union and only Sieving's arm has these shapes (§4).
-  const otherBatchRows = useMemo(() => {
-    if (kind !== 'sieving') return { debagKeys: [] as string[], outputSerials: [] as string[] }
-    const others = productions.filter((_, i) => i !== activeIdx).map(p => p.data as SievingData)
-    return {
-      debagKeys: others.flatMap(d => (d.debag ?? []).map(r => debagRowKey(r.bag_no, r.lot, r.nett))),
-      outputSerials: others.flatMap(d => (d.outputs ?? []).map(o => o.serial)),
-    }
-  }, [kind, productions, activeIdx])
 
   const at = active ? prodTotals(active) : { totalIn: 0, totalOut: 0, carryOverIn: 0, carryOverOut: 0, balance: 0 }
   const totalIn = at.totalIn   // active batch — only used for the "machine running" cue
