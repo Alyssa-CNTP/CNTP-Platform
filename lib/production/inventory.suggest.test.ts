@@ -108,3 +108,19 @@ describe('suggestOutputs — resolver on', () => {
     expect(got.find(o => o.productType === 'Heavy Sticks')!.code).toBe('15IGST-O')
   })
 })
+
+describe('catalogueFrom', () => {
+  it('builds once per inventory array, not once per caller', async () => {
+    // A capture screen needs the catalogue in two places — the item picker and
+    // useItemCodes. Both receive the same cached array from loadAllInventory,
+    // so both must get the same object rather than each indexing 630 rows.
+    const { catalogueFrom } = await load(false)
+    const rows = ROWS as never
+    expect(catalogueFrom(rows)).toBe(catalogueFrom(rows))
+  })
+
+  it('builds a fresh one when the inventory array is replaced', async () => {
+    const { catalogueFrom } = await load(false)
+    expect(catalogueFrom(ROWS as never)).not.toBe(catalogueFrom([...ROWS] as never))
+  })
+})

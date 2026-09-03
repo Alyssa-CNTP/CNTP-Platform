@@ -5,7 +5,7 @@
  * The only public surface of this feature (ARCHITECTURE.md §3). Everything
  * else in the folder is private.
  *
- *     const catalogue = await loadCatalogue()
+ *     const catalogue = buildCatalogue(rowsTheCallerAlreadyHas)
  *     const r = resolveItem(catalogue, { productType: 'Heavy Sticks', variant: 'CON', grade: 'A' })
  *     switch (r.kind) {
  *       case 'resolved':        // r.item.inventoryId is guaranteed to exist
@@ -21,9 +21,6 @@
  * this feature — a feature that reaches back into the code it replaces can
  * never be finished.
  */
-import { getDb } from '@/lib/supabase/db'
-import { buildCatalogue, type Catalogue, type InventoryRow } from './catalogue'
-
 export type { Catalogue, CatalogueItem, InventoryRow, VariantCode } from './catalogue'
 export {
   buildCatalogue, variantCodeOf, variantCodeForWord, stemOf, variantsOf,
@@ -35,27 +32,20 @@ export {
 } from './resolve'
 export { STEMS, INPUT_STEMS } from './stems'
 
-let cached: Catalogue | null = null
-
 /**
- * Load and index the master inventory. Cached for the page's lifetime — it is
- * ~630 rows and every capture keystroke would otherwise hit the network.
+ * This feature performs NO I/O. The caller supplies the rows.
  *
- * Mirrors loadAllInventory() in lib/production/inventory.ts deliberately: that
- * one stays the loader for the item PICKER, this one for code RESOLUTION, and
- * they are merged only once the picker moves over too.
+ * It used to own a loadCatalogue() that queried inventory_items itself. That
+ * was a mistake with a measurable cost: lib/production/inventory.ts already
+ * caches exactly those rows via loadAllInventory(), so a Refining capture
+ * screen fetched the same ~630-row table TWICE on every load — once for the
+ * item picker, once for code resolution. A feature is not allowed to make a
+ * core screen slower.
+ *
+ * The fetch was there to dodge an import cycle (inventory.ts imports this
+ * feature). Taking the rows as an argument removes the cycle AND the second
+ * read, and leaves this module pure and unit-testable with no mocks — the same
+ * reason lib/core may not perform I/O (ARCHITECTURE.md §2).
+ *
+ * The app owns loading: see lib/production/use-item-codes.ts.
  */
-export async function loadCatalogue(force = false): Promise<Catalogue> {
-  if (cached && !force) return cached
-  const { data } = await getDb().schema('production').from('inventory_items')
-    .select('inventory_id, description, product_group, variant')
-    .eq('active', true)
-    .order('inventory_id')
-  cached = buildCatalogue((data as InventoryRow[]) ?? [])
-  return cached
-}
-
-/** Drop the cache — after an inventory sync, or in a test. */
-export function clearCatalogueCache(): void {
-  cached = null
-}

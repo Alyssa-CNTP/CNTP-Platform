@@ -35,9 +35,20 @@ export interface SuggestedItem {
  * suggestOutputs() is called on every render, so it must stay synchronous; the
  * screens that use it already hold the master list from loadAllInventory(), and
  * this turns that into the index the resolver needs without a second read.
+ *
+ * Keyed on the array IDENTITY, not its contents. loadAllInventory() hands out
+ * one frozen-in-practice array, so a capture screen that needs the catalogue in
+ * two places (the item picker and useItemCodes) builds it once and gets the
+ * same object back — which also keeps it stable for useMemo downstream. A
+ * WeakMap so a replaced inventory array can still be collected.
  */
+const _catalogues = new WeakMap<object, Catalogue>()
 export function catalogueFrom(all: InventoryItem[]): Catalogue {
-  return buildCatalogue(all as any)
+  const hit = _catalogues.get(all)
+  if (hit) return hit
+  const built = buildCatalogue(all as any)
+  _catalogues.set(all, built)
+  return built
 }
 
 export const LEAF = new Set(['Fine Leaf', 'Coarse Leaf'])

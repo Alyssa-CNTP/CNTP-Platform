@@ -85,6 +85,22 @@ by `eslint.config.mjs`, so the two entry points cannot drift.
    flow from TypeScript, which is the same class of problem as the `as any` casts.
 3. Wrap the mount in `<FeatureBoundary>` so a crash in the feature cannot take down the
    capture screen an operator is mid-shift on.
+
+   **A feature reached through a HOOK cannot be protected this way.** An error boundary
+   catches a throw from a child *component* during render; it cannot catch one from a
+   hook the page itself called. `useItemCodes()` is the first of these, and it was
+   written without the guard before anyone noticed the rule did not reach it. Where a
+   feature is consumed as a hook or a plain function call, the ADAPTER must be total:
+   catch, log, and fall back to the behaviour that shipped before the feature existed.
+   Degrading to the old answer is recoverable; a blank screen with a half-captured
+   session behind it is not. See `lib/production/use-item-codes.ts` and its tests.
+
+   **A feature must not make a core screen slower, either.** The same feature briefly
+   owned its own loader for `inventory_items`, which `lib/production/inventory.ts`
+   already caches — so a Refining capture screen fetched the same ~630-row table twice
+   on every load. Features take data as an argument; the app owns loading. That also
+   keeps the feature pure and unit-testable with no mocks, for the same reason
+   `lib/core` may not perform I/O (§2).
 4. Do not edit `lib/core/**`. If you need something from core that isn't there, add it to
    core *with tests*, in its own commit, separately reviewed (`CODEOWNERS` enforces this).
 5. If the feature writes bag data, it appends events — see §6.

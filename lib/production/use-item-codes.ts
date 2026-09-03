@@ -15,34 +15,43 @@
  * and that is a network read. Several call sites are inside render, so making
  * them async would mean threading promises through JSX.
  *
- * So the catalogue loads once per screen and everything else stays sync. Until
- * it arrives — and whenever the flag is off — this falls back to the templates,
- * which is exactly today's behaviour.
+ * So the catalogue is built once per screen and everything else stays sync.
+ * Until it exists — and whenever the flag is off — this falls back to the
+ * templates, which is exactly today's behaviour.
  *
- * ── Why this lives here and not in the feature ──────────────────────────────
+ * ── One read, not two ───────────────────────────────────────────────────────
  *
- * features/acumatica-items must not know the legacy module exists; a feature
- * that reaches back into the code it replaces can never be finished. The app
- * owns the changeover, so the adapter is app-side. When the flag is on
- * everywhere and the templates are deleted, this file collapses to a hook that
- * returns the resolver and nothing else.
+ * The rows come from loadAllInventory(), which is already cached and which the
+ * item pickers already call. The feature briefly owned its own loader; that
+ * made a Refining capture screen fetch the same ~630-row table twice per load.
+ * A feature must not make a core screen slower, so the app loads once and
+ * hands the rows over.
  *
- * Note lib/production/inventory.ts already imports from the feature, so the
- * feature deliberately keeps its own loader rather than calling
- * loadAllInventory() — that direction would be a cycle.
+ * ── Why this cannot break capture ───────────────────────────────────────────
+ *
+ * This is a HOOK, called by the capture page itself — so <FeatureBoundary>
+ * cannot protect it. An error boundary catches a throw from a child component
+ * during render; it cannot catch one from a hook the page called. If anything
+ * in the resolver threw, an operator mid-shift would lose the screen.
+ *
+ * So every resolver call is wrapped and falls back to the template path on any
+ * throw. The templates are the behaviour that shipped for months; degrading to
+ * them is safe, and it is strictly better than a blank screen with a
+ * half-captured session behind it. See the tests in use-item-codes.test.ts.
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { flags } from '@/lib/config/flags'
 import {
-  loadCatalogue, resolveItem, resolveInputItem, explain,
+  resolveItem, resolveInputItem, explain,
   type Catalogue, type ItemResolution,
 } from '@/features/acumatica-items'
+import { loadAllInventory, catalogueFrom } from '@/lib/production/inventory'
 import {
   getAcumaticaCode, getInputAcumaticaCode, type AcumaticaCode,
 } from '@/lib/production/acumatica-codes'
 
 export interface ItemCodes {
-  /** True once the resolver is active AND its catalogue has loaded. */
+  /** True once the resolver is active AND its catalogue is built. */
   ready: boolean
   /** Which path the answers below are coming from right now. */
   source: 'resolver' | 'template'
@@ -76,21 +85,29 @@ function isProblem(r: ItemResolution): boolean {
   return r.kind === 'not-stocked' || r.kind === 'unknown-product'
 }
 
-export function useItemCodes(): ItemCodes {
-  const [catalogue, setCatalogue] = useState<Catalogue | null>(null)
+/**
+ * Run a resolver call, falling back to `orElse` if it throws.
+ *
+ * Deliberately not silent: the console line is how a resolver bug gets found,
+ * and swallowing it entirely would let capture run on the template path for
+ * weeks with nobody knowing why the stricter warnings stopped appearing.
+ */
+function safely<T>(what: string, attempt: () => T, orElse: () => T): T {
+  try {
+    return attempt()
+  } catch (err) {
+    console.error(`[acumatica-items] ${what} threw; falling back to the code templates.`, err)
+    return orElse()
+  }
+}
 
-  useEffect(() => {
-    if (!flags.acumaticaResolver) return
-    let live = true
-    loadCatalogue()
-      .then(c => { if (live) setCatalogue(c) })
-      // A failed load leaves the catalogue null, which falls through to the
-      // templates below. Capture keeps working; it just does not get the
-      // stricter answers until the next page load.
-      .catch(() => {})
-    return () => { live = false }
-  }, [])
-
+/**
+ * The pure half: given a catalogue (or null), how do we answer?
+ *
+ * Split out from the hook so the fallback behaviour can be tested directly,
+ * including the case where the catalogue itself is hostile.
+ */
+export function itemCodesFrom(catalogue: Catalogue | null): ItemCodes {
   const ready = flags.acumaticaResolver && catalogue !== null
 
   return {
@@ -99,18 +116,55 @@ export function useItemCodes(): ItemCodes {
 
     codeFor(productType, variant, grade) {
       if (!ready) return getAcumaticaCode(productType, variant, grade)
-      return toCode(resolveItem(catalogue!, { productType, variant, grade }))
+      return safely(
+        'codeFor',
+        () => toCode(resolveItem(catalogue!, { productType, variant, grade })),
+        () => getAcumaticaCode(productType, variant, grade),
+      )
     },
 
     inputCodeFor(grade, variant) {
       if (!ready) return getInputAcumaticaCode(grade, variant)
-      return toCode(resolveInputItem(catalogue!, grade, variant))
+      return safely(
+        'inputCodeFor',
+        () => toCode(resolveInputItem(catalogue!, grade, variant)),
+        () => getInputAcumaticaCode(grade, variant),
+      )
     },
 
     problemFor(productType, variant, grade) {
       if (!ready) return null
-      const r = resolveItem(catalogue!, { productType, variant, grade })
-      return isProblem(r) ? explain(r) : null
+      // A failure here must not invent a warning either — no news is the safe
+      // answer, and the console line above records what happened.
+      return safely(
+        'problemFor',
+        () => {
+          const r = resolveItem(catalogue!, { productType, variant, grade })
+          return isProblem(r) ? explain(r) : null
+        },
+        () => null,
+      )
     },
   }
+}
+
+export function useItemCodes(): ItemCodes {
+  const [catalogue, setCatalogue] = useState<Catalogue | null>(null)
+
+  useEffect(() => {
+    if (!flags.acumaticaResolver) return
+    let live = true
+    loadAllInventory()
+      .then(rows => { if (live) setCatalogue(catalogueFrom(rows)) })
+      // A failed load leaves the catalogue null, which falls through to the
+      // templates. Capture keeps working; it just does not get the stricter
+      // answers until the next page load.
+      .catch(err => { console.error('[acumatica-items] inventory load failed.', err) })
+    return () => { live = false }
+  }, [])
+
+  // Stable across renders while the catalogue is unchanged: several call sites
+  // sit inside render, and a fresh object each time would churn any child that
+  // receives one of these functions as a prop.
+  return useMemo(() => itemCodesFrom(catalogue), [catalogue])
 }
