@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useMemo } from 'react'
-import { Gauge, Loader2, Clock, AlertTriangle, CheckCircle2 } from 'lucide-react'
+import { Gauge, Loader2, AlertTriangle, CheckCircle2, X } from 'lucide-react'
 import { machineChecksFor, HOURLY_NUDGE_MINUTES } from '@/lib/production/checks-config'
 import { loadCheckRecord, ensureCheckRecord, appendCheckEvent } from '@/lib/production/checks-db'
 import { loadCheckSpecs, outOfRange, type CheckSpec } from '@/lib/production/check-specs'
@@ -9,15 +9,29 @@ import { loadCheckSpecs, outOfRange, type CheckSpec } from '@/lib/production/che
 const SNOOZE_MS = 10 * 60 * 1000   // "remind me shortly" pushes the prompt out 10 min
 
 /**
- * Hourly VSD (infeed speed) prompt. Auto-pops a modal once an hourly reading is
- * due so the operator is actively asked every hour — the old status-strip nudge
- * was a passive badge that vanished the moment checks were signed, leaving no
- * way to log the reading for the rest of the shift.
+ * Hourly VSD (infeed speed) hint.
  *
- * This lives at the capture-page level (not inside ChecksPanel), so it keeps
- * prompting and stays usable AFTER checks are signed off, for as long as the
- * line is running and the session hasn't been submitted. Readings append to the
- * same production.check_events trail the Checks engine uses.
+ * ── Why this is a bar and not a modal ───────────────────────────────────────
+ *
+ * It was a full-screen modal with a backdrop and an autofocused input, shown
+ * the moment a reading came due. Because the FIRST reading was never asked for
+ * anywhere — infeed_vsd sat in the 'running' phase with nothing prompting it —
+ * "due" was true as soon as material was captured. On the floor that meant it
+ * appeared part-way through adding a bulk bag, over the form the operator was
+ * filling in, and took the keyboard with it.
+ *
+ * The first reading is now a start-up check (checks-config.ts), asked once with
+ * the rest of the round. What is left here is the hourly reminder, and a
+ * reminder must not be able to interrupt work in progress: no backdrop, no
+ * autoFocus, `pointerEvents: none` on the wrapper so only the bar itself is
+ * clickable, and a dismiss that snoozes it.
+ *
+ * It still lives at the capture-page level rather than inside ChecksPanel, for
+ * the original reason: the status-strip badge vanished the moment checks were
+ * signed, leaving no way to log a reading for the rest of the shift. This stays
+ * usable after sign-off, for as long as the line is running and the session has
+ * not been submitted. Readings append to the same production.check_events trail
+ * the Checks engine uses.
  */
 export function HourlyVsdPrompt({ sectionId, date, shift, sessionId, running, active, operator, visible = true }: {
   sectionId: string
@@ -116,62 +130,63 @@ export function HourlyVsdPrompt({ sectionId, date, shift, sessionId, running, ac
   }
 
   return (
-    <div style={{
-      position: 'fixed', inset: 0, zIndex: 9998,
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
-      background: 'rgba(0,0,0,0.45)', padding: 16,
-    }}>
-      <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm overflow-hidden">
-        <div className="flex items-center gap-2.5 px-5 py-4 border-b border-stone-100 bg-warn/8">
-          <Gauge size={18} className="text-warn shrink-0" />
-          <div className="flex-1">
-            <div className="font-semibold text-[15px] text-text">Hourly VSD reading due</div>
-            <div className="text-[11px] text-text-muted">{vsdCheck.label} — {sectionMeta(sectionId)}</div>
+    <div
+      style={{
+        position: 'fixed', left: 0, right: 0, bottom: 0, zIndex: 60,
+        padding: '0 12px 12px', pointerEvents: 'none',
+      }}
+    >
+      <div
+        className="mx-auto w-full max-w-md bg-white border border-warn/30 rounded-2xl shadow-lg overflow-hidden"
+        style={{ pointerEvents: 'auto' }}
+      >
+        <div className="flex items-center gap-2 px-3.5 py-2.5 border-b border-stone-100 bg-warn/8">
+          <Gauge size={15} className="text-warn shrink-0" />
+          <div className="flex-1 min-w-0">
+            <div className="font-semibold text-[13px] text-text truncate">
+              {lastVsd === null ? 'Log the first VSD reading' : 'VSD reading due'}
+            </div>
+            <div className="text-[11px] text-text-muted truncate">
+              {lastVsd === null
+                ? `${vsdCheck.label} — ${sectionMeta(sectionId)}`
+                : `Last reading ${Math.floor(minsSince)} min ago`}
+            </div>
           </div>
+          <button
+            onClick={() => setSnoozeUntil(Date.now() + SNOOZE_MS)}
+            aria-label="Dismiss for now"
+            className="shrink-0 p-1.5 rounded-lg text-stone-400 hover:text-stone-600 hover:bg-stone-100">
+            <X size={15} />
+          </button>
         </div>
 
-        <div className="p-5 space-y-3">
-          <div className="flex items-center gap-1.5 text-[12px] text-text-muted">
-            <Clock size={13} />
-            {lastVsd === null
-              ? 'No reading logged yet this shift.'
-              : `Last reading ${Math.floor(minsSince)} min ago.`}
-          </div>
-
+        <div className="px-3.5 py-2.5 space-y-2">
           <div className="flex items-center gap-2">
             <input
-              autoFocus type="text" inputMode="decimal" value={value}
+              type="text" inputMode="decimal" value={value}
               onChange={e => { setValue(e.target.value.replace(/[^0-9.]/g, '')); setError(null) }}
               onKeyDown={e => { if (e.key === 'Enter' && validNum && !saving) save() }}
               placeholder="0.0"
-              className="flex-1 px-3 py-3 rounded-xl border border-stone-200 bg-white text-center font-mono text-[20px] outline-none focus:border-brand"
+              className="flex-1 min-w-0 px-3 py-2.5 rounded-xl border border-stone-200 bg-white text-center font-mono text-[17px] outline-none focus:border-brand"
             />
-            <span className="font-mono text-[14px] text-text-muted w-8">{spec?.unit ?? vsdCheck.unit ?? 'Hz'}</span>
+            <span className="font-mono text-[13px] text-text-muted w-7 shrink-0">{spec?.unit ?? vsdCheck.unit ?? 'Hz'}</span>
+            <button
+              onClick={save} disabled={saving || !validNum}
+              className="shrink-0 px-4 py-2.5 rounded-xl bg-brand text-white text-[13px] font-semibold disabled:opacity-40 flex items-center gap-1.5">
+              {saving ? <Loader2 size={14} className="animate-spin" /> : <Gauge size={14} />} Log
+            </button>
           </div>
 
           {rangeLabel && (
-            <p className={`text-[12px] flex items-center gap-1.5 ${oor ? 'text-warn' : 'text-text-muted'}`}>
-              {oor && <AlertTriangle size={13} className="shrink-0" />}
-              {oor ? `Out of range — logged as flagged. ${rangeLabel}` : rangeLabel}
+            <p className={`text-[11px] flex items-center gap-1.5 ${oor ? 'text-warn' : 'text-text-muted'}`}>
+              {oor && <AlertTriangle size={12} className="shrink-0" />}
+              {oor ? `Out of range — will be logged as flagged. ${rangeLabel}` : rangeLabel}
             </p>
           )}
           {justLogged && (
-            <p className="text-[12px] text-ok flex items-center gap-1.5"><CheckCircle2 size={13} /> Reading logged.</p>
+            <p className="text-[11px] text-ok flex items-center gap-1.5"><CheckCircle2 size={12} /> Reading logged.</p>
           )}
-          {error && <p className="text-[12px] text-err">{error}</p>}
-
-          <div className="flex items-center gap-2 pt-1">
-            <button
-              onClick={() => setSnoozeUntil(Date.now() + SNOOZE_MS)}
-              className="px-3 py-2.5 rounded-xl border border-stone-200 text-stone-600 text-[13px] font-medium hover:bg-stone-50">
-              Remind me shortly
-            </button>
-            <button
-              onClick={save} disabled={saving || !validNum}
-              className="flex-1 px-4 py-2.5 rounded-xl bg-brand text-white text-[13px] font-semibold disabled:opacity-40 flex items-center justify-center gap-1.5">
-              {saving ? <Loader2 size={15} className="animate-spin" /> : <Gauge size={15} />} Log reading
-            </button>
-          </div>
+          {error && <p className="text-[11px] text-err">{error}</p>}
         </div>
       </div>
     </div>

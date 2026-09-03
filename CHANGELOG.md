@@ -2,6 +2,71 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-03 — Alyssa (Sieving checks: mesh sizes, no mass-balance re-confirm, VSD asked once; RB Blocks naming)
+
+**Files changed:** `lib/core/mesh.ts` (new), `lib/core/mesh.test.ts` (new),
+`lib/core/product-names.ts`, `lib/core/product-names.test.ts`,
+`lib/production/checks-config.ts`,
+`components/production/capture/ChecksPanel.tsx`,
+`components/production/capture/HourlyVsdPrompt.tsx`
+
+### Mesh sizes are three fields, not a free-text box
+
+"Sieving configuration" was `kind: 'text'` with the hint *State the screen
+configuration in use*, so what reached `check_events.value_text` was whatever
+the operator typed — `#12 #14 #16`, `12/14/16`, `top 12 mid 14 bot 16`. Four
+screens read that string back (Shift Report, Batch Consolidation, the batch API,
+yield analytics) and none can group or compare free text: two shifts that ran
+the identical configuration did not match.
+
+Now three numbered fields, top / middle / bottom deck, and `lib/core/mesh.ts`
+writes `#12 / #14 / #16`. Typing the `#` is the app's job.
+
+- A blank deck is written as `—` in position, so `#12 / — / #16` cannot be
+  misread as a two-deck machine.
+- `parseMeshConfig()` reads canonical strings **positionally** and falls back to
+  scanning numbers for old free text, so a blank middle deck stays in the middle.
+- An old free-text value leaves the three boxes **empty** and is shown
+  underneath as recorded. A guess at what the words meant would be accepted
+  without being read.
+- Stored as `kind: 'text'`, never `'mesh'` — `check_events.kind` has a CHECK
+  that lists five kinds (20260618_002), so writing a UI-only kind would be
+  rejected and the check would refuse to sign off. `storageKindFor()` in
+  `checks-config.ts` is the one place that mapping lives.
+
+### Mass balance removed from the Checks list
+
+It has its own tab, its own persisted `prod_mass_balance` row and its own ±1%
+tolerance. Confirming it again in Checks asked the operator to agree with a
+figure they had already agreed with, and blocked sign-off on it. The sign-off
+snapshot that wrote a duplicate `mass_balance` event is gone with it. The
+`massbalance` kind and its card are kept so historical records still read back.
+
+### Infeed VSD is asked once at start-up, then hinted
+
+`infeed_vsd` sat in the `running` phase with nothing asking for the first
+reading, so `HourlyVsdPrompt` treated it as due the moment material was captured
+— a full-screen modal with a backdrop and an autofocused input, appearing
+part-way through adding a bulk bag and taking the keyboard with it.
+
+The first reading is now a **start-up check**, asked once with the rest of the
+round. The hourly reminder became a bottom bar: no backdrop, no autoFocus,
+`pointerEvents: none` on the wrapper so only the bar is clickable, and a dismiss
+that snoozes it. It still lives at page level, so it stays usable after checks
+are signed — the reason the modal replaced the old status-strip badge.
+
+### RB Blocks
+
+The picker read `15IGBL-C-C · Blocks: Clean - Conventional` — Acumatica's item
+description — while the Sieving capture screen, its output grouping and the
+Acumatica summary all say **RB Blocks**, and Quality said *Rooibos Blocks*.
+Three names for one material, the same drift as Heavy Sticks. All spellings now
+canonicalise to `RB Blocks`. **Blocks: Cut / CHS is deliberately NOT folded in**
+— a different material, reported on its own line.
+
+421 unit tests (16 new for mesh, 3 for Blocks). Lint at the 3021 baseline
+exactly; type errors at the 36 baseline. Build clean.
+
 ## 2026-09-03 — Alyssa (Variant written exactly as selected; Phase 1 core dedup closed)
 
 **Files changed:** `lib/core/variants.ts`, `lib/core/variants.test.ts`,

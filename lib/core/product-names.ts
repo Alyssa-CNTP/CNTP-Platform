@@ -88,7 +88,26 @@ const CANONICAL_BY_ALIAS: Readonly<Record<string, string>> = {
   'heavy stick': 'Heavy Sticks',
   'rs': 'Heavy Sticks',
 
+  // RB Blocks. Same shape as Heavy Sticks: Acumatica's item description is
+  // "Blocks: Clean" (15IGBL-C), so the picker showed
+  // "15IGBL-C-C · Blocks: Clean - Conventional" while the Sieving capture
+  // screen, its output grouping and the Acumatica summary all say "RB Blocks".
+  // Quality had a third name again, "Rooibos Blocks".
+  //
+  // RB Blocks is canonical because it is what the operator reads on the
+  // capture screen and what OUTPUT_GROUP_ORDER in SievingCapture already
+  // sorts by. The Acumatica description is not lost — it is resolved from the
+  // item id by features/acumatica-items, exactly as for Sticks.
+  'blocks: clean': 'RB Blocks',
+  'blocks clean': 'RB Blocks',
+  'rooibos blocks': 'RB Blocks',
+  'rb block': 'RB Blocks',
+  'blocks': 'RB Blocks',
+
   // NOT aliased, on purpose:
+  //   'Blocks: Cut' / 'Blocks Cut' / 'CHS' — Acumatica 15IGBL-D and the
+  //     20BGCHS-* items. A different material from clean Blocks, and the
+  //     Acumatica summary reports the two on separate lines (C vs D).
   //   'Indent Sticks'  — Acumatica 15IGIS, a different item with its own code.
   //   'Cut Heavy Stick Fine' / 'Cut Heavy Stick Coarse' — Acumatica 20BGCHS-F /
   //     -C, Refining 2 outputs. "Heavy Stick" appears inside both names, which
