@@ -309,6 +309,11 @@ function AddBagModal({ groups, colorFor, variantWord, existingInputs, editingRow
   const [browsing, setBrowsing] = useState(false)
   const [looking, setLooking] = useState(false)
   const [scanMsg, setScanMsg] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null)
+  // The serial this modal opened with, when an existing row is being edited.
+  // The auto-lookup below must not fire for it: re-reading bag_tags on mount
+  // would overwrite a weight or lot the operator had captured by hand. Only a
+  // serial the operator actually changes gets looked up.
+  const openedWithSerial = useRef(editingRow?.serial ?? '')
 
   const color = group ? colorFor(group.key) : DEBAG_COLOR
   // Batches actually in stock for this exact material — same data the system-pick
@@ -330,6 +335,21 @@ function AddBagModal({ groups, colorFor, variantWord, existingInputs, editingRow
   }
 
   const normalise = (s: string) => s.trim().toLowerCase()
+
+  // Every path that puts a serial in the field goes through here — typing, the
+  // hardware scanner's burst, and the camera. A failed lookup switches the row
+  // to manual entry (`inputMode = 'manual'`, below), and that used to latch:
+  // the auto-lookup effect skips manual rows, so once an operator scanned one
+  // unregistered bag, every later scan in this modal was swallowed with no
+  // popup, no message and no way back except Enter or the Look up button —
+  // neither of which a hardware scanner sends. Changing the serial clears that
+  // verdict, because it was about the previous bag, not this one.
+  function changeSerial(raw: string) {
+    const s = sanitizeSerial(raw)
+    setSerial(s)
+    setScanMsg(null)
+    if (s !== openedWithSerial.current) { setInputMode('scan'); setNotInSystem(false) }
+  }
 
   async function triggerLookup() {
     if (!serial.trim() || !group) return
@@ -362,8 +382,11 @@ function AddBagModal({ groups, colorFor, variantWord, existingInputs, editingRow
   // Auto-fire the lookup once the scanned serial settles — a hardware scanner
   // fills the field in one burst without sending Enter, so the operator just
   // picks the ingredient, scans, and the bag's details fill in on their own.
+  // Gated on the serial being one the operator entered here, NOT on inputMode:
+  // gating on inputMode made a single not-found bag disable scanning for the
+  // rest of the modal's life (see changeSerial).
   useEffect(() => {
-    if (!serial.trim() || !group || inputMode === 'manual') return
+    if (!serial.trim() || !group || serial === openedWithSerial.current) return
     const t = setTimeout(() => { triggerLookup() }, 400)
     return () => clearTimeout(t)
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -415,7 +438,7 @@ function AddBagModal({ groups, colorFor, variantWord, existingInputs, editingRow
                 <div className="flex gap-2">
                   <input autoFocus type="text" value={serial}
                     placeholder="Scan or type — press Enter to look up"
-                    onChange={e => { setSerial(sanitizeSerial(e.target.value)); setScanMsg(null) }}
+                    onChange={e => changeSerial(e.target.value)}
                     onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); triggerLookup() } }}
                     className={INP + ' flex-1'} autoCapitalize="characters" spellCheck={false} />
                   <button onClick={triggerLookup} disabled={!serial.trim() || looking}
@@ -425,7 +448,7 @@ function AddBagModal({ groups, colorFor, variantWord, existingInputs, editingRow
                   <ScanCameraButton
                     title="Scan bag barcode"
                     hint="Point the camera at the bag's barcode…"
-                    onScan={code => { setSerial(sanitizeSerial(code)); setScanMsg(null) }}
+                    onScan={code => changeSerial(code)}
                   />
                 </div>
                 {scanMsg && (
