@@ -2,6 +2,59 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-03 — Alyssa (Changeover: supervisor-only, single-fire, clean slate by default)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`
+
+Builds the changeover to the rule as stated on the floor: the leftover is
+normally all bagged out, so a changeover starts its own record with a clean
+slate — unless a supervisor explicitly says the material continues, which
+organic may never do.
+
+### Clean slate is the default; continuing is the exception
+
+The modal now leads with **Start a clean record** and offers **Continue leftover
+material into the new record** as a secondary action.
+
+Continuing does NOT mean sharing a session — that is the mechanism that reached
+262 rows for 17 bags. The leftover is appended to
+`production.bucket_elevator_log` as `generated`, and the new session picks it up
+as carry-over IN through `outstandingBucketElevator()`, the path that already
+exists for exactly this. **That ledger is keyed on variant family**, so organic
+and conventional are separate pools that cannot combine — the organic rule is a
+property of the ledger rather than a check someone could forget. The option is
+also simply not rendered for organic, and the handler re-checks.
+
+If the carry-over write fails the changeover is abandoned with a message, rather
+than opening a new record that silently loses the material.
+
+### Supervisor only
+
+The trigger is gated on `canApprove` (supervisor / IT / admin) — the same signal
+sign-off already uses on this screen. Closing a record and opening another is a
+decision about the production record, not a capture action.
+
+An operator now sees *"To switch grade or variant, ask a supervisor"* instead of
+a dead button. A control that silently does nothing gets tapped repeatedly,
+which is the behaviour the next item exists to stop.
+
+### Single-fire — the double-tap problem
+
+The changeover is guarded by a `useRef`, not just disabled state. `setState` is
+async, so two taps landing in the same tick both read the old value and both
+proceed; a ref flips synchronously. The same pattern as `creatingSessionRef`,
+which exists because a double-fire there double-inserted a session.
+
+Every button in the dialog is disabled while the work is in flight and the
+primary one shows "Opening new record…". **On a slow tablet the operator sees
+nothing happen and taps again — that is the expected input, not the exception.**
+
+**Verification:** 356 unit tests, both hard gates clean, 36 type errors
+(unchanged), `next build` compiles. **Not yet exercised on the floor** — needs a
+real changeover, and a deliberate double-tap, to confirm.
+
+---
+
 ## 2026-09-03 — Alyssa (Changeover opens its own session — closing the row-doubling mechanism)
 
 **Files changed:** `app/(app)/production/capture/[section]/page.tsx`

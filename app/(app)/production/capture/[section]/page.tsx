@@ -40,7 +40,7 @@ import { fetchTopUpEventsForSession, sanitizeSerial } from '@/lib/production/sca
 import { sectionKindFor, assertNever, type SectionKind } from '@/lib/core/types/capture'
 import { productionTotals, sumProductionTotals, withSessionAdjustments,
   type ProductionTotals, type AnyBalanceData } from '@/lib/core/mass-balance'
-import { outstandingBucketElevator, variantFamily } from '@/lib/production/bucket-elevator'
+import { logBucketElevator, outstandingBucketElevator, variantFamily } from '@/lib/production/bucket-elevator'
 import { upperCode } from '@/lib/production/normalize-code'
 import { dbDate } from '@/lib/production/db-date'
 import { CleaningPanel } from '@/components/production/capture/CleaningPanel'
@@ -361,6 +361,14 @@ function CaptureScreen() {
   const [checksSigned, setChecksSigned] = useState(false)   // start-up/checks done for this shift
   const [changeoverAsk, setChangeoverAsk] = useState(false) // early-submit "is there a changeover?" prompt
   const [gradeChangeover, setGradeChangeover] = useState(false) // Sieving: mid-shift grade/variant changeover confirm
+  const [changeoverBusy, setChangeoverBusy] = useState(false)
+  // In-flight guard for the changeover. State alone is not enough: setState is
+  // async, so two clicks landing in the same tick both read the old value and
+  // both proceed. A ref flips synchronously. Same pattern as
+  // creatingSessionRef, which exists because a double-fire there double-inserted
+  // a session. On a slow tablet the operator sees nothing happen and taps again,
+  // so this is the expected input, not the exception.
+  const changeoverBusyRef = useRef(false)
   const [topUpOpen, setTopUpOpen] = useState(false) // Half-bag top-up: add weight to an existing bag from another existing bag
   const [error, setError]         = useState<string | null>(null)
 
@@ -1938,11 +1946,49 @@ function CaptureScreen() {
   //
   // The unsaved edits are flushed first: startNewProduction() drops the current
   // session from local state, so anything not yet persisted would go with it.
-  async function confirmGradeChangeover() {
-    setGradeChangeover(false)
-    await snapshotChangeoverBalance()
-    try { await flushSave() } catch { /* the snapshot and the new record still proceed */ }
-    startNewProduction()
+  // `carryMaterial` is the supervisor's explicit exception: the leftover has NOT
+  // all been bagged out and physically continues into the next run. Normally it
+  // has been, and the new record starts clean.
+  //
+  // Carrying it does NOT mean sharing a session — that is the doubling mechanism.
+  // The leftover is appended to production.bucket_elevator_log as `generated`,
+  // and the new session picks it up as carry-over IN through
+  // outstandingBucketElevator(), the path that already exists for exactly this.
+  // That ledger is keyed on VARIANT FAMILY, so organic and conventional are
+  // separate pools that can never combine — the organic rule is a property of the
+  // ledger rather than a check that could be forgotten. The UI refuses to offer
+  // the option for organic on top of that (§5).
+  async function confirmGradeChangeover(carryMaterial = false) {
+    // Synchronous re-entry guard — see changeoverBusyRef.
+    if (changeoverBusyRef.current) return
+    changeoverBusyRef.current = true
+    setChangeoverBusy(true)
+    try {
+      const leftoverKg = active
+        ? Math.max(0, Math.round((prodTotals(active).totalIn - prodTotals(active).totalOut) * 10) / 10)
+        : 0
+      await snapshotChangeoverBalance()
+      try { await flushSave() } catch { /* the snapshot and the new record still proceed */ }
+      if (carryMaterial && leftoverKg > 0 && active?.variant && !isOrganicVariant(active.variant)) {
+        try {
+          await logBucketElevator('generated', {
+            sectionId, variantFamily: variantFamily(active.variant), kg: leftoverKg,
+            date: dateParam, shift, sessionId,
+            note: 'Changeover — material continued into the next record by supervisor',
+          })
+        } catch {
+          // The carry-over is an audit-backed figure; if it cannot be written,
+          // say so rather than opening a record that silently loses the material.
+          setError('Changeover: the carried material could not be recorded. Nothing was changed — try again.')
+          return
+        }
+      }
+      setGradeChangeover(false)
+      startNewProduction()
+    } finally {
+      changeoverBusyRef.current = false
+      setChangeoverBusy(false)
+    }
   }
 
   // Start a fresh batch record for the next variant/grade after the current one is
@@ -2035,17 +2081,34 @@ function CaptureScreen() {
                   <p className="text-[13px] text-text-muted">
                     Leftover raw material can still be bagged out as Blocks / Heavy Sticks / Indent Sticks under the new grade — it is just recorded against the new record rather than carried across.
                   </p>
+                  <p className="text-[12px] text-text-muted">
+                    If the leftover has <strong className="text-text">not</strong> all been bagged out and physically continues into the next run, use the second option — it carries the balance forward as material in.
+                  </p>
                 </>
               )}
             </div>
-            <div className="flex items-center gap-2 px-5 pb-5">
-              <button onClick={() => setGradeChangeover(false)}
-                className="flex-1 px-4 py-2.5 rounded-xl border border-stone-200 text-stone-600 text-[13px] font-medium hover:bg-stone-50">
-                Cancel
+            <div className="px-5 pb-5 space-y-2">
+              <button onClick={() => confirmGradeChangeover(false)} disabled={changeoverBusy}
+                className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-brand text-white text-[13px] font-semibold hover:bg-brand-mid transition-colors disabled:opacity-60 disabled:cursor-not-allowed">
+                {changeoverBusy ? <Loader2 size={14} className="animate-spin" /> : null}
+                {changeoverBusy ? 'Opening new record…' : 'Start a clean record'}
               </button>
-              <button onClick={confirmGradeChangeover}
-                className="flex-1 px-4 py-2.5 rounded-xl bg-brand text-white text-[13px] font-semibold hover:bg-brand-mid transition-colors">
-                Confirm changeover
+
+              {/* The supervisor's explicit exception. Offered ONLY when the
+                  leftover has not all been bagged out, and NEVER for organic —
+                  organic and conventional are separate physical pools and must
+                  not combine (§5). Kept visually secondary to the clean start,
+                  which is what happens on almost every changeover. */}
+              {!isOrganicVariant(active.variant) && (
+                <button onClick={() => confirmGradeChangeover(true)} disabled={changeoverBusy}
+                  className="w-full px-4 py-2.5 rounded-xl border border-stone-200 text-stone-600 text-[13px] font-medium hover:border-brand hover:text-brand transition-colors disabled:opacity-60 disabled:cursor-not-allowed">
+                  Continue leftover material into the new record
+                </button>
+              )}
+
+              <button onClick={() => setGradeChangeover(false)} disabled={changeoverBusy}
+                className="w-full px-4 py-2.5 rounded-xl text-stone-500 text-[13px] font-medium hover:bg-stone-50 disabled:opacity-60">
+                Cancel
               </button>
             </div>
           </div>
@@ -2327,16 +2390,25 @@ function CaptureScreen() {
                   <p className="text-[11px] text-stone-400">Bulk bags are locked in under this variant/grade — use <strong className="text-stone-500">Changeover</strong> below to switch.</p>
                 )}
 
-                {/* Mid-shift grade/variant changeover — the leftover mass balance
-                    stays visible and part of the run (can still go out as Blocks/
-                    Sticks under the new grade) unless the closing batch is
-                    organic, which must be segregated into its own session. */}
+                {/* Mid-shift grade/variant changeover — SUPERVISOR ONLY.
+                    It closes the current record and opens a new one, which is a
+                    decision about the production record rather than a capture
+                    action, so it is gated on the same signal as sign-off
+                    (canApprove = supervisor / IT / admin). An operator sees why
+                    it is unavailable instead of a dead button, because a control
+                    that silently does nothing gets tapped repeatedly. */}
                 {sectionId === 'sieving' && !locked && active.variant && (
                   <div className="pt-3 border-t border-stone-100">
-                    <button onClick={() => setGradeChangeover(true)}
-                      className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl border border-stone-200 text-stone-600 font-medium text-[13px] hover:border-brand hover:text-brand transition-colors">
-                      <RefreshCw size={14} /> Changeover — switch grade/variant
-                    </button>
+                    {canApprove ? (
+                      <button onClick={() => setGradeChangeover(true)} disabled={changeoverBusy}
+                        className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl border border-stone-200 text-stone-600 font-medium text-[13px] hover:border-brand hover:text-brand transition-colors disabled:opacity-60 disabled:cursor-not-allowed">
+                        <RefreshCw size={14} /> Changeover — switch grade/variant
+                      </button>
+                    ) : (
+                      <p className="text-[11px] text-stone-400 text-center">
+                        To switch grade or variant, ask a supervisor — a changeover closes this record and opens a new one.
+                      </p>
+                    )}
                   </div>
                 )}
               </div>
