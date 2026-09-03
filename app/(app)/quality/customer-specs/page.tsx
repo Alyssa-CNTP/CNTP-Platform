@@ -104,7 +104,8 @@ function EC({id,col,value,width=50,onSave,savedKey}:{id:number;col:string;value:
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 export default function CustomerSpecsPage() {
-  const {p}=useAuth(); const canWrite=p('can_edit_customer_specs')
+  const {p,session}=useAuth(); const canWrite=p('can_edit_customer_specs')
+  const whoAmI=session?.user?.email?.split('@')[0]||'unknown'
   const db=getDb()
   const [tab,setTab]=useState<'sieve'|'coa'>('coa')
   const [specs,setSpecs]=useState<Spec[]>([])
@@ -130,6 +131,15 @@ export default function CustomerSpecsPage() {
   }, [])
   const [showAdd,setShowAdd]=useState(false)
   const [addNewCust,setAddNewCust]=useState(false)
+  // ── Customer name aliases (qms.customer_aliases) ──────────────────────────
+  // One customer, many spellings. A run typed as 'EWTC' has to reach the spec
+  // filed under 'East West Tea Company (EWTC)', and renaming the spec row
+  // cannot achieve that because BOTH spellings are already in the run data.
+  const [aliases,setAliases]=useState<{id:number;alias:string;canonical_name:string;note:string|null;created_by:string|null}[]>([])
+  const [showAliases,setShowAliases]=useState(false)
+  const [aliasForm,setAliasForm]=useState({alias:'',canonical_name:'',note:''})
+  const [aliasErr,setAliasErr]=useState('')
+  const [aliasSaving,setAliasSaving]=useState(false)
   // Typed patch helper — addForm is a loose bag of fields, but a setter that
   // merges a partial does not need `any` to say so.
   const patchAdd=(patch:Record<string,unknown>)=>setAddForm((p:Record<string,unknown>)=>({...p,...patch}))
@@ -196,6 +206,41 @@ export default function CustomerSpecsPage() {
     const {data:updated,error}=await db.schema('qms').from('customer_specs').update(patch).eq('id',id).select().single()
     if(error){alert('Save failed: '+error.message);return}
     setSpecs(p=>p.map(r=>r.id===id?(updated as Spec):r))
+  }
+
+  const loadAliases=useCallback(async()=>{
+    const {data}=await db.schema('qms').from('customer_aliases').select('*').order('canonical_name').order('alias')
+    setAliases(data??[])
+  },[db])
+
+  async function saveAlias(){
+    const alias=cleanCustomerName(aliasForm.alias)
+    const canonical=cleanCustomerName(aliasForm.canonical_name)
+    if(!alias||!canonical){setAliasErr('Both the alias and the customer it maps to are required.');return}
+    // Same guard as the DB constraint, stated in words the lab can act on.
+    if(normCustomerKey(alias)===normCustomerKey(canonical)){
+      setAliasErr('The alias and the customer name are the same — nothing to map.');return
+    }
+    const clash=aliases.find(a=>normCustomerKey(a.alias)===normCustomerKey(alias))
+    if(clash){setAliasErr(`"${clash.alias}" already maps to "${clash.canonical_name}". Delete that row first if it should point somewhere else.`);return}
+    // An alias pointing at a name that is itself an alias would need chaining,
+    // which resolveCustomerName() deliberately does not do — so refuse it here
+    // rather than create a mapping that silently has no effect.
+    const targetIsAlias=aliases.find(a=>normCustomerKey(a.alias)===normCustomerKey(canonical))
+    if(targetIsAlias){setAliasErr(`"${canonical}" is itself an alias for "${targetIsAlias.canonical_name}". Point this at "${targetIsAlias.canonical_name}" instead — aliases are not chained.`);return}
+    setAliasSaving(true);setAliasErr('')
+    const {error}=await db.schema('qms').from('customer_aliases')
+      .insert({alias,canonical_name:canonical,note:aliasForm.note.trim()||null,created_by:whoAmI})
+    setAliasSaving(false)
+    if(error){setAliasErr(error.message);return}
+    setAliasForm({alias:'',canonical_name:'',note:''});loadAliases()
+  }
+
+  async function deleteAlias(a:{id:number;alias:string;canonical_name:string}){
+    if(!confirm(`Remove the alias "${a.alias}" → "${a.canonical_name}"?\n\nRuns recorded under "${a.alias}" will go back to resolving against the generic spec.`))return
+    const {error}=await db.schema('qms').from('customer_aliases').delete().eq('id',a.id)
+    if(error){alert('Delete failed: '+error.message);return}
+    loadAliases()
   }
 
   async function deleteSpec(id:number){
@@ -289,6 +334,82 @@ export default function CustomerSpecsPage() {
 
       {tab==='sieve' && (<>
       {/* Toolbar */}
+      {showAliases&&(
+        <div style={{marginBottom:12,padding:'12px 14px',borderRadius:10,border:'1px solid #bfdbfe',background:'#f0f7ff'}}>
+          <div style={{fontSize:12,fontWeight:700,color:'#1e3a8a',marginBottom:4}}>↪ Customer name aliases</div>
+          <div style={{fontSize:11,color:'#1e40af',marginBottom:8,lineHeight:1.5}}>
+            A spec is found by matching the customer name on a run against the name the spec is filed under.
+            Normalising already handles case and spacing, so <code>ENTYCE</code> and <code>Entyce&nbsp;</code> resolve on their own.
+            What it cannot do is match two genuinely different names — a run typed <strong>EWTC</strong> against a spec filed as
+            <strong> East West Tea Company (EWTC)</strong>. Without an alias that run silently uses the <strong>generic</strong> spec.
+            <br/>Renaming the spec row cannot fix it: both spellings are already in the run data and both keep being typed.
+          </div>
+
+          {canWrite&&(
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr auto',gap:6,alignItems:'end',marginBottom:8}}>
+              <div>
+                <label style={{fontSize:9,fontWeight:700,color:'#374151',display:'block',marginBottom:2,textTransform:'uppercase'}}>Name typed on runs</label>
+                <input value={aliasForm.alias} placeholder="e.g. EWTC" style={fld}
+                  onChange={e=>setAliasForm(f=>({...f,alias:e.target.value}))}/>
+              </div>
+              <div>
+                <label style={{fontSize:9,fontWeight:700,color:'#374151',display:'block',marginBottom:2,textTransform:'uppercase'}}>Maps to (spec customer)</label>
+                {/* A list, not free text: the target must be a name a spec is
+                    actually filed under, or the alias resolves to nothing. */}
+                <input value={aliasForm.canonical_name} placeholder="pick or type" style={fld} list="alias-canon-dl"
+                  onChange={e=>setAliasForm(f=>({...f,canonical_name:e.target.value}))}/>
+                <datalist id="alias-canon-dl">{specCustomers.map(c=><option key={c} value={c}/>)}</datalist>
+              </div>
+              <div>
+                <label style={{fontSize:9,fontWeight:700,color:'#374151',display:'block',marginBottom:2,textTransform:'uppercase'}}>Note (optional)</label>
+                <input value={aliasForm.note} placeholder="why this exists" style={fld}
+                  onChange={e=>setAliasForm(f=>({...f,note:e.target.value}))}/>
+              </div>
+              <button onClick={saveAlias} disabled={aliasSaving}
+                style={{padding:'6px 14px',borderRadius:7,border:'none',background:'#1f4e79',color:'#fff',fontSize:11,fontWeight:700,cursor:'pointer',opacity:aliasSaving?0.5:1}}>
+                {aliasSaving?'Saving…':'+ Add alias'}
+              </button>
+            </div>
+          )}
+          {aliasErr&&<div style={{fontSize:11,color:'#991b1b',background:'#fef2f2',border:'1px solid #fca5a5',borderRadius:6,padding:'6px 8px',marginBottom:8}}>⚠ {aliasErr}</div>}
+
+          {aliases.length===0
+            ? <div style={{fontSize:11,color:'#6b7280',fontStyle:'italic'}}>No aliases yet.</div>
+            : <table style={{width:'100%',borderCollapse:'collapse',fontSize:11,background:'#fff',borderRadius:7,overflow:'hidden'}}>
+                <thead><tr style={{background:'#1f4e79',color:'#fff'}}>
+                  {['Name typed on runs','→','Maps to (spec customer)','Note','Added by',canWrite?'':''].filter((h,i)=>i<5||canWrite).map((h,i)=>(
+                    <th key={i} style={{padding:'5px 8px',textAlign:'left',fontSize:9,textTransform:'uppercase'}}>{h}</th>
+                  ))}
+                </tr></thead>
+                <tbody>
+                  {aliases.map((a,i)=>{
+                    // An alias whose target has no spec row is worth flagging:
+                    // it resolves, but to a customer with nothing on file, so the
+                    // run still ends up on the generic spec.
+                    const targetHasSpec=specs.some(r=>normCustomerKey(r.customer)===normCustomerKey(a.canonical_name))
+                    return (
+                      <tr key={a.id} style={{background:i%2?'#fafafa':'#fff',borderBottom:'1px solid #f3f4f6'}}>
+                        <td style={{padding:'5px 8px',fontFamily:'monospace'}}>{a.alias}</td>
+                        <td style={{padding:'5px 4px',color:'#9ca3af'}}>→</td>
+                        <td style={{padding:'5px 8px',fontFamily:'monospace',fontWeight:700}}>
+                          {a.canonical_name}
+                          {!targetHasSpec&&<span title="No spec row is filed under this name, so runs using this alias still fall back to the generic spec."
+                            style={{marginLeft:6,fontSize:9,color:'#b45309',fontWeight:700}}>⚠ no spec on file</span>}
+                        </td>
+                        <td style={{padding:'5px 8px',color:'#6b7280'}}>{a.note||'—'}</td>
+                        <td style={{padding:'5px 8px',color:'#9ca3af',fontSize:10}}>{a.created_by||'—'}</td>
+                        {canWrite&&<td style={{padding:'5px 8px',textAlign:'right'}}>
+                          <button onClick={()=>deleteAlias(a)} title="Remove this alias"
+                            style={{padding:'2px 8px',borderRadius:5,border:'1px solid #fca5a5',background:'#fff',color:'#b91c1c',fontSize:10,fontWeight:700,cursor:'pointer'}}>🗑</button>
+                        </td>}
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>}
+        </div>
+      )}
+
       {dupGroups.length>0&&(
         <div style={{marginBottom:12,padding:'10px 14px',borderRadius:10,border:'1px solid #fca5a5',background:'#fef2f2'}}>
           <div style={{fontSize:12,fontWeight:700,color:'#991b1b',marginBottom:4}}>
@@ -318,6 +439,11 @@ export default function CustomerSpecsPage() {
           {customers.map(c=><option key={c}>{c}</option>)}
         </select>
         <button onClick={load} style={{padding:'4px 12px',borderRadius:6,border:'1px solid #e5e7eb',background:'#fff',fontSize:11,cursor:'pointer'}}>↻</button>
+        <button onClick={()=>{const next=!showAliases;setShowAliases(next);if(next)loadAliases()}}
+          title="One customer, many spellings — map the names that get typed on runs onto the name the spec is filed under"
+          style={{padding:'4px 12px',borderRadius:6,border:'1px solid #1f4e79',fontSize:11,cursor:'pointer',background:showAliases?'#dbeafe':'#fff',color:showAliases?'#1e3a8a':'#374151',fontWeight:600}}>
+          ↪ {showAliases?'Hide aliases':'Customer aliases'}
+        </button>
         <button onClick={()=>setShowHistory(h=>!h)}
           style={{padding:'4px 12px',borderRadius:6,border:'1px solid #d97706',fontSize:11,cursor:'pointer',background:showHistory?'#fef3c7':'#fff',color:showHistory?'#92400e':'#374151',fontWeight:600}}>
           📜 {showHistory?'Hide Historical':'Historical'}

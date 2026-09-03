@@ -2,6 +2,84 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-03 — Gustav (Customer name aliases: one customer, many spellings)
+
+**Files changed:** `supabase/migrations/20260903_002_customer_aliases.sql` (new), `lib/quality/customer-spec-match.ts`, `lib/quality/customer-spec-match.test.ts`, `app/(app)/quality/pasteuriser/page.tsx`, `app/(app)/quality/customer-specs/page.tsx`
+
+### The gap normalisation could not close
+
+Normalising customer names fixed case and whitespace, so `ENTYCE`, `Entyce ` and
+`Entyce` all resolve to one another. What it cannot do is match two genuinely
+**different** strings — and production runs carry exactly that:
+
+| Run recorded as | Spec filed under | Was resolving to |
+|---|---|---|
+| `EWTC` (2 runs) | `East West Tea Company (EWTC)` | **generic spec** |
+| `Afri Tea and Coffee Blenders` (1) | `Afri Tea and Coffee's` | **generic spec** |
+| `Lipton&Infusion (Ekaterra)` (1) | `Lipton and Infusion` | **generic spec** |
+
+Four pasteuriser runs were being judged against the generic limits instead of
+their customer's own, silently, with nothing on screen to say so.
+
+**Renaming the spec row cannot fix this.** Both spellings are already in the run
+data and both keep being typed, so any single name fixes some runs and breaks
+others. An alias absorbs the variation instead of fighting it.
+
+### `qms.customer_aliases`
+
+`alias → canonical_name`, where the canonical name is whatever the spec row
+carries. Resolution order becomes: clean the typed name → look it up here →
+match against `customer_specs` exactly as before.
+
+- **Unique index on the normalised alias**, so `ewtc` and `EWTC ` cannot both be
+  added — the same duplicate class this whole exercise exists to remove.
+- **A check constraint forbids a self-referential alias** (a name mapping to
+  itself), which would be a no-op that only creates confusion.
+- **Deliberately not a foreign key** to `customer_specs.customer`: a customer can
+  be aliased before its spec exists — that is the useful case, since the alias is
+  what reveals the spec is missing — and `customer_specs` has no unique key on
+  customer alone, because one customer legitimately holds many spec rows.
+- Seeded with the three aliases above plus three spec-sheet spellings
+  (`East West Tea Company`, `East West Tea Co.`, `Alveus GmbH`).
+
+**Applied to staging and production.** The table is additive and nothing on
+`main` reads it yet, so applying it before the code lands is safe — and means
+the code works the moment it deploys rather than needing a follow-up.
+
+### Resolution
+
+`resolveCustomerName()` / `wasAliased()` / `pickSpecForCustomerWithAliases()` in
+the shared matcher, with **17 new tests** (59 in that file).
+
+**A single hop, deliberately.** Chaining (`a → b → c`) invites cycles and makes
+"which spec applies?" depend on traversal order — precisely the class of problem
+this area is being dug out of. The add form refuses an alias pointing at a name
+that is itself an alias, and says what to point at instead.
+
+A blank or self-referential row is ignored rather than trusted. The DB
+constraints forbid both, but a wrong answer here would be a real customer
+resolving to `''` and silently taking the generic spec.
+
+### UI
+
+- **Pasteuriser New Run** shows `↪ matched to "East West Tea Company (EWTC)"`
+  when the spec was reached through an alias. A silent substitution is exactly
+  the thing that needs to be visible.
+- **Reload Spec** resolves through aliases too, reading them fresh on the click
+  rather than from state — a stale list would change which spec a reload picks.
+  Its "no spec on file" confirm now names both the typed and the resolved name.
+- **Customer Specs → `↪ Customer aliases`** manages them: add, delete, and a
+  **`⚠ no spec on file`** warning against any alias whose target has no spec row,
+  since that alias resolves but still lands on the generic spec.
+
+### Verified
+
+All four affected runs now reach their customer's spec (confirmed by query
+against production). The 12 runs for customers with no spec at all are unchanged
+— they correctly use the generic spec, and the aliases panel makes that visible.
+
+Tests **348/348**. Lint 3021, at baseline. Typecheck introduces nothing.
+
 ## 2026-09-03 — Gustav (QC entry: a bulk density or moisture that cannot be real is now refused)
 
 **Files changed:** `lib/quality/plausibility.ts` (new), `lib/quality/plausibility.test.ts` (new), `app/(app)/quality/granule/page.tsx`, `app/(app)/quality/pasteuriser/page.tsx`

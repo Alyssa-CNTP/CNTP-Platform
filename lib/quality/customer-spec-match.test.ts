@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   normCustomerKey, cleanCustomerName, isGenericSpec, docVersionOf,
   pickSpecForCustomer, findDuplicateSpec, customerOptions,
+  resolveCustomerName, wasAliased, pickSpecForCustomerWithAliases,
 } from './customer-spec-match'
 
 // The rows below are the real shape of the duplicates found in production
@@ -304,5 +305,126 @@ describe('pickSpecForCustomer — latest document wins', () => {
     ], 'Entyce')
     expect(r.spec?.id).toBe(2)
     expect(r.via).toBe('customer')
+  })
+})
+
+// The aliases below are the real rows seeded by migration 20260903_002, each
+// one backed by production runs that were resolving to the generic spec.
+const ALIASES = [
+  { alias: 'EWTC',                         canonical_name: 'East West Tea Company (EWTC)' },
+  { alias: 'East West Tea Company',        canonical_name: 'East West Tea Company (EWTC)' },
+  { alias: 'East West Tea Co.',            canonical_name: 'East West Tea Company (EWTC)' },
+  { alias: 'Afri Tea and Coffee Blenders', canonical_name: "Afri Tea and Coffee's" },
+  { alias: 'Lipton&Infusion (Ekaterra)',   canonical_name: 'Lipton and Infusion' },
+  { alias: 'Alveus GmbH',                  canonical_name: 'Alveus' },
+]
+
+describe('resolveCustomerName', () => {
+  it('maps the short form onto the spec row name (2 real runs)', () => {
+    expect(resolveCustomerName('EWTC', ALIASES)).toBe('East West Tea Company (EWTC)')
+  })
+  it('maps the spec-sheet spelling onto the spec row name', () => {
+    expect(resolveCustomerName('East West Tea Company', ALIASES)).toBe('East West Tea Company (EWTC)')
+    expect(resolveCustomerName('East West Tea Co.', ALIASES)).toBe('East West Tea Company (EWTC)')
+  })
+  it('maps the group name onto the customer name (1 real run)', () => {
+    expect(resolveCustomerName('Lipton&Infusion (Ekaterra)', ALIASES)).toBe('Lipton and Infusion')
+  })
+  it('handles an apostrophe in the canonical name', () => {
+    expect(resolveCustomerName('Afri Tea and Coffee Blenders', ALIASES)).toBe("Afri Tea and Coffee's")
+  })
+
+  it('matches the alias case-insensitively and through stray whitespace', () => {
+    // The whole point: a QC typing 'ewtc ' must land in the same place.
+    for (const v of ['ewtc', 'EWTC ', ' Ewtc', 'E W T C'.replace(/ /g, '')]) {
+      expect(resolveCustomerName(v, ALIASES)).toBe('East West Tea Company (EWTC)')
+    }
+  })
+
+  it('returns the name unchanged when there is no alias', () => {
+    expect(resolveCustomerName('Kunitaro', ALIASES)).toBe('Kunitaro')
+    expect(resolveCustomerName('Entyce', ALIASES)).toBe('Entyce')
+  })
+
+  it('cleans the name even when no alias applies', () => {
+    expect(resolveCustomerName('  Kunitaro  ', ALIASES)).toBe('Kunitaro')
+    expect(resolveCustomerName('Afri  Tea', ALIASES)).toBe('Afri Tea')
+  })
+
+  it('is safe with no alias list at all', () => {
+    expect(resolveCustomerName('EWTC', null)).toBe('EWTC')
+    expect(resolveCustomerName('EWTC', [])).toBe('EWTC')
+    expect(resolveCustomerName('EWTC', undefined)).toBe('EWTC')
+  })
+
+  it('returns empty for a blank name — generic stays generic', () => {
+    for (const v of ['', '  ', null, undefined]) expect(resolveCustomerName(v, ALIASES)).toBe('')
+  })
+
+  it('does NOT chain aliases — a single hop only', () => {
+    // a -> b -> c would make the answer depend on traversal order, and invites
+    // cycles. One hop, deterministically.
+    const chained = [
+      { alias: 'A', canonical_name: 'B' },
+      { alias: 'B', canonical_name: 'C' },
+    ]
+    expect(resolveCustomerName('A', chained)).toBe('B')
+  })
+
+  it('ignores a self-referential or blank alias row rather than returning empty', () => {
+    // The DB constraints forbid both, but a wrong answer here would be a real
+    // customer resolving to '' and silently taking the generic spec.
+    expect(resolveCustomerName('Kunitaro', [{ alias: 'Kunitaro', canonical_name: 'kunitaro ' }])).toBe('Kunitaro')
+    expect(resolveCustomerName('Kunitaro', [{ alias: 'Kunitaro', canonical_name: '' }])).toBe('Kunitaro')
+    expect(resolveCustomerName('Kunitaro', [{ alias: 'Kunitaro', canonical_name: null }])).toBe('Kunitaro')
+  })
+})
+
+describe('wasAliased', () => {
+  it('is true only when the name actually changed', () => {
+    expect(wasAliased('EWTC', ALIASES)).toBe(true)
+    expect(wasAliased('Kunitaro', ALIASES)).toBe(false)
+    expect(wasAliased('  Kunitaro ', ALIASES)).toBe(false)   // cleaning is not aliasing
+    expect(wasAliased('', ALIASES)).toBe(false)
+  })
+})
+
+describe('pickSpecForCustomerWithAliases', () => {
+  const rows = [
+    { id: 48, customer: 'East West Tea Company (EWTC)', doc_no: 'IPS-EAS-002' },
+    { id: 38, customer: '', doc_no: null },
+  ]
+
+  it('finds the customer spec for a run recorded as EWTC — previously generic', () => {
+    const r = pickSpecForCustomerWithAliases(rows, 'EWTC', ALIASES)
+    expect(r.spec?.id).toBe(48)
+    expect(r.via).toBe('customer')
+    expect(r.aliased).toBe(true)
+    expect(r.resolvedCustomer).toBe('East West Tea Company (EWTC)')
+  })
+
+  it('without the alias list the same run still falls back to generic', () => {
+    // Guards the regression: this is the behaviour before the alias table.
+    const r = pickSpecForCustomerWithAliases(rows, 'EWTC', [])
+    expect(r.spec?.id).toBe(38)
+    expect(r.via).toBe('generic')
+    expect(r.aliased).toBe(false)
+  })
+
+  it('leaves an un-aliased customer exactly as before', () => {
+    const r = pickSpecForCustomerWithAliases(rows, 'Nobody', ALIASES)
+    expect(r.via).toBe('generic')
+    expect(r.aliased).toBe(false)
+    expect(r.resolvedCustomer).toBe('Nobody')
+  })
+
+  it('still reports superseded documents through an alias', () => {
+    const many = [
+      { id: 1, customer: 'East West Tea Company (EWTC)', doc_no: 'IPS-EAS-001' },
+      { id: 2, customer: 'East West Tea Company (EWTC)', doc_no: 'IPS-EAS-002' },
+    ]
+    const r = pickSpecForCustomerWithAliases(many, 'EWTC', ALIASES)
+    expect(r.spec?.doc_no).toBe('IPS-EAS-002')
+    expect(r.superseded.map(x => x.doc_no)).toEqual(['IPS-EAS-001'])
   })
 })
