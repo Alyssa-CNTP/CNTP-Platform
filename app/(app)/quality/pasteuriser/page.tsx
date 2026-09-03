@@ -77,20 +77,33 @@ function pastBdUnit(family?: string) {
 // so every reload is diffed field by field: shown before it is applied, again
 // after, and kept on the audit entry.
 type PastSpecChange = { key: string; label: string; from: string; to: string }
+type PastSpecReload = {
+  at?: string
+  by?: string
+  doc_no?: string | null
+  spec_id?: string | number | null
+  was_final?: boolean
+  cleared_result?: string | null
+  // Optional because entries logged before the diff was tracked have no
+  // `changes` key at all — which is a different fact from an empty array, and
+  // the renderers below keep them apart.
+  changes?: PastSpecChange[]
+}
+type PastSpecLimits = Record<string, unknown> | null | undefined
 
 // '' / null / undefined all mean "no limit set" and must compare equal —
 // otherwise the first reload of a batch created before a field existed reads as
 // changing every one of them. Numbers compare numerically so '20' and '20.0'
 // are the same limit, not a change.
-function pastSpecBlank(v: any) { return v === null || v === undefined || String(v).trim() === '' }
-function pastSpecValsEqual(a: any, b: any) {
+function pastSpecBlank(v: unknown) { return v === null || v === undefined || String(v).trim() === '' }
+function pastSpecValsEqual(a: unknown, b: unknown) {
   if (pastSpecBlank(a) && pastSpecBlank(b)) return true
   if (pastSpecBlank(a) !== pastSpecBlank(b)) return false
   const na = parseFloat(String(a)), nb = parseFloat(String(b))
   if (!isNaN(na) && !isNaN(nb)) return na === nb
   return String(a).trim() === String(b).trim()
 }
-function pastSpecShow(v: any) { return pastSpecBlank(v) ? '—' : String(v).trim() }
+function pastSpecShow(v: unknown) { return pastSpecBlank(v) ? '—' : String(v).trim() }
 
 // Only the fractions this family actually reports — listing >40 for a
 // non-Rosehips batch would show a permanent "— → —" row.
@@ -108,8 +121,8 @@ function pastSpecFields(family?: string): { key: string; label: string }[] {
   return out
 }
 
-function diffPastSpecs(oldBS: any, newBS: any, family?: string): PastSpecChange[] {
-  const o = oldBS || {}, n = newBS || {}
+function diffPastSpecs(oldBS: PastSpecLimits, newBS: PastSpecLimits, family?: string): PastSpecChange[] {
+  const o: Record<string, unknown> = oldBS || {}, n: Record<string, unknown> = newBS || {}
   return pastSpecFields(family)
     .filter(f => !pastSpecValsEqual(o[f.key], n[f.key]))
     .map(f => ({ key: f.key, label: f.label, from: pastSpecShow(o[f.key]), to: pastSpecShow(n[f.key]) }))
@@ -122,11 +135,11 @@ function pastSpecChangeLines(changes: PastSpecChange[]) {
 // The alert on reload is transient — anyone opening the batch afterwards (the
 // Lab Manager re-reviewing it, most of all) still needs to see that the spec
 // moved and what moved. spec_reloads is the record; this renders the latest.
-function lastPastSpecReload(b: any) {
+function lastPastSpecReload(b: Batch | null | undefined): PastSpecReload | null {
   const rs = b?.spec_reloads
   return Array.isArray(rs) && rs.length ? rs[rs.length - 1] : null
 }
-function pastSpecReloadTooltip(r: any) {
+function pastSpecReloadTooltip(r: PastSpecReload): string {
   const when = r?.at ? new Date(r.at).toLocaleString('en-ZA', { timeZone: 'Africa/Johannesburg' }) : 'unknown time'
   const head = `Spec reloaded ${when}${r?.by ? ` by ${r.by}` : ''}${r?.doc_no ? ` — ${r.doc_no}` : ''}`
   // undefined and [] mean different things: the first is a reload logged before
@@ -134,7 +147,7 @@ function pastSpecReloadTooltip(r: any) {
   const body = !Array.isArray(r?.changes)
     ? 'Change detail was not recorded for this reload.'
     : r.changes.length
-      ? r.changes.map((c: any) => `• ${c.label}: ${c.from} → ${c.to}`).join('\n')
+      ? r.changes.map(c => `• ${c.label}: ${c.from} → ${c.to}`).join('\n')
       : 'No limit changed.'
   const cleared = r?.was_final ? `\n\nCleared previous result: ${r.cleared_result ?? '(unknown)'} — sent back for review.` : ''
   return `${head}\n\n${body}${cleared}`
@@ -241,6 +254,10 @@ interface Batch {
   allocated_by?:   string
   approved_by?:    string
   oos_flags?:      any[]
+  // Append-only record of every "Reload Spec" against this batch — see
+  // reloadSpecFor(). Declared here rather than reached through `as any` so the
+  // diff rendering is type-checked.
+  spec_reloads?:   PastSpecReload[]
   created_at:      string
 }
 
@@ -1667,7 +1684,7 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
           // spec was this judged against, and when did that change?" long
           // after the fact. Appended, never overwritten.
           spec_reloads: [
-            ...((x as any).spec_reloads || []),
+            ...(x.spec_reloads || []),
             { at: nowIso, by: whoAmI(), doc_no: spec.doc_no ?? null, spec_id: spec.id ?? null, was_final: wasFinal, cleared_result: wasFinal ? x.final_result : null, changes: rowChanges },
           ],
         }
@@ -2326,13 +2343,13 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                                     // re-specced twice needs to show both, or the
                                     // record cannot answer which limits it was
                                     // judged against at any given point.
-                                    const rs: any[] = Array.isArray((b as any).spec_reloads) ? (b as any).spec_reloads : []
+                                    const rs: PastSpecReload[] = b.spec_reloads ?? []
                                     if (!rs.length) return null
                                     return (
                                       <div className="rounded-lg border border-warn/30 bg-warn/5 p-3 space-y-2" onClick={e => e.stopPropagation()}>
                                         <div className="text-[11px] font-bold text-warn">🔄 Spec reloaded after this run</div>
                                         {rs.map((r, i) => {
-                                          const ch: any[] | null = Array.isArray(r.changes) ? r.changes : null
+                                          const ch = Array.isArray(r.changes) ? r.changes : null
                                           return (
                                             <div key={i} className="text-[10px] text-text-muted">
                                               <div>
@@ -2345,7 +2362,7 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                                                 : ch.length === 0
                                                   ? <div className="italic">No limit changed.</div>
                                                   : <ul className="mt-0.5 ml-3 list-disc">
-                                                      {ch.map((c: any, j: number) => (
+                                                      {ch.map((c, j) => (
                                                         <li key={j}><span className="font-semibold text-text">{c.label}</span>: {c.from} → {c.to}</li>
                                                       ))}
                                                     </ul>}

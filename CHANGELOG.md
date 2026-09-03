@@ -568,6 +568,15 @@ Verified with 19 assertions run against the real source functions (blank/number
 equivalence, per-family column sets and units, diff selection, tooltip
 rendering, legacy entries).
 
+**Follow-up — CI lint ratchet.** The first cut of this used `any` for the spec
+maps and reload entries, which pushed lint errors 13 over the baseline and
+failed CI. Fixed by typing it properly rather than raising the baseline: a
+`PastSpecReload` type, `spec_reloads?: PastSpecReload[]` declared on `Batch` (so
+the diff rendering is type-checked instead of reaching through `as any`), and
+`unknown` on the value comparators. That also removed two pre-existing `as any`
+casts, so `LINT_ERROR_BASELINE` in `.github/workflows/ci.yml` is **lowered 3026
+→ 3024** per the ratchet rule in ARCHITECTURE.md §8.
+
 ## 2026-09-02 — Gustav (Pasteuriser: reload spec from History and on finalised runs)
 
 **Files changed:** `app/(app)/quality/pasteuriser/page.tsx`, `app/(app)/quality/customer-specs/page.tsx`
