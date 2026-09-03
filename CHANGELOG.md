@@ -534,6 +534,87 @@ is applied, `allocateBagSerial()` returns `source: 'local'` for every call.
 
 ---
 
+## 2026-09-03 — Gustav (COA: generation blocked on missing results, cancel, post-sign-off edits, manager-only delete)
+
+**Files changed:** `lib/quality/coa-gating.ts` (new), `lib/quality/coa-gating.test.ts` (new), `app/(app)/quality/coa/page.tsx`, `.github/workflows/ci.yml`
+
+Four changes to the COA Generator. The two gating rules moved into
+`lib/quality/coa-gating.ts` with **17 tests** — both are quality decisions with
+real consequences, and neither was testable inside a 1300-line component.
+
+### 1. A COA cannot be generated with a result missing
+
+The "Outstanding" list already existed but was **advisory only**, so a COA could
+be printed stating an analysis that had no result behind it. Print and Export PDF
+are now **disabled** while any included analysis has no result.
+
+The blocker names each gap and offers **both** ways out, because a blocking
+message with no route forward just gets worked around:
+
+- **Capture in …** — a link to the tab that owns the result (Lab Results → Micro
+  / Residue / PA / Heavy Metals / MOSH-MOAH / Chlorate-Perchlorate / Glyphosate,
+  or Pasteuriser for the batch and the sieve samples).
+- **Drop from COA** — unticks the section. A COA that does not claim an analysis
+  owes no result for it, so dropping is a legitimate resolution.
+
+The pasteuriser batch is the one gap that **cannot** be dropped — it is the COA's
+own subject, and without it there is no grade, moisture or bulk density.
+
+Section → source is now a **table**, not a chain of ifs, so a new section cannot
+be added to the COA without declaring where its result is captured. That table
+also pins the one non-obvious pairing: `cutLength` is satisfied by
+`found.sieving` — the section is named for what it prints, the flag for where the
+data lives.
+
+### 2. Cancel
+
+Two kinds of mistake, two answers:
+
+- **↩ Cancel changes** — discards unsaved edits and reloads the batch from source,
+  restoring what the data actually says. Saved order details and sign-offs are
+  untouched.
+- **✕ Close COA** — clears the screen and starts over. Nothing is deleted.
+
+Both clear the autosaved draft, or the discarded text would come straight back
+through the draft-recovery banner on the next visit.
+
+### 3. Editable after sign-off, without re-approval
+
+Once **both** managers have signed, the results, specifications and the choice of
+included sections are **locked** — they are what the two signatures approved.
+
+**Date of issue, invoice number, order number, quantity (Kg's) and quantity of
+bags stay editable**, and saving them does **not** send the COA back to the
+Quality Manager: `saveOrderDetails()` writes `qms.coa_orders` only and never
+touches `qms.coa_signoffs`. These are commercial fields, routinely filled in by
+logistics after the analyses are done, and none of them changes what was tested.
+
+**`destination` is deliberately excluded.** It names the customer, and the
+customer decides which sieve spec the analyses were checked against — changing it
+after sign-off would silently re-point the certificate at a different
+specification. It shows as locked with that reason on hover.
+
+Nothing locks at the *lab* signature alone: locking there would leave the Quality
+Manager unable to correct anything before signing.
+
+The locked inputs are `readOnly` and visibly so. They previously would have kept
+accepting focus and keystrokes while the mutators dropped them, which reads as a
+broken screen rather than a final document.
+
+**All QCs can still make a COA** — the page gate is unchanged
+(`can_save_lab_results || can_approve_runs`), and the post-sign-off logistics
+fields are editable by any QC, not just the managers.
+
+### 4. Delete is the two managers only
+
+The delete control was gated on `isLab || isQa || **isFullAdmin**`. The admin
+bypass is removed: deleting a generated COA destroys a quality record, and the
+people accountable for the document are the two who signed it. The check is also
+**repeated inside `deleteCoa()`** — hiding a button is not an authorisation check.
+
+Lint 3021, one below baseline; `LINT_ERROR_BASELINE` lowered 3022 → 3021.
+Tests **275/275**. Typecheck introduces nothing.
+
 ## 2026-09-03 — Gustav (Spec doc numbers: latest document wins; Chromium added to heavy metals)
 
 **Files changed:** `supabase/migrations/20260903_001_customer_specs_doc_no_and_dedupe.sql` (new), `lib/quality/heavy-metals.ts` (new), `lib/quality/heavy-metals.test.ts` (new), `lib/quality/customer-spec-match.ts`, `lib/quality/customer-spec-match.test.ts`, `app/(app)/quality/customer-specs/page.tsx`, `app/(app)/quality/pasteuriser/page.tsx`, `app/(app)/quality/coa/page.tsx`, `components/quality/CoaSpecsTab.tsx`, `app/(app)/quality/lab-results/page.tsx`, `app/api/upload/route.ts`
