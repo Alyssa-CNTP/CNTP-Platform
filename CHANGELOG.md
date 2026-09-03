@@ -2,6 +2,57 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-03 — Alyssa (Changeover opens its own session — closing the row-doubling mechanism)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`
+
+Staging still carried the mid-shift grade/variant **Changeover** button that
+**production removed on 2026-09-01**. The two branches had fixed the same
+incident differently: production deleted the button and added
+`self-heal-reconcile.ts`; staging kept the button and made the self-heal
+idempotent via `debag-reconcile.ts`. Staging never received production's lesson,
+which is recorded in `main`:
+
+> It called `addProduction()`, which appends a batch to this session and makes it
+> active. SievingCapture is mounted `key={active.id}`, so that remounted it
+> against a brand-new EMPTY batch — and its debag self-heal, scoped to
+> `session_id` with no batch discriminator, then read the whole session as
+> "missing from this batch" and copied all of it in. persist() wrote that back,
+> doubling the session's debagging rows on every changeover: 8, 16, 32, 64, 128.
+> **2026-09-01 morning reached 262 rows for 17 bags actually debagged.**
+
+### What changed
+
+`confirmGradeChangeover()` now **always** opens a new session, for every
+variant, rather than appending a sibling batch for non-organic material. The
+organic path already did this; it is now the only path.
+
+The old reasoning — that the leftover is still part of the same run, so it
+should share a session and a combined mass balance — is true on the floor and
+false in the database. One session holding two batches is precisely the shape
+the session-scoped self-heal cannot tell apart. A separate session **removes the
+mechanism** instead of patching it.
+
+- `addProduction()` is gone; its only caller was the changeover. Its useful half
+  — snapshotting the closing mass balance into the append-only checks trail — is
+  kept as `snapshotChangeoverBalance()`.
+- Unsaved edits are **flushed before** the switch: `startNewProduction()` drops
+  the current session from local state, so anything not yet persisted would have
+  gone with it.
+- The confirm dialog no longer tells the operator the leftover "carries into the
+  new batch". It now says the record closes with its own mass balance, and that
+  leftover can still be bagged out under the new grade — recorded against the
+  new record. The old wording would have promised the opposite of the behaviour.
+
+`otherBatchRows` and `debag-reconcile.ts` stay: changeover no longer creates
+sibling batches, but sessions captured before this change still hold them.
+
+**Verification:** 348 unit tests, both hard gates clean, 36 type errors
+(unchanged), `next build` compiles. **Not yet exercised on the floor** — needs a
+real changeover to confirm the new session opens and no rows duplicate.
+
+---
+
 ## 2026-09-03 — Alyssa (HOTFIX 2: debagging rows silently stopped saving)
 
 **Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `supabase/migrations/20260903_002_prod_debagging_unique_index_drift.sql` (new)
