@@ -18,7 +18,7 @@ import { useAuth } from '@/lib/auth/context'
 import { getDb } from '@/lib/supabase/db'
 import { checkOutlier } from '@/lib/utils/outliers'
 import { isNegative } from '@/lib/utils/validation'
-import { exportGranuleRun } from '@/lib/utils/exportExcel'
+import { exportGranuleRun, exportGranuleRuns } from '@/lib/utils/exportExcel'
 import { useQcNames } from '@/lib/hooks/useQcNames'
 import { useDraftAutosave, readDraft, clearDraft } from '@/lib/hooks/useDraftAutosave'
 import QCNameField from '@/components/shared/QCNameField'
@@ -1767,6 +1767,18 @@ function GranuleHistoryTab({ runs, onReopen, onUpdateBatch }: { runs: any[]; onR
       <div className="flex gap-2 items-center flex-wrap">
         <input placeholder="🔍 Filter by batch number…" value={filterBatch} onChange={e => setFilterBatch(e.target.value)} className={`${inp} w-56`} />
         <span className="text-[11px] text-text-muted">{filtered.length} finalised run{filtered.length !== 1 ? 's' : ''}</span>
+        {/* Exports what is CURRENTLY FILTERED, not everything — the batch
+            filter above is how you scope a period or a product for a customer,
+            and an export that ignored it would be a different question's
+            answer. */}
+        <button onClick={() => exportGranuleRuns(filtered, GRANULE_SIEVES,
+                  `GranuleLine_History_${filtered.length}runs_${new Date().toISOString().slice(0,10)}.xlsx`,
+                  `Granule Line — History · ${filtered.length} finalised run${filtered.length === 1 ? '' : 's'}${filterBatch ? ` · filter "${filterBatch}"` : ''}`)}
+          disabled={filtered.length === 0}
+          title={filtered.length === 0 ? 'No runs to export' : `Export all ${filtered.length} run${filtered.length === 1 ? '' : 's'} shown — one row per run plus every sample`}
+          className="px-3 py-1.5 rounded-lg border border-ok/30 bg-ok/8 text-ok text-[11px] font-semibold cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed">
+          ⬇ Export all ({filtered.length})
+        </button>
         <div className="ml-auto flex gap-2">
           {([['batches','📋 Batch History'],['bydate','📅 By Date']] as const).map(([v, l]) => (
             <button key={v} onClick={() => setGranHistTab(v)}
@@ -2484,6 +2496,16 @@ export default function GranulePage() {
                   <span className="font-bold text-[12px] text-warn">Granule line has {currentRuns.length} open run{currentRuns.length !== 1 ? 's' : ''}</span>
                   <span className="ml-2 text-[11px] text-text-muted">— finalise completed batches when done</span>
                 </div>
+                {/* Every open run in one workbook. The per-run ⬇ Excel button on
+                    the selected run is unchanged; this is the across-runs view,
+                    which is what you need mid-shift to compare batches. */}
+                <button onClick={() => exportGranuleRuns(currentRuns, GRANULE_SIEVES,
+                          `GranuleLine_ActiveRuns_${currentRuns.length}_${new Date().toISOString().slice(0,10)}.xlsx`,
+                          `Granule Line — Active runs · ${currentRuns.length} open run${currentRuns.length === 1 ? '' : 's'}`)}
+                  title={`Export all ${currentRuns.length} active run${currentRuns.length === 1 ? '' : 's'} — one row per run plus every sample`}
+                  className="ml-auto px-3 py-1.5 rounded-lg border border-ok/30 bg-ok/8 text-ok text-[11px] font-semibold cursor-pointer whitespace-nowrap">
+                  ⬇ Export active runs ({currentRuns.length})
+                </button>
               </div>
             )}
 
