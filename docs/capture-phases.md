@@ -6,12 +6,12 @@ status table in the same commit as the work.
 
 ---
 
-## Status — 2026-09-02
+## Status — 2026-09-03
 
 | Phase | State | Outstanding |
 |---|---|---|
 | **0** Guardrails | **Open** | Item 7 only: `20260901_001_prod_bagging_unique_index_drift.sql` is written but applied **nowhere** |
-| **1** Populate core | **Open** | `lookupSerial` still duplicated (`GranuleCapture:234`, `RefiningCapture:173`); `n()` down from 11 files to 7 |
+| **1** Populate core | **Open** | `lookupSerial` still duplicated (`GranuleCapture:234`, `RefiningCapture:173`); `n()` down from 11 files to 7. Variant identity **done** — `lib/core/variants.ts` |
 | **1B** Serialization | **Built, not shipped** | `NEXT_PUBLIC_FF_DB_SERIAL_ALLOCATION` unset — no section is on it, so the duplicate-serial race is still live |
 | **2** Typed contracts | **Done, regressed** | Duck-typing gone, `assertNever` in place. But `as any` in the capture page went **57 → 61** |
 | **3** Feature boundary | **Done** | Guardrails in place and proven by tests |
@@ -21,6 +21,17 @@ status table in the same commit as the work.
 | **7** Flip reads | Not started | `e2e/concurrent-save.spec.ts` still `test.fixme` |
 
 ### Deviations from the plan, and why
+
+- **`lib/core/variants.ts` changed behaviour, where Phase 1 says "verbatim".** Phase 1 is
+  specified as a mechanical move pinned by characterisation tests. Variant identity could
+  not be moved that way: there were four copies (`capture-config.isOrganicVariant`,
+  `bucket-elevator.variantFamily`, `scan-utils.variantFamily`, and a private one in
+  `validate-scan`) and they returned **opposite answers** for `ORG`, `RA-ORG`, `O`, `RO`
+  and `FO` — the short codes and id suffixes the app itself produces. There was no single
+  current behaviour to characterise. Separately, `manufacturing.ts` mapped `FC` to
+  `FT-ORG`, putting Fairtrade *Conventional* into the *organic* pool, against every other
+  map in the repo. Unified on the normalising version, made fail-closed (unknown returns
+  `null`, never `'conventional'`), and pinned by `lib/core/variants.test.ts`.
 
 - **`features/acumatica-items` was built out of sequence.** Phase 3 says "No feature
   moved yet"; Phase 6 designates `supervisor-adjustments` as the first feature module.

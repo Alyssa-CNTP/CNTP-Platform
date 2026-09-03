@@ -86,10 +86,12 @@ export const VARIANT_OPTIONS: { value: DbVariant; short: string; label: string }
 // Organic variants (incl. Fairtrade Organic, which doesn't contain the word
 // "Organic") must never have their mass balance combined with a different
 // batch's — segregation is a certification requirement, not a preference.
-const ORGANIC_VARIANTS = new Set<DbVariant>(['Organic', 'RA-Organic', 'FT-ORG'])
-export function isOrganicVariant(v: string | null | undefined): boolean {
-  return !!v && ORGANIC_VARIANTS.has(v as DbVariant)
-}
+//
+// This used to be an exact Set lookup on the raw string, which meant the short
+// codes the capture forms themselves send — 'ORG', 'RA-ORG', 'O', 'RO', 'FO' —
+// all reported false, i.e. organic material read as conventional. It now
+// delegates to core, which normalises first. See lib/core/variants.ts.
+export { isOrganicVariant } from '@/lib/core/variants'
 
 // Full Acumatica variant word → live-types short code used by getAcumaticaCode().
 // Fairtrade keeps its own short label. It used to fold onto ORG/CON, which

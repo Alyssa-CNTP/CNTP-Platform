@@ -2,6 +2,82 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-03 — Alyssa (Variant identity becomes core; four copies of the segregation rule reconciled)
+
+**Files changed:** `lib/core/variants.ts` (new), `lib/core/variants.test.ts` (new),
+`lib/constants/manufacturing.ts`, `lib/production/capture-config.ts`,
+`lib/production/bucket-elevator.ts`, `lib/production/carryover.ts`,
+`lib/production/scan-utils.ts`, `lib/production/validate-scan.ts`,
+`components/production/capture/GranuleCapture.tsx`,
+`components/production/capture/SievingCapture.tsx`,
+`app/(app)/production/capture/[section]/page.tsx`, `docs/capture-phases.md`
+
+The changeover shipped earlier today relies on "the carry-over ledger is keyed on
+variant family, so organic and conventional cannot combine". That claim was only
+as good as the function deciding the family — and there were **four** of them,
+which did not agree.
+
+### The disagreement
+
+`variantFamily` / `isOrganicVariant` existed in four places. On the short codes
+and id suffixes the app itself produces, two of them returned the opposite
+answer:
+
+| input | capture-config + bucket-elevator | scan-utils |
+|---|---|---|
+| `ORG` | conventional | organic |
+| `RA-ORG` | conventional | organic |
+| `O` | conventional | organic |
+| `RO` | conventional | organic |
+| `FO` | conventional | organic |
+
+`capture-config.isOrganicVariant` was an exact `Set` lookup on the raw string
+with no normalisation, and `bucket-elevator.variantFamily` was built on it. The
+carry-over ledger — the one keyed on family specifically so the pools cannot
+combine — was on the wrong side of that table.
+
+### `FC` meant Fairtrade Organic
+
+Separately, `lib/constants/manufacturing.ts` mapped the id suffix `FC` to
+`FT-ORG`. Every other map in the repo (`bom.ts`, `blends/page.tsx`,
+`acumatica-standards.ts`, `features/acumatica-items`, `database.types.ts`) reads
+`-FC` as Fairtrade **Conventional**, and `05RMDE-FC` is a real Acumatica item
+called "Raw Material Dry: Export Fairtrade Conventional". The root cause was
+that `manufacturing.ts`'s `Variant` union had no `FT-CON` to map it to, so it
+was pointed at the nearest Fairtrade entry. That is the more dangerous
+direction: organic is the certified claim. `FT-CON` added; `FC` now maps to it.
+
+### One owner, and it fails closed
+
+`lib/core/variants.ts` is now the only place that decides what a variant is and
+which pool it belongs to. The other four are thin delegates.
+
+`variantFamily()` returns `null` for anything it does not recognise. It never
+guesses `'conventional'`, which is what the ledger copy did — so an unset or
+mistyped variant was silently filed as conventional. `mayPoolMaterial()` asks
+the positive question ("is this definitely conventional?") so that an
+unrecognised variant refuses rather than passes; the changeover now uses it in
+place of `!isOrganicVariant(...)`, and the button and the handler are gated on
+the identical predicate.
+
+### The compiler found four more of these
+
+Making the return type nullable turned up four further call sites that had been
+relying on the fail-open default — the Granule dust carry-over ledger (three)
+and Sieving's bucket-elevator lock. All were reachable: `active.variant` is `''`
+when the batch record has no variant set, which the old code read as
+conventional.
+
+- `outstandingCarryover()` / `outstandingBucketElevator()` return 0 for an
+  unknown family — offer no carry-over, rather than the conventional pool's.
+- `logCarryover()` / `logBucketElevator()` throw rather than write a guessed
+  family.
+- Granule's Confirm carry-over button stays enabled and explains on press.
+- Sieving's bucket lock does **not** mark the ledger entry as logged when the
+  family is unknown, so the amount stays owed and the next lock retries.
+
+42 new unit tests; 398 pass in total. Type errors unchanged at the 36 baseline.
+
 ## 2026-09-03 — Alyssa (Changeover: supervisor-only, single-fire, clean slate by default)
 
 **Files changed:** `app/(app)/production/capture/[section]/page.tsx`

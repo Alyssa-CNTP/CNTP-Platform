@@ -396,10 +396,22 @@ export function SievingCapture({
   // row would race on the stale `value` closure and silently undo each other).
   function bucketLockPatch(): Partial<SievingData> {
     const kg = n(value.spillage?.[0]?.kg ?? '')
-    const shouldLog = !value.bucketLedgerLogged && kg > 0
+    // `family` is null when the run's variant isn't one we recognise — an
+    // unset variant on the batch record, most often. The ledger is keyed on
+    // family precisely so the two pools cannot combine, so there is nothing
+    // safe to write; it used to default to 'conventional'. Deliberately NOT
+    // marked as logged, so it is still owed rather than quietly written off,
+    // and the next lock retries once the variant is set.
+    const shouldLog = !value.bucketLedgerLogged && kg > 0 && family !== null
     if (shouldLog) {
       logBucketElevator(bucketIsOutput ? 'generated' : 'consumed',
         { sectionId, variantFamily: family, kg, date, shift, sessionId })
+        .catch(err => console.error('[bucket-elevator] carry-over not logged', err))
+    } else if (!value.bucketLedgerLogged && kg > 0) {
+      console.error(
+        `[bucket-elevator] ${kg} kg not logged: variant ${JSON.stringify(variantWord)} is not recognised, ` +
+        `so it cannot be filed as conventional or organic. Set the variant on the batch record.`,
+      )
     }
     return { bucketSecured: true, ...(shouldLog ? { bucketLedgerLogged: true } : {}) }
   }

@@ -41,6 +41,7 @@ import { sectionKindFor, assertNever, type SectionKind } from '@/lib/core/types/
 import { productionTotals, sumProductionTotals, withSessionAdjustments,
   type ProductionTotals, type AnyBalanceData } from '@/lib/core/mass-balance'
 import { logBucketElevator, outstandingBucketElevator, variantFamily } from '@/lib/production/bucket-elevator'
+import { mayPoolMaterial, isOrganicVariant } from '@/lib/core/variants'
 import { upperCode } from '@/lib/production/normalize-code'
 import { dbDate } from '@/lib/production/db-date'
 import { CleaningPanel } from '@/components/production/capture/CleaningPanel'
@@ -52,7 +53,7 @@ import { normalizeBatch } from '@/lib/production/batch-key'
 import { ensureCheckRecord, appendCheckEvent, loadCheckRecord } from '@/lib/production/checks-db'
 import { machineChecksFor } from '@/lib/production/checks-config'
 import { cleanersOnDuty } from '@/lib/production/cleaner-roster'
-import { sectionMeta, makeSerial, massBalanceToleranceKg, VARIANT_OPTIONS, variantToShort, DESTINATION_OPTIONS, isOrganicVariant } from '@/lib/production/capture-config'
+import { sectionMeta, makeSerial, massBalanceToleranceKg, VARIANT_OPTIONS, variantToShort, DESTINATION_OPTIONS } from '@/lib/production/capture-config'
 import { LineChat } from '@/components/production/capture/LineChat'
 import { getMySignatureStatus, type MySignatureStatus } from '@/lib/production/employee-signature'
 import type { Operator, ShiftAssignment } from '@/lib/supabase/database.types'
@@ -1969,10 +1970,16 @@ function CaptureScreen() {
         : 0
       await snapshotChangeoverBalance()
       try { await flushSave() } catch { /* the snapshot and the new record still proceed */ }
-      if (carryMaterial && leftoverKg > 0 && active?.variant && !isOrganicVariant(active.variant)) {
+      // mayPoolMaterial(), not !isOrganicVariant(): the negated form permits the
+      // carry-over whenever the variant is merely UNRECOGNISED, which is the one
+      // case that most deserves a stop. This asks the positive question — is this
+      // definitely conventional — so an unknown variant refuses. See
+      // lib/core/variants.ts.
+      const carryFamily = mayPoolMaterial(active?.variant) ? variantFamily(active?.variant) : null
+      if (carryMaterial && leftoverKg > 0 && carryFamily) {
         try {
           await logBucketElevator('generated', {
-            sectionId, variantFamily: variantFamily(active.variant), kg: leftoverKg,
+            sectionId, variantFamily: carryFamily, kg: leftoverKg,
             date: dateParam, shift, sessionId,
             note: 'Changeover — material continued into the next record by supervisor',
           })
@@ -2081,9 +2088,13 @@ function CaptureScreen() {
                   <p className="text-[13px] text-text-muted">
                     Leftover raw material can still be bagged out as Blocks / Heavy Sticks / Indent Sticks under the new grade — it is just recorded against the new record rather than carried across.
                   </p>
-                  <p className="text-[12px] text-text-muted">
-                    If the leftover has <strong className="text-text">not</strong> all been bagged out and physically continues into the next run, use the second option — it carries the balance forward as material in.
-                  </p>
+                  {/* Only promise the second option where it is actually
+                      offered — same predicate as the button below. */}
+                  {mayPoolMaterial(active.variant) && (
+                    <p className="text-[12px] text-text-muted">
+                      If the leftover has <strong className="text-text">not</strong> all been bagged out and physically continues into the next run, use the second option — it carries the balance forward as material in.
+                    </p>
+                  )}
                 </>
               )}
             </div>
@@ -2098,8 +2109,14 @@ function CaptureScreen() {
                   leftover has not all been bagged out, and NEVER for organic —
                   organic and conventional are separate physical pools and must
                   not combine (§5). Kept visually secondary to the clean start,
-                  which is what happens on almost every changeover. */}
-              {!isOrganicVariant(active.variant) && (
+                  which is what happens on almost every changeover.
+
+                  Gated on mayPoolMaterial(), the identical predicate the handler
+                  uses, so the button cannot be offered for a case the handler
+                  will then refuse (ARCHITECTURE.md §4 — gate validation on the
+                  same condition as the render). An unrecognised variant hides
+                  it, same as organic. */}
+              {mayPoolMaterial(active.variant) && (
                 <button onClick={() => confirmGradeChangeover(true)} disabled={changeoverBusy}
                   className="w-full px-4 py-2.5 rounded-xl border border-stone-200 text-stone-600 text-[13px] font-medium hover:border-brand hover:text-brand transition-colors disabled:opacity-60 disabled:cursor-not-allowed">
                   Continue leftover material into the new record

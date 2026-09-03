@@ -11,6 +11,10 @@
  *   Always call normaliseVariant() before writing to bag_tags.
  * ─────────────────────────────────────────────────────────────────────────────
  */
+import {
+  normaliseVariant as coreNormaliseVariant,
+  variantSuffix as coreVariantSuffix,
+} from '@/lib/core/variants'
 
 // ── VARIANT CODES ─────────────────────────────────────────────────────────────
 // These EXACTLY match the Acumatica Variant field values and the
@@ -22,6 +26,10 @@ export const VARIANTS = {
   RA_CONVENTIONAL: 'RA-Conventional',
   RA_ORGANIC:      'RA-Organic',
   FT_ORG:          'FT-ORG',
+  // FT-CON was missing here while database.types.ts, capture-config.ts and the
+  // bag_tags CHECK constraint all had it, which is how 'FC' came to be mapped
+  // onto FT-ORG below — there was no FT-CON to map it to.
+  FT_CON:          'FT-CON',
 } as const
 
 export type Variant = typeof VARIANTS[keyof typeof VARIANTS]
@@ -37,44 +45,20 @@ export const VARIANT_OPTIONS: { value: Variant; label: string; suffix: string }[
 // The short codes used in UI dropdowns (CON, ORG etc) and the ID suffix (-C, -O etc)
 // both map to the canonical full-word Acumatica variant.
 // This mirrors production.normalise_variant() in SQL.
+//
+// The table itself now lives in lib/core/variants.ts — there were four copies of
+// variant identity across the app and they disagreed on the app's own short
+// codes. These two functions stay as thin delegates so existing imports keep
+// working; add new spellings to core, not here.
 export function normaliseVariant(v: string | null | undefined): Variant | null {
-  if (!v) return null
-  const map: Record<string, Variant> = {
-    // Full words — pass through
-    'Conventional':    'Conventional',
-    'Organic':         'Organic',
-    'RA-Conventional': 'RA-Conventional',
-    'RA-Organic':      'RA-Organic',
-    'FT-ORG':          'FT-ORG',
-    // Short codes the app forms send
-    'CON':    'Conventional',
-    'ORG':    'Organic',
-    'RA-CON': 'RA-Conventional',
-    'RA-ORG': 'RA-Organic',
-    // ID suffixes
-    'C':  'Conventional',
-    'O':  'Organic',
-    'RC': 'RA-Conventional',
-    'RO': 'RA-Organic',
-    'FO': 'FT-ORG',
-    'FC': 'FT-ORG',
-    // Legacy
-    'RA Conventional': 'RA-Conventional',
-    'RA Organic':      'RA-Organic',
-  }
-  return map[v.trim()] ?? null
+  return coreNormaliseVariant(v)
 }
 
-// Derive Acumatica inventory ID suffix from variant
+// Derive Acumatica inventory ID suffix from variant.
+// The 'C' fallback is pre-existing behaviour and only reachable for a null or
+// unrecognised variant; every value of the Variant union resolves.
 export function variantSuffix(v: Variant | null | undefined): string {
-  const map: Record<Variant, string> = {
-    'Conventional':    'C',
-    'Organic':         'O',
-    'RA-Conventional': 'RC',
-    'RA-Organic':      'RO',
-    'FT-ORG':          'FO',
-  }
-  return v ? (map[v] ?? 'C') : 'C'
+  return coreVariantSuffix(v) ?? 'C'
 }
 
 // ── BAG TAG STATUS ─────────────────────────────────────────────────────────────
