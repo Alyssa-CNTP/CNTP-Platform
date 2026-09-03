@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef } from 'react'
+import { variantForDb } from '@/lib/core/variants'
 import { Plus, Trash2, Printer, PenLine, Package, PackageCheck, Scale, Sparkles, Lock, Pencil, Check, AlertTriangle } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { voidBagTag, fetchTopUpEventsForSession, type TopUpEvent } from '@/lib/production/scan-utils'
@@ -451,7 +452,7 @@ export function SievingCapture({
     try {
       await getDb().schema('production').from('bag_tags').upsert({
         serial_number: serial, section_id: 'sieving', session_id: null,
-        product_type: p.productType, variant: variantWord || null, weight_kg: n(p.weight),
+        product_type: p.productType, variant: variantForDb(variantWord), weight_kg: n(p.weight),
         lot_number: bag.lot_number || null, acumatica_id: p.code || null,
         status: 'in_stock', consumed: false, printed_at: now, is_open: !!p.leaveOpen,
         destination: grade,

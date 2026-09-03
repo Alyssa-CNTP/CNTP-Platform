@@ -25,6 +25,7 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react'
+import { variantForDb } from '@/lib/core/variants'
 import {
   Plus, Trash2, Package, PackageCheck, Lock, Pencil, Check, Search, X,
   AlertTriangle, Droplets, Layers, CheckCircle2, Printer, PenLine,
@@ -35,7 +36,7 @@ import {
 import { getDb } from '@/lib/supabase/db'
 import { printLabelAuto } from '@/lib/production/label-print'
 import { variantToShort, LABEL_PRINTING_ENABLED, isImplausibleWeight, isOpenBagWeight, OPEN_BAG_WEIGHT_THRESHOLD_KG } from '@/lib/production/capture-config'
-import { markBagConsumed, sanitizeSerial, voidBagTag } from '@/lib/production/scan-utils'
+import { lookupBagForAutofill, markBagConsumed, sanitizeSerial, voidBagTag } from '@/lib/production/scan-utils'
 import { SECTION_CONFIG } from '@/lib/production/live-types'
 import type { OutputBag, Variant as ShortVariant } from '@/lib/production/live-types'
 import { useItemCodes } from '@/lib/production/use-item-codes'
@@ -231,23 +232,7 @@ interface SystemBag {
   weight_kg: number | null; lot_number: string | null; created_at: string | null
 }
 
-async function lookupSerial(serial: string) {
-  if (!serial.trim()) return null
-  try {
-    const { data } = await getDb().schema('production').from('bag_tags')
-      .select('lot_number, weight_kg, product_type, variant').eq('serial_number', serial.trim()).maybeSingle()
-    if (!data) return null
-    return {
-      lot_number: data.lot_number || '', weight_kg: data.weight_kg ? String(data.weight_kg) : '',
-      product_type: data.product_type || '', variant: data.variant || '',
-    }
-  } catch (e) {
-    // A thrown error is a real DB/network failure, not an absent bag — log it so
-    // "serial only, fields blank" can be told apart from a truly-unregistered bag.
-    console.error('[GranuleCapture] serial lookup failed', e)
-    return null
-  }
-}
+
 
 function dustKeyForProduct(productType: string): string {
   const hit = DUST_COLUMNS.find(c => c.productType.toLowerCase() === productType.toLowerCase())
@@ -317,7 +302,7 @@ function DustInputRow({
   const triggerLookup = useCallback(async () => {
     if (!row.serial.trim()) return
     setLooking(true)
-    const result = await lookupSerial(row.serial)
+    const result = await lookupBagForAutofill(row.serial, 'GranuleCapture')
     setLooking(false)
     if (result) {
       if (result.product_type) onUpdate('dustKey', dustKeyForProduct(result.product_type))
@@ -461,7 +446,7 @@ function BlendCard({
       if (row.inputMode === 'manual') {
         getDb().schema('production').from('bag_tags').upsert({
           serial_number: row.serial, section_id: 'granule', session_id: null,
-          product_type: dustProductType(row.dustKey), variant: variantWord || null,
+          product_type: dustProductType(row.dustKey), variant: variantForDb(variantWord),
           weight_kg: n(row.weight) || null, lot_number: row.lot || null,
           status: 'consumed', consumed_at_section: 'granule', location_updated_at: t,
         } as any, { onConflict: 'serial_number' }).catch(() => {})
@@ -724,7 +709,7 @@ export function GranuleCapture({
     try {
       await getDb().schema('production').from('bag_tags').upsert({
         serial_number: serial, section_id: 'granule', session_id: null, product_type: item,
-        variant: variantWord || null, weight_kg: n(outWeight), lot_number: lot || null,
+        variant: variantForDb(variantWord), weight_kg: n(outWeight), lot_number: lot || null,
         acumatica_id: acCode?.inventoryId || null, status: 'in_stock', consumed: false, printed_at: now,
         is_open: isOpenBagWeight(n(outWeight)),
       } as any, { onConflict: 'serial_number' })
@@ -793,7 +778,7 @@ export function GranuleCapture({
     try {
       await getDb().schema('production').from('bag_tags').upsert({
         serial_number: serial, section_id: 'granule', session_id: null, product_type: dustType,
-        variant: variantWord || null, weight_kg: weight, lot_number: lot || null,
+        variant: variantForDb(variantWord), weight_kg: weight, lot_number: lot || null,
         acumatica_id: acCode?.inventoryId || null, status: 'in_stock', consumed: false, printed_at: now,
       } as any, { onConflict: 'serial_number' })
       await getDb().schema('production').from('scan_events').insert({

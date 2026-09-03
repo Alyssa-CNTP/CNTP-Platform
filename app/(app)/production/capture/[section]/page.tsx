@@ -41,7 +41,7 @@ import { sectionKindFor, assertNever, type SectionKind } from '@/lib/core/types/
 import { productionTotals, sumProductionTotals, withSessionAdjustments,
   type ProductionTotals, type AnyBalanceData } from '@/lib/core/mass-balance'
 import { logBucketElevator, outstandingBucketElevator, variantFamily } from '@/lib/production/bucket-elevator'
-import { mayPoolMaterial, isOrganicVariant } from '@/lib/core/variants'
+import { mayPoolMaterial, isOrganicVariant, variantForDb } from '@/lib/core/variants'
 import { upperCode } from '@/lib/production/normalize-code'
 import { dbDate } from '@/lib/production/db-date'
 import { CleaningPanel } from '@/components/production/capture/CleaningPanel'
@@ -108,11 +108,23 @@ function productionMatchKey(p: Production, sectionId: string): string {
   }
   return `${p.variant ?? ''}::${p.grade ?? ''}`
 }
+// A draft can be months old and can come from localStorage, so its variant is
+// whatever the app wrote at the time — a short code, or a spelling that predates
+// the current CHECK constraint. Canonicalise on the way back in, so what the
+// operator sees and what any later save writes are the same exact word.
+// See lib/core/variants.ts.
+function withCanonicalVariants(ps: Production[]): Production[] {
+  return (ps ?? []).map(p => {
+    const canonical = variantForDb(p?.variant) ?? ''
+    return canonical === p?.variant ? p : { ...p, variant: canonical }
+  })
+}
+
 // Variant comes from the assignment when a supervisor set one; grade is always a
 // deliberate choice on the floor. Both start blank when unknown so the operator
 // must pick them — capture never silently defaults to Export / Conventional.
 const emptyProduction = (sectionId: string, variant?: string | null, lot?: string | null, grade: string = ''): Production =>
-  ({ id: crypto.randomUUID(), variant: variant || '', grade, lot: lot || '',
+  ({ id: crypto.randomUUID(), variant: variantForDb(variant) ?? '', grade, lot: lot || '',
      data: emptyDataFor(sectionKindFor(sectionId)) })
 
 // The blank data shape for a section. Exhaustive on the section kind, so adding
@@ -483,10 +495,10 @@ function CaptureScreen() {
           p?.data?.inputs?.length > 0 || p?.data?.outputA != null || p?.data?.outputB != null
         )
       if (d?.productions?.length) {
-        setProductions(d.productions as Production[])
+        setProductions(withCanonicalVariants(d.productions as Production[]))
       } else if (d?.outputs) {
         // legacy single-production draft → wrap as one production
-        setProductions([{ id: crypto.randomUUID(), variant: aVariant, grade: 'A', lot: aLot, data: d as SievingData }])
+        setProductions([{ id: crypto.randomUUID(), variant: variantForDb(aVariant) ?? '', grade: 'A', lot: aLot, data: d as SievingData }])
       } else {
         // DB draft is empty — check localStorage recovery before defaulting to blank
         let recovered = false
@@ -494,7 +506,7 @@ function CaptureScreen() {
           const lsRaw = localStorage.getItem(`capture_draft_${sectionId}_${dateParam}_${shift}`)
           if (lsRaw) {
             const ls = JSON.parse(lsRaw)
-            if (ls?.productions?.length) { setProductions(ls.productions); recovered = true }
+            if (ls?.productions?.length) { setProductions(withCanonicalVariants(ls.productions)); recovered = true }
           }
         } catch {}
         if (!recovered) setProductions([emptyProduction(sectionId, null, aLot)])
@@ -507,7 +519,7 @@ function CaptureScreen() {
           if (lsRaw) {
             const ls = JSON.parse(lsRaw)
             if (ls?.productions?.length && ls.productions.some((p: any) => p?.data?.debag?.length > 0 || p?.data?.outputs?.length > 0 || p?.data?.inputs?.length > 0 || p?.data?.outputA != null || p?.data?.outputB != null)) {
-              setProductions(ls.productions)
+              setProductions(withCanonicalVariants(ls.productions))
             }
           }
         } catch {}
@@ -846,7 +858,7 @@ function CaptureScreen() {
         operator_names:    opNames.length ? opNames : null,
         supervisor_name:   verifiedOp?.role === 'production_supervisor' ? (verifiedOp.display_name || verifiedOp.name) : null,
         lot_number:        productions[0]?.lot || assignment?.lot_number || null,
-        variant:           productions[0]?.variant || assignment?.variant || null,
+        variant:           variantForDb(productions[0]?.variant || assignment?.variant),
         production_orders: assignment?.production_orders ?? null,
         created_by:        user?.id ?? null,
       } as any).select('id').single()
@@ -906,7 +918,7 @@ function CaptureScreen() {
   async function openRun(po: string | null, variant: string, grade: string): Promise<string | null> {
     const { data: row } = await getDb().schema('production').from('production_runs').insert({
       section_id: sectionId, production_day: dateParam,
-      production_order: po, variant: (variant || null) as any,
+      production_order: po, variant: variantForDb(variant) as any,
       grade: (needsGrade || isGranule || isBlenderRun || isPasteuriserRun) ? (grade || null) : null,
       lot_number: assignment?.lot_number ?? null,
       status: 'open', created_by: user?.id ?? null,
@@ -1103,7 +1115,7 @@ function CaptureScreen() {
             bag_serial_no: r.inputMode !== 'manual' ? r.serial || null : null,
             notes: r.inputMode === 'manual' ? r.serial || null : null,
             lot_number: r.lot || prod.lot || null,
-            product_type: r.productType || null, variant: r.variant || prod.variant || null,
+            product_type: r.productType || null, variant: variantForDb(r.variant || prod.variant),
             kg_nett: n(r.weight),
             delivery_date: r.deliveryDate || null, is_spillage: false,
           })
@@ -1120,7 +1132,7 @@ function CaptureScreen() {
               bag_serial_no: r.inputMode !== 'manual' ? r.serial || null : null,
               notes: [`blend ${bl.blendNo}`, r.inputMode === 'manual' ? r.serial : null].filter(Boolean).join(' · ') || null,
               lot_number: r.lot || prod.lot || null,
-              product_type: dustProductType(r.dustKey), variant: r.variant || prod.variant || null,
+              product_type: dustProductType(r.dustKey), variant: variantForDb(r.variant || prod.variant),
               kg_nett: n(r.weight), is_spillage: false,
             })
           })
@@ -1135,7 +1147,7 @@ function CaptureScreen() {
             grade: r.destination || null,
             notes: r.inputMode === 'manual' ? r.serial : null,
             lot_number: r.lot || prod.lot || null,
-            product_type: r.productType || null, variant: r.variant || prod.variant || null,
+            product_type: r.productType || null, variant: variantForDb(r.variant || prod.variant),
             kg_nett: n(r.weight), is_spillage: false,
           })
         })
@@ -1150,7 +1162,7 @@ function CaptureScreen() {
             bag_serial_no: r.inputMode !== 'manual' ? r.serial || null : null,
             notes: [r.stream === 'postsieve' ? 'post-sieve' : null, r.inputMode === 'manual' ? r.serial : null].filter(Boolean).join(' · ') || null,
             lot_number: r.lot || pd.batchNo || prod.lot || null,
-            product_type: r.productType || null, variant: r.variant || prod.variant || null,
+            product_type: r.productType || null, variant: variantForDb(r.variant || prod.variant),
             kg_nett: n(r.weight), is_spillage: false,
           })
         })
@@ -1161,7 +1173,7 @@ function CaptureScreen() {
         // own type on the production order, not both as "Bucket Elevator".
         sd.spillage.forEach((r, idx) => {
           if (n(r.kg) === 0) return
-          rows.push({ session_id: sid, bag_no: bagNo++, product_type: idx === 0 ? 'Bucket Elevator' : 'Machine Spillage', variant: prod.variant, kg_nett: n(r.kg), is_spillage: true })
+          rows.push({ session_id: sid, bag_no: bagNo++, product_type: idx === 0 ? 'Bucket Elevator' : 'Machine Spillage', variant: variantForDb(prod.variant), kg_nett: n(r.kg), is_spillage: true })
         })
         sd.debag.forEach(r => {
           if (n(r.nett) === 0) return
@@ -1174,7 +1186,7 @@ function CaptureScreen() {
             // Was '500kg Farm Bag' — kept unchanged on historical rows (Acumatica
             // actually reads batch numbers + total weight, not this string, so the
             // rename is safe going forward without a backfill).
-            product_type: 'Farm Bag', variant: prod.variant,
+            product_type: 'Farm Bag', variant: variantForDb(prod.variant),
             kg_gross: n(r.gross) || null, kg_nett: n(r.nett),
             delivery_date: r.delivery_date || null, grade: r.grade || null,
             // Real capture instant, immune to persist()'s delete+reinsert restamping
@@ -1201,7 +1213,7 @@ function CaptureScreen() {
               session_id: sid, bag_no: bagNo++, output_group: grp,
               bag_serial_no: b.serial, lot_number: prod.lot || null,
               product_type: b.productType, acumatica_id: b.code || null,
-              variant: prod.variant,
+              variant: variantForDb(prod.variant),
               kg: n(b.weight),
               // The exact moment this bag was added on the Refining (sieving
               // tower) screen — set client-side as RefiningOutputBag.logged_at
@@ -1220,7 +1232,7 @@ function CaptureScreen() {
           rows.push({
             session_id: sid, bag_no: bagNo++, output_group: null,
             bag_serial_no: b.serial, lot_number: b.lot || prod.lot || null,
-            product_type: b.item, acumatica_id: b.code || null, variant: prod.variant,
+            product_type: b.item, acumatica_id: b.code || null, variant: variantForDb(prod.variant),
             kg: n(b.weight), bagging_time: b.logged_at || null,
           })
         })
@@ -1229,7 +1241,7 @@ function CaptureScreen() {
           rows.push({
             session_id: sid, bag_no: bagNo++, output_group: null,
             bag_serial_no: r.serial, lot_number: prod.lot || null,
-            product_type: r.dustType, acumatica_id: r.code || null, variant: prod.variant,
+            product_type: r.dustType, acumatica_id: r.code || null, variant: variantForDb(prod.variant),
             kg: n(r.weight),
           })
         })
@@ -1241,7 +1253,7 @@ function CaptureScreen() {
           rows.push({
             session_id: sid, bag_no: bagNo++, output_group: null,
             bag_serial_no: b.serial, lot_number: prod.lot || null,
-            product_type: bomId ? `Blend ${bomId}` : null, acumatica_id: bomId || null, variant: prod.variant,
+            product_type: bomId ? `Blend ${bomId}` : null, acumatica_id: bomId || null, variant: variantForDb(prod.variant),
             kg: n(b.weight), bagging_time: b.logged_at || null,
           })
         })
@@ -1255,7 +1267,7 @@ function CaptureScreen() {
           rows.push({
             session_id: sid, bag_no: bagNo++, output_group: null,
             bag_serial_no: l.serial, lot_number: l.lot || pd.batchNo || prod.lot || null,
-            product_type: l.item || l.kind || null, acumatica_id: l.itemCode || null, variant: prod.variant,
+            product_type: l.item || l.kind || null, acumatica_id: l.itemCode || null, variant: variantForDb(prod.variant),
             kg, bagging_time: l.logged_at || null,
           })
         })
@@ -1265,7 +1277,7 @@ function CaptureScreen() {
           rows.push({
             session_id: sid, bag_no: bagNo++, output_group: null,
             bag_serial_no: r.serial || null, lot_number: pd.batchNo || prod.lot || null,
-            product_type: r.type || null, variant: prod.variant, kg: n(r.weight),
+            product_type: r.type || null, variant: variantForDb(prod.variant), kg: n(r.weight),
           })
         })
       } else if (kind === 'sieving') {
@@ -1275,7 +1287,7 @@ function CaptureScreen() {
           rows.push({
             session_id: sid, bag_no: bagNo++, output_group: 'B',
             bag_serial_no: b.serial, lot_number: b.batch || prod.lot || null, product_type: b.productType,
-            acumatica_id: b.code || null, variant: prod.variant,
+            acumatica_id: b.code || null, variant: variantForDb(prod.variant),
             kg: n(b.weight),
             bagging_time: b.logged_at || null,   // see bagging_time note above
           })
@@ -1323,7 +1335,7 @@ function CaptureScreen() {
     for (const { lot, variant } of lots) {
       const key = normalizeBatch(lot)
       if (!key || byKey.has(key)) continue
-      byKey.set(key, { batch_key: key, display_lot: String(lot), variant: variant ?? null, first_section: sectionId })
+      byKey.set(key, { batch_key: key, display_lot: String(lot), variant: variantForDb(variant), first_section: sectionId })
     }
     if (byKey.size === 0) return map
     const keys = [...byKey.keys()]
@@ -1584,7 +1596,7 @@ function CaptureScreen() {
             outBags.push({
               serial_number: serial, section_id: 'pasteuriser', session_id: sid,
               product_type: line.item || pd.item || 'Rooibos Final Product',
-              variant: p.variant || null, weight_kg: bagW, lot_number: lot,
+              variant: variantForDb(p.variant), weight_kg: bagW, lot_number: lot,
               acumatica_id: line.itemCode || pd.itemCode || null,
               status: 'in_stock', consumed: false,
               batch_id: bidFor(lot) ?? sessionBatchId,

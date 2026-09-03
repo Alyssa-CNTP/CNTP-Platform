@@ -11,7 +11,7 @@ status table in the same commit as the work.
 | Phase | State | Outstanding |
 |---|---|---|
 | **0** Guardrails | **Open** | Item 7 only: `20260901_001_prod_bagging_unique_index_drift.sql` is written but applied **nowhere** |
-| **1** Populate core | **Open** | `lookupSerial` still duplicated (`GranuleCapture:234`, `RefiningCapture:173`); `n()` down from 11 files to 7. Variant identity **done** — `lib/core/variants.ts` |
+| **1** Populate core | **Done** | `n()`, `metrics`, `serials`, mass-balance, variant identity, `lookupSerial` all extracted — see the `n()` note below |
 | **1B** Serialization | **Built, not shipped** | `NEXT_PUBLIC_FF_DB_SERIAL_ALLOCATION` unset — no section is on it, so the duplicate-serial race is still live |
 | **2** Typed contracts | **Done, regressed** | Duck-typing gone, `assertNever` in place. But `as any` in the capture page went **57 → 61** |
 | **3** Feature boundary | **Done** | Guardrails in place and proven by tests |
@@ -21,6 +21,23 @@ status table in the same commit as the work.
 | **7** Flip reads | Not started | `e2e/concurrent-save.spec.ts` still `test.fixme` |
 
 ### Deviations from the plan, and why
+
+- **`n()` is finished; the two remaining numeric helpers are NOT copies of it, and must
+  not be merged into it.** The status line used to say "down from 11 files to 7", which
+  was counting every local `const n = ...`. Only two still match on the comma-decimal
+  parse, and both differ where it matters:
+  `granule-quality.ts`'s `num()` returns `number | null` so a missing QC reading stays
+  distinguishable from a genuine 0 — folding it into `n()` would average "no moisture
+  reading" as 0%; `shift-report-builder.ts`'s `num()` is null-safe and finite-checked,
+  which `n()` deliberately is not (see the pinned quirk in `num.ts`). Three numeric
+  parsers that answer different questions is not the duplication ARCHITECTURE §1A
+  describes.
+- **`lookupSerial` was deduplicated to `scan-utils.lookupBagForAutofill()`, not migrated
+  onto `validateBagScan()`.** The Phase 1 checklist says migrate. That would be a
+  behaviour change on the floor — `validateBagScan` additionally refuses a consumed bag,
+  a cross-variant bag and a finished product, and Refining and Granule run none of those
+  checks today. It is worth doing (ARCHITECTURE §5: a pick list and a scan of the same
+  bag must agree) but it belongs in its own change, not folded into a deduplication.
 
 - **`lib/core/variants.ts` changed behaviour, where Phase 1 says "verbatim".** Phase 1 is
   specified as a mechanical move pinned by characterisation tests. Variant identity could

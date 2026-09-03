@@ -69,6 +69,48 @@ export function useSerialLookup(
   }, [serial])
 }
 
+// ── lookupBagForAutofill ─────────────────────────────────────────────────────
+// The single "read a bag_tags row so the operator does not retype it" helper.
+//
+// It existed twice, byte-for-byte apart from the console.error prefix, as a
+// private `lookupSerial` in GranuleCapture.tsx and RefiningCapture.tsx —
+// ARCHITECTURE.md §1A and the Phase 1 checklist both name these two copies.
+//
+// This is deliberately AUTOFILL ONLY, not validation. `validateBagScan()` in
+// validate-scan.ts additionally refuses a consumed bag, a cross-variant bag and
+// a finished product; Refining and Granule do not run those checks today, and
+// switching them on changes what the floor is allowed to scan. That migration
+// is worth making, but on its own, not folded into a deduplication.
+export interface BagAutofill {
+  lot_number:   string
+  weight_kg:    string
+  product_type: string
+  variant:      string
+}
+
+export async function lookupBagForAutofill(serial: string, who = 'capture'): Promise<BagAutofill | null> {
+  if (!serial.trim()) return null
+  try {
+    const { data } = await getDb().schema('production').from('bag_tags')
+      .select('lot_number, weight_kg, product_type, variant')
+      .eq('serial_number', serial.trim())
+      .maybeSingle()
+    if (!data) return null
+    return {
+      lot_number:   (data as any).lot_number   || '',
+      weight_kg:    (data as any).weight_kg    ? String((data as any).weight_kg) : '',
+      product_type: (data as any).product_type || '',
+      variant:      (data as any).variant      || '',
+    }
+  } catch (e) {
+    // A thrown error is a real DB/network failure, not an absent bag — log it so
+    // "serial only, fields blank" can be told apart from a truly-unregistered
+    // bag when diagnosing a scan problem on the floor.
+    console.error(`[${who}] serial lookup failed`, e)
+    return null
+  }
+}
+
 // ── Standalone markBagConsumed — callable from any form component ─────────────
 // Takes explicit sectionId and sessionId so it works outside SectionCaptureInner.
 export async function markBagConsumed(
