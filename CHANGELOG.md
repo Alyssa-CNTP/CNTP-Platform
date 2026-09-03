@@ -2,6 +2,37 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-03 — Alyssa (PRODUCTION: Blender scans bags in the same way Refining does)
+
+**Files changed:** `components/production/capture/BlenderCapture.tsx`
+
+Promotion to `main` of the Blender scan-in fix. Two things, both needed for the Big
+Blender to scan at all on production:
+
+**1. Scan-first debagging (ported from `staging`, PR #708).** The Blender now has the same
+top-level scan box as Refining and Pasteuriser — the shared `ScanBox` / `BagScanModal` from
+`BagScanIn.tsx`, which was already on production but only wired into Refining. Scan a bag →
+its `bag_tags` record and validity pop up → **Consume into &lt;ingredient&gt;** files it under
+the matching ingredient group in the Debagging tab, decided by the bag's own product type
+(matched against the blend's declared components, or a new "not in recipe" group created for
+it, same mechanism as "+ Add Other"). No pick-the-group-first step. The manual group pick and
+"Add Other" both remain.
+
+**2. One unregistered bag no longer stops all further scanning.** In the add/edit bag modal,
+a `not_found` lookup switches the row to manual entry (`setInputMode('manual')`) and the
+auto-lookup effect was gated on `inputMode !== 'manual'` — with nothing resetting that when a
+*different* serial was entered. So after scanning one bag that isn't in `bag_tags`, every
+later scan in that modal did nothing: no popup, no message (`onChange` cleared `scanMsg` on
+each keystroke, so the stale error vanished too). Enter and the "Look up" button still fired,
+but a hardware scanner sends neither — which is the whole reason the auto-fire exists. The
+gate was really protecting the *mount* case (re-reading `bag_tags` for a row opened for
+editing would overwrite a hand-captured weight or lot), so it now keys on that directly via
+an `openedWithSerial` ref, and all three input paths (typing, scanner burst, camera) go
+through one `changeSerial()` helper that clears the previous bag's verdict.
+
+Scoped deliberately: only `BlenderCapture.tsx`. The Granule trailing-space lot fix that
+shared PR #708, and the rest of the capture work on `staging`, are NOT included.
+
 ## 2026-08-21 — Gustav (COA: fix signature resize distortion, screen/print layout mismatch, and add a "Ready to print" queue + Lab Manager notification)
 
 **Files changed:** `app/(app)/quality/coa/page.tsx`, `app/api/quality/coa-signoff/route.ts`
@@ -564,6 +595,7 @@ and no link from a run to the spec it is actually judged against.
   a hydration mismatch. Only the family is passed, because the filters are exact
   string matches and a batch's customer would filter the list to nothing
   whenever the spec row is the generic blank-customer one.
+
 
 ## 2026-09-02 — Alyssa (The batch list is actually this session's, and the Overview mass balance shows on the afternoon shift)
 
