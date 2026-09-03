@@ -70,6 +70,76 @@ function pastBdUnit(family?: string) {
   return (family || '').toLowerCase() === 'rosehips' ? 'ml/5g' : 'cc/100g'
 }
 
+// ─── Spec reload diff ─────────────────────────────────────────────────────────
+// "Reload Spec" replaces a batch's limits wholesale and, on a finalised batch,
+// clears its approval. Neither the QC pressing the button nor the Lab Manager
+// who gets the batch back can act on that without knowing WHICH limits moved,
+// so every reload is diffed field by field: shown before it is applied, again
+// after, and kept on the audit entry.
+type PastSpecChange = { key: string; label: string; from: string; to: string }
+
+// '' / null / undefined all mean "no limit set" and must compare equal —
+// otherwise the first reload of a batch created before a field existed reads as
+// changing every one of them. Numbers compare numerically so '20' and '20.0'
+// are the same limit, not a change.
+function pastSpecBlank(v: any) { return v === null || v === undefined || String(v).trim() === '' }
+function pastSpecValsEqual(a: any, b: any) {
+  if (pastSpecBlank(a) && pastSpecBlank(b)) return true
+  if (pastSpecBlank(a) !== pastSpecBlank(b)) return false
+  const na = parseFloat(String(a)), nb = parseFloat(String(b))
+  if (!isNaN(na) && !isNaN(nb)) return na === nb
+  return String(a).trim() === String(b).trim()
+}
+function pastSpecShow(v: any) { return pastSpecBlank(v) ? '—' : String(v).trim() }
+
+// Only the fractions this family actually reports — listing >40 for a
+// non-Rosehips batch would show a permanent "— → —" row.
+function pastSpecFields(family?: string): { key: string; label: string }[] {
+  const bd = pastBdUnit(family)
+  const out = [
+    { key: 'moisture_max', label: 'Moisture max (%)' },
+    { key: 'bd_min', label: `BD min (${bd})` },
+    { key: 'bd_max', label: `BD max (${bd})` },
+  ]
+  pastSieveCols(family).forEach(c => {
+    out.push({ key: `${c.key}_min`, label: `${c.label} min (${c.unit})` })
+    out.push({ key: `${c.key}_max`, label: `${c.label} max (${c.unit})` })
+  })
+  return out
+}
+
+function diffPastSpecs(oldBS: any, newBS: any, family?: string): PastSpecChange[] {
+  const o = oldBS || {}, n = newBS || {}
+  return pastSpecFields(family)
+    .filter(f => !pastSpecValsEqual(o[f.key], n[f.key]))
+    .map(f => ({ key: f.key, label: f.label, from: pastSpecShow(o[f.key]), to: pastSpecShow(n[f.key]) }))
+}
+
+function pastSpecChangeLines(changes: PastSpecChange[]) {
+  return changes.map(c => `  • ${c.label}:  ${c.from}  →  ${c.to}`).join('\n')
+}
+
+// The alert on reload is transient — anyone opening the batch afterwards (the
+// Lab Manager re-reviewing it, most of all) still needs to see that the spec
+// moved and what moved. spec_reloads is the record; this renders the latest.
+function lastPastSpecReload(b: any) {
+  const rs = b?.spec_reloads
+  return Array.isArray(rs) && rs.length ? rs[rs.length - 1] : null
+}
+function pastSpecReloadTooltip(r: any) {
+  const when = r?.at ? new Date(r.at).toLocaleString('en-ZA', { timeZone: 'Africa/Johannesburg' }) : 'unknown time'
+  const head = `Spec reloaded ${when}${r?.by ? ` by ${r.by}` : ''}${r?.doc_no ? ` — ${r.doc_no}` : ''}`
+  // undefined and [] mean different things: the first is a reload logged before
+  // the diff was tracked, the second is one that genuinely moved no limit.
+  const body = !Array.isArray(r?.changes)
+    ? 'Change detail was not recorded for this reload.'
+    : r.changes.length
+      ? r.changes.map((c: any) => `• ${c.label}: ${c.from} → ${c.to}`).join('\n')
+      : 'No limit changed.'
+  const cleared = r?.was_final ? `\n\nCleared previous result: ${r.cleared_result ?? '(unknown)'} — sent back for review.` : ''
+  return `${head}\n\n${body}${cleared}`
+}
+
 const PACKAGING_OPTIONS = ['Bulk Bags (500 kg)', '18 kg Bags', 'Vacuum Sealed Boxes']
 
 const SPEC_FAMILIES = ['Rooibos','Green Rooibos','Honeybush','Green Tea','Rosehips']
@@ -1547,7 +1617,6 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
     const warning = wasFinal
       ? `\n\n⚠ This batch is already finalised as "${finalised[0].final_result}"${finalised[0].approved_by ? ` (approved by ${finalised[0].approved_by})` : ''}.\n\nThat approval was made against the OLD spec, so reloading will clear it and send the batch back to the Lab Manager for a new review.`
       : ''
-    if (!confirm(`Reload the current ${b.product_family} ${b.grade} · ${b.variant} spec into this batch?\n\nThis overwrites this batch's spec values with what's saved in Specifications now, and every sample's in-spec check updates immediately.${warning}`)) return
     const ss = spec.sieve_specs ?? {}
     const newBatchSpecs = {
       moisture_max: spec.moisture_max ?? '',
@@ -1561,11 +1630,35 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
       gt60_min: ss.gt60?.min ?? spec.gt60_min ?? '', gt60_max: ss.gt60?.max ?? spec.gt60_max ?? '',
       dust_min: ss.dust?.min ?? spec.dust_min ?? '', dust_max: ss.dust?.max ?? spec.dust_max ?? '',
     }
+
+    // Diff BEFORE asking, so the confirm shows what is actually about to move
+    // rather than a generic "this overwrites your spec values".
+    const changes = diffPastSpecs(b.batch_specs, newBatchSpecs, b.product_family)
+    const anyChanged = targets.some(x => diffPastSpecs(x.batch_specs, newBatchSpecs, x.product_family).length > 0)
+
+    // Nothing moved: say so and stop. Carrying on would clear a perfectly good
+    // approval and put the batch back in the Lab Manager's queue over a reload
+    // that changed no limit at all — the one outcome nobody wants from a button
+    // pressed to check whether the spec had changed.
+    if (!anyChanged) {
+      alert(`This batch is already on the current ${b.product_family} ${b.grade} · ${b.variant} spec${spec.doc_no ? ` (${spec.doc_no})` : ''}.\n\nNo limit differs, so nothing was changed${wasFinal ? ' and the approval is untouched' : ''}.`)
+      return
+    }
+
+    const changeText = changes.length
+      ? `\n\nWhat changes (old → new):\n${pastSpecChangeLines(changes)}`
+      : `\n\nNo limit differs on this record, but another record under batch ${b.batch_number} does — reloading keeps the whole batch on one spec.`
+    if (!confirm(`Reload the current ${b.product_family} ${b.grade} · ${b.variant} spec${spec.doc_no ? ` (${spec.doc_no})` : ''} into this batch?${changeText}\n\nEvery sample's in-spec check updates immediately.${warning}`)) return
+
     const nowIso = new Date().toISOString()
     setBatches(p => {
       const updated = p.map(x => {
         if (!targetIds.has(x.id)) return x
         const wasFinal = !!x.final_result
+        // Diffed per record, not reused from the clicked row — two records of
+        // one batch can have been created at different times and so start from
+        // different limits.
+        const rowChanges = diffPastSpecs(x.batch_specs, newBatchSpecs, x.product_family)
         const next: any = {
           ...x,
           _spec: spec,
@@ -1575,7 +1668,7 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
           // after the fact. Appended, never overwritten.
           spec_reloads: [
             ...((x as any).spec_reloads || []),
-            { at: nowIso, by: whoAmI(), doc_no: spec.doc_no ?? null, spec_id: spec.id ?? null, was_final: wasFinal, cleared_result: wasFinal ? x.final_result : null },
+            { at: nowIso, by: whoAmI(), doc_no: spec.doc_no ?? null, spec_id: spec.id ?? null, was_final: wasFinal, cleared_result: wasFinal ? x.final_result : null, changes: rowChanges },
           ],
         }
         if (wasFinal) {
@@ -1596,9 +1689,12 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
       updated.filter(x => targetIds.has(x.id)).forEach(x => saveBatchToDB(x))
       return updated
     })
-    if (wasFinal) {
-      alert(`Spec reloaded. This batch's previous approval has been cleared and it is back with the Lab Manager for review against the new spec.`)
-    }
+    const summary = changes.length
+      ? `${changes.length} limit${changes.length === 1 ? '' : 's'} changed:\n${pastSpecChangeLines(changes)}`
+      : 'No limit changed on this record.'
+    alert(wasFinal
+      ? `Spec reloaded.\n\n${summary}\n\nThe previous approval has been cleared and this batch is back with the Lab Manager for review against the new spec.`
+      : `Spec reloaded.\n\n${summary}`)
   }
 
   const activeBatch    = batches.find(b => b.id === activeBatchId) || null
@@ -1774,6 +1870,17 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                         className="text-[9px] font-semibold text-info border-b border-dashed border-info/50">
                         📋 View spec
                       </a>
+                      {(() => {
+                        const r = lastPastSpecReload(activeBatch)
+                        if (!r) return null
+                        const n = Array.isArray(r.changes) ? r.changes.length : null
+                        return (
+                          <span className="badge badge-warn text-[9px] cursor-help" title={pastSpecReloadTooltip(r)}>
+                            🔄 Spec reloaded {r.at ? new Date(r.at).toLocaleDateString('en-ZA', { timeZone:'Africa/Johannesburg' }) : ''}
+                            {n !== null && ` · ${n} limit${n === 1 ? '' : 's'} changed`}
+                          </span>
+                        )
+                      })()}
                     </div>
                   </div>
 
@@ -2214,6 +2321,40 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                                       title="Open this product's spec in Customer Specs — to read the limits, or change them and then reload the spec here"
                                       className="px-3 py-1.5 rounded-lg border border-info/30 bg-info/8 text-info text-[11px] font-semibold">📋 View spec</a>
                                   </div>
+                                  {(() => {
+                                    // Full history, not just the latest: a batch
+                                    // re-specced twice needs to show both, or the
+                                    // record cannot answer which limits it was
+                                    // judged against at any given point.
+                                    const rs: any[] = Array.isArray((b as any).spec_reloads) ? (b as any).spec_reloads : []
+                                    if (!rs.length) return null
+                                    return (
+                                      <div className="rounded-lg border border-warn/30 bg-warn/5 p-3 space-y-2" onClick={e => e.stopPropagation()}>
+                                        <div className="text-[11px] font-bold text-warn">🔄 Spec reloaded after this run</div>
+                                        {rs.map((r, i) => {
+                                          const ch: any[] | null = Array.isArray(r.changes) ? r.changes : null
+                                          return (
+                                            <div key={i} className="text-[10px] text-text-muted">
+                                              <div>
+                                                {r.at ? new Date(r.at).toLocaleString('en-ZA', { timeZone:'Africa/Johannesburg' }) : 'unknown time'}
+                                                {r.by ? ` · by ${r.by}` : ''}{r.doc_no ? ` · ${r.doc_no}` : ''}
+                                                {r.was_final && <span className="ml-1 text-warn font-semibold">· cleared "{r.cleared_result ?? 'unknown'}" and sent back for review</span>}
+                                              </div>
+                                              {ch === null
+                                                ? <div className="italic">Change detail was not recorded for this reload.</div>
+                                                : ch.length === 0
+                                                  ? <div className="italic">No limit changed.</div>
+                                                  : <ul className="mt-0.5 ml-3 list-disc">
+                                                      {ch.map((c: any, j: number) => (
+                                                        <li key={j}><span className="font-semibold text-text">{c.label}</span>: {c.from} → {c.to}</li>
+                                                      ))}
+                                                    </ul>}
+                                            </div>
+                                          )
+                                        })}
+                                      </div>
+                                    )
+                                  })()}
                                   {(() => {
                                     // Chronological already (samples are sorted at load — see parseRec()
                                     // above). Date+time in the label so a multi-day batch doesn't collide

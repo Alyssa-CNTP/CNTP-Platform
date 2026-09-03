@@ -2,6 +2,57 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-03 — Gustav (Pasteuriser: show what changed when a spec is reloaded)
+
+**Files changed:** `app/(app)/quality/pasteuriser/page.tsx`
+
+**Reload Spec** replaced a batch's limits wholesale and, on a finalised batch,
+cleared its approval — without ever saying *which* limits moved. Neither the QC
+pressing the button nor the Lab Manager who gets the batch back could act on
+that. Every reload is now diffed field by field:
+
+- The **confirm dialog lists each changed limit as `old → new` before** the
+  reload is applied, so it is a decision rather than a leap.
+- **If no limit differs it says so and stops.** Previously this cleared a
+  perfectly good approval and re-queued the batch over a reload that changed
+  nothing — the worst possible outcome for a button pressed to *check* whether
+  the spec had moved.
+- The post-reload alert repeats the diff.
+- The diff is stored on each `spec_reloads[]` audit entry, **diffed per record**
+  — two records of one batch can have been created at different times and so
+  start from different limits.
+- A **badge in the Active Runs header** shows the last reload, its date and how
+  many limits changed, with the full diff on hover.
+- The **History expanded row renders the whole reload history inline**: when, by
+  whom, which spec doc, every limit that moved, and the verdict that was cleared.
+
+Comparison details that matter, each one a way the diff could have lied:
+
+- `''`, `null` and `undefined` all mean "no limit set" and compare **equal**, or
+  the first reload of a batch created before a field existed would read as
+  changing every limit. `''` vs `'0'` is still a real change — "no limit" and "a
+  limit of zero" are not the same thing.
+- Numbers compare **numerically**, so `'20'` and `'20.0'` are one limit, not two.
+- Only the fractions a family actually reports are diffed (**>40 is Rosehips
+  only**), and BD carries the family's unit — `ml/5g` for Rosehips, `cc/100g`
+  otherwise.
+- An audit entry with no `changes` key (one logged before this shipped) renders
+  as "change detail was not recorded", which is **distinct** from one that
+  recorded an empty diff.
+
+Verified with 19 assertions run against the real source functions (blank/number
+equivalence, per-family column sets and units, diff selection, tooltip
+rendering, legacy entries).
+
+**Follow-up — CI lint ratchet.** The first cut of this used `any` for the spec
+maps and reload entries, which pushed lint errors 13 over the baseline and
+failed CI. Fixed by typing it properly rather than raising the baseline: a
+`PastSpecReload` type, `spec_reloads?: PastSpecReload[]` declared on `Batch` (so
+the diff rendering is type-checked instead of reaching through `as any`), and
+`unknown` on the value comparators. That also removed two pre-existing `as any`
+casts, so `LINT_ERROR_BASELINE` in `.github/workflows/ci.yml` is **lowered 3026
+→ 3024** per the ratchet rule in ARCHITECTURE.md §8.
+
 ## 2026-09-02 — Gustav (Pasteuriser: reload spec from History and on finalised runs)
 
 **Files changed:** `app/(app)/quality/pasteuriser/page.tsx`, `app/(app)/quality/customer-specs/page.tsx`
