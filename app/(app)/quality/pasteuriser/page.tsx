@@ -31,7 +31,8 @@ import { checkOutlier } from '@/lib/utils/outliers'
 import { checkAllPlausibility, bdMeasurementFor } from '@/lib/quality/plausibility'
 import { isNegative } from '@/lib/utils/validation'
 import { useQcNames } from '@/lib/hooks/useQcNames'
-import { cleanCustomerName, pickSpecForCustomer, customerOptions, docVersionOf } from '@/lib/quality/customer-spec-match'
+import { cleanCustomerName, pickSpecForCustomerWithAliases, customerOptions, docVersionOf, resolveCustomerName } from '@/lib/quality/customer-spec-match'
+import type { CustomerAlias } from '@/lib/quality/customer-spec-match'
 import { useDraftAutosave, readDraft, clearDraft } from '@/lib/hooks/useDraftAutosave'
 import QCNameField from '@/components/shared/QCNameField'
 import DraftRecoveryBanner from '@/components/shared/DraftRecoveryBanner'
@@ -586,6 +587,10 @@ function NewBatchModal({ onSave, onClose }: { onSave:(b:any)=>void; onClose:()=>
   // not a problem, unlike specAmbiguous, but worth showing so "why this spec?"
   // has a visible answer.
   const [specSuperseded, setSpecSuperseded] = useState(0)
+  // Non-empty when the typed customer reached its spec through an alias. Shown,
+  // because "this is not the name you typed" is exactly the sort of silent
+  // substitution that needs to be visible.
+  const [specAliasedTo, setSpecAliasedTo] = useState('')
   // 'Generic' has to be a deliberate choice rather than an empty box, or
   // "customer is required" just gets satisfied with whatever is first in the
   // list. See save().
@@ -609,6 +614,14 @@ function NewBatchModal({ onSave, onClose }: { onSave:(b:any)=>void; onClose:()=>
   useEffect(() => {
     db.schema('qms').from('customer_specs').select('product_family, grade, variant, customer')
       .then(({ data }: { data: any[] | null }) => setSpecIndex((data ?? []) as any))
+  }, [])
+  // One customer, many spellings — see qms.customer_aliases. Without this a run
+  // typed as 'EWTC' resolves to the GENERIC spec even though that customer has
+  // its own.
+  const [aliases, setAliases] = useState<CustomerAlias[]>([])
+  useEffect(() => {
+    db.schema('qms').from('customer_aliases').select('alias, canonical_name')
+      .then(({ data }: { data: CustomerAlias[] | null }) => setAliases(data ?? []))
   }, [])
   // The customer list comes from the specs themselves, deduped on a normalised
   // key — so 'Entyce', 'Entyce ' and 'ENTYCE ' offer ONE option, and picking it
@@ -642,7 +655,8 @@ function NewBatchModal({ onSave, onClose }: { onSave:(b:any)=>void; onClose:()=>
         // saved as 'Entyce ' still matches a run for 'Entyce'. The old inline
         // toLowerCase() compare did not, and such a run silently fell through
         // to the generic spec.
-        const picked = pickSpecForCustomer<any>(data, form.customer)
+        const picked = pickSpecForCustomerWithAliases<any>(data, form.customer, aliases)
+        setSpecAliasedTo(picked.aliased ? picked.resolvedCustomer : '')
         setSpecVia(data && data.length ? picked.via : 'none')
         setSpecAmbiguous(picked.ambiguous.length)
         setSpecSuperseded(picked.superseded.length)
@@ -667,7 +681,7 @@ function NewBatchModal({ onSave, onClose }: { onSave:(b:any)=>void; onClose:()=>
         }
       })
       .finally(() => setSpecL(false))
-  }, [form.product_family, form.grade, form.variant, form.customer])
+  }, [form.product_family, form.grade, form.variant, form.customer, aliases])
 
   function save() {
     if (!form.batch_number.trim()) { setErr('Batch number is required'); return }
@@ -794,6 +808,12 @@ function NewBatchModal({ onSave, onClose }: { onSave:(b:any)=>void; onClose:()=>
               {!specLoading && specPreview && specVia === 'generic' && <span className="text-[11px] text-warn font-semibold">⚠ Using the GENERIC spec — no spec on file for {form.customer || 'this customer'}</span>}
               {!specLoading && specPreview && specVia === 'fallback' && <span className="text-[11px] text-warn font-semibold">⚠ No customer or generic spec — showing another row for this product; check the values below</span>}
               {!specLoading && !specPreview && <span className="text-[11px] text-warn">No spec found — enter manually below</span>}
+              {!specLoading && specAliasedTo && (
+                <span className="text-[11px] text-info font-semibold"
+                  title="This customer name is registered as another spelling of the name the spec is filed under. Manage these in Customer Specs → Customer name aliases.">
+                  ↪ matched to &ldquo;{specAliasedTo}&rdquo;
+                </span>
+              )}
               {!specLoading && specSuperseded > 0 && (
                 <span className="text-[11px] text-text-muted"
                   title="This customer has more than one spec document for this product. The highest document number applies; the older ones are kept for reference.">
@@ -1736,13 +1756,17 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
   async function reloadSpecFor(batchId: string) {
     const b = batches.find(x => x.id === batchId)
     if (!b) return
+    // Aliases are read here rather than held in state: this runs on a click, not
+    // on every render, and a stale list would silently change which spec a
+    // reload resolves to.
+    const { data: aliasRows } = await db.schema('qms').from('customer_aliases').select('alias, canonical_name')
     const { data } = await db.schema('qms').from('customer_specs').select('*')
       .ilike('product_family', b.product_family)
       .ilike('grade', b.grade)
       .ilike('variant', b.variant)
     // Same resolution as the New Run modal — one shared implementation, so a
     // reload can never pick a different row than the run was created against.
-    const picked = pickSpecForCustomer<any>(data, b.customer)
+    const picked = pickSpecForCustomerWithAliases<any>(data, b.customer, (aliasRows ?? []) as CustomerAlias[])
     const spec = picked.spec
     if (!spec) { alert(`No spec found for ${b.product_family} ${b.grade} · ${b.variant} — nothing changed.`); return }
     if (picked.ambiguous.length > 1) {
@@ -1753,7 +1777,8 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
       return
     }
     if (picked.via !== 'customer' && (b.customer || '').trim()) {
-      if (!confirm(`No spec on file for "${b.customer}" — the ${picked.via === 'generic' ? 'GENERIC' : 'next available'} spec for ${b.product_family} ${b.grade} · ${b.variant} will be used instead.\n\nContinue?`)) return
+      const looked = picked.aliased ? `"${b.customer}" (matched to "${picked.resolvedCustomer}")` : `"${b.customer}"`
+      if (!confirm(`No spec on file for ${looked} — the ${picked.via === 'generic' ? 'GENERIC' : 'next available'} spec for ${b.product_family} ${b.grade} · ${b.variant} will be used instead.\n\nContinue?`)) return
     }
 
     // A batch number can be split across more than one record (History merges
