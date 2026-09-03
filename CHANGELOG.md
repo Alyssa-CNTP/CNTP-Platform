@@ -2,6 +2,23 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-02 — Alyssa (The Bagging panel's total now adds up to its own rows)
+
+**Files changed:** `app/(app)/production/orders/[id]/page.tsx`, `scripts/verify-output-panel-totals.py` (new)
+
+Reported from the 2 September order: it says the top-ups are in Total output, but the totals do not justify it.
+
+They were in the total — and the **Bagging panel header showed that total over a list containing only the bags**. On 2 September: header `18 217.0 kg`, rows summing to `17 925.0`, with the missing 292 kg being top-ups into 1 September bags shown in a separate panel further down. Depending on which figure you read, the top-ups looked either double-counted or absent. Nothing was wrong with the arithmetic; the panel just asserted an answer its own contents contradicted.
+
+- **The header now shows the bags' own weight**, so it matches the rows beneath it.
+- **The panel foots with the sum in view** — `Bagged out` + `Half-bag top-ups — added into older bags` = `Total output` — the same figure the mass balance uses. Only when there is a top-up to add; otherwise the bags' total *is* the output and a second identical number is noise.
+- The top-up line says those bags were bagged on an earlier day and are not in the count above, which is why the bag count does not move.
+- The per-shift block's `N bags · X kg` now reads `X kg out`, since that figure also includes the shift's top-ups while the count does not.
+
+`scripts/verify-output-panel-totals.py` — 14 checks against the 2 September figures, including the 292 kg gap the old header left, and the no-top-up, top-ups-only and bag-count cases.
+
+---
+
 ## 2026-09-03 — Alyssa (PRODUCTION: Blender scans bags in the same way Refining does)
 
 **Files changed:** `components/production/capture/BlenderCapture.tsx`

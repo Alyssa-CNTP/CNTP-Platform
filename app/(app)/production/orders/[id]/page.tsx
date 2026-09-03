@@ -187,6 +187,15 @@ export default function ProductionOrderDetailPage() {
   const inputRows = debags.filter(d => !isCarriedOut(d) && sameVariant(d))
   const bucketCarryOverKg = debags.filter(isCarriedOut).reduce((s, d) => s + (Number(d.kg_nett) || 0), 0)
   const totalInput  = inputRows.reduce((s, d) => s + (Number(d.kg_nett) || 0), 0)
+  // Total output has TWO parts and the Bagging panel only ever listed one of
+  // them. Its header showed bagsOutputKg -- bags PLUS the half-bag top-up
+  // increments -- over a list containing only the bags, so the panel claimed a
+  // weight its own rows could not add up to and the top-ups appeared to be
+  // counted twice or not at all depending on which number you read. Named
+  // separately here so the panel can show the arithmetic instead of asserting
+  // the answer.
+  const baggedOnlyKg = bags.filter(b => !b.bornViaRebag).reduce((t, b) => t + (b.kg || 0), 0)
+  const freshTopUpKg = freshTopUps.reduce((t, r) => t + r.kg, 0)
   const totalOutput = bagsOutputKg
   const yieldPct = totalInput > 0 ? Math.round((totalOutput / totalInput) * 1000) / 10 : null
   const wholeRunBalance = massBalanceInfo(totalOutput, totalInput)
@@ -398,8 +407,11 @@ export default function ProductionOrderDetailPage() {
 
       {/* Bagging (outputs) — grouped by product type with per-type totals */}
       <Panel>
+        {/* The bags' OWN weight, so the header matches the rows beneath it.
+            Total output is stated at the foot of the panel, where the top-up
+            increment is added in view. */}
         <PanelHead title="Bagging — outputs"
-          meta={`${bags.length} bag${bags.length === 1 ? '' : 's'} · ${bagsOutputKg.toFixed(1)} kg${
+          meta={`${bags.length} bag${bags.length === 1 ? '' : 's'} · ${baggedOnlyKg.toFixed(1)} kg${
             duplicateOutputsHidden > 0 ? ` · ${duplicateOutputsHidden} duplicate row${duplicateOutputsHidden === 1 ? '' : 's'} hidden` : ''
           }`} />
         <PanelBody>
@@ -423,6 +435,32 @@ export default function ProductionOrderDetailPage() {
                 <div className="flex items-center justify-between gap-2 rounded-xl border border-dashed border-surface-rule px-3 py-2.5 text-[12.5px]">
                   <span className="text-text-muted">Bucket elevator — carried to next day <span className="text-text-faint">(WIP left in the tower, not bagged — excluded from mass balance)</span></span>
                   <span className="font-mono text-text tabular-nums whitespace-nowrap">{bucketCarryOverKg.toFixed(1)} kg</span>
+                </div>
+              )}
+
+              {/* The arithmetic behind Total output, in view. Only when there
+                  is a top-up to add -- otherwise the bags' total IS the output
+                  and a second identical figure is noise. */}
+              {freshTopUpKg > 0 && (
+                <div className="rounded-xl border border-surface-rule overflow-hidden">
+                  <div className="flex items-center justify-between gap-2 px-3 py-2 text-[12.5px]">
+                    <span className="text-text-muted">Bagged out</span>
+                    <span className="font-mono text-text tabular-nums whitespace-nowrap">{bags.length} bags · {baggedOnlyKg.toFixed(1)} kg</span>
+                  </div>
+                  <div className="flex items-center justify-between gap-2 px-3 py-2 text-[12.5px] border-t border-surface-rule/60">
+                    <span className="text-text-muted">
+                      Half-bag top-ups — added into older bags
+                      <span className="block text-[10.5px] text-text-faint">
+                        the amount added today, listed in full below; those bags were bagged on an
+                        earlier day and are not in the count above
+                      </span>
+                    </span>
+                    <span className="font-mono text-text tabular-nums whitespace-nowrap">+{freshTopUpKg.toFixed(1)} kg</span>
+                  </div>
+                  <div className="flex items-center justify-between gap-2 px-3 py-2.5 text-[12.5px] font-semibold border-t border-surface-rule bg-surface-dim">
+                    <span className="text-text">Total output</span>
+                    <span className="font-mono text-text tabular-nums whitespace-nowrap">{bagsOutputKg.toFixed(1)} kg</span>
+                  </div>
                 </div>
               )}
             </div>
@@ -855,8 +893,13 @@ function ShiftBlock({ block, shiftInput, shiftOutput }: { block: OrderShiftBlock
   const label = SHIFT_LABEL[s.shift] ?? s.shift
   return (
     <Panel>
+      {/* block.bagsOutputKg includes this shift's top-up increments while
+          bagCount counts only bags, so the two are labelled rather than run
+          together as though the kg belonged to the bags. */}
       <PanelHead title={`${label} shift`} meta={s.record_no ?? undefined}
-        action={<span className="font-mono text-[10.5px] text-text-faint">{block.bagCount} bags · {block.bagsOutputKg.toFixed(1)} kg</span>} />
+        action={<span className="font-mono text-[10.5px] text-text-faint">
+          {block.bagCount} bags · {block.bagsOutputKg.toFixed(1)} kg out
+        </span>} />
       <PanelBody>
         <div className="space-y-4">
           {aiSummary && (
