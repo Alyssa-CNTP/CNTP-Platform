@@ -2,6 +2,12 @@
 
 **Read this before adding a feature to the capture module, the ledger, or anything under `lib/core/`.**
 
+The phased plan this file serves — what is built, what is deliberately not yet, and which
+phase a piece of work belongs to — is **[docs/capture-phases.md](docs/capture-phases.md)**.
+It carries a live status table. Check work against it before starting, and update it in
+the same commit; it lived only in chat until 2026-09-02, which is exactly how the work
+drifted from it unnoticed.
+
 This file exists because features kept breaking each other. Every rule below is here because
 something specific went wrong in production. The incident is named next to the rule so you
 can judge whether your case is really an exception.
