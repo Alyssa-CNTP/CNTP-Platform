@@ -144,18 +144,31 @@ export async function recentBatches(sectionId: string): Promise<string[]> {
  * bag tagged one way must still see batches debagged under the other name.
  * Falls back to an exact match only for a variant outside both families.
  */
-export async function debaggedBatches(sectionId: string, variant: string, localOrExport: string): Promise<string[]> {
+export async function debaggedBatches(
+  sectionId: string, variant: string, localOrExport: string,
+  // Only batches debagged on or after this production date (YYYY-MM-DD).
+  //
+  // Without it this returned up to 60 lots across ALL history, and the tap-only
+  // batch field on an output bag filled with 30-odd batches from weeks back.
+  // The restriction was technically on and useless: "must match a batch
+  // debagged this session" while offering GS-0424, GS-0208, GS-0332 and the
+  // rest. The carve-out exists for ONE case -- material fed in on an earlier
+  // shift that is still legitimately being bagged out -- so it only needs the
+  // current production day and the one before it.
+  sinceDate?: string,
+): Promise<string[]> {
   if (!variant) return []
   const family = variantFamily(variant)
   const variantMatch = family
     ? VARIANT_OPTIONS.map(v => v.value).filter(v => variantFamily(v) === family)
     : [variant]
-  const { data } = await getDb().schema('production').from('prod_debagging')
-    .select('lot_number, prod_sessions!inner(section_id)')
+  let q = getDb().schema('production').from('prod_debagging')
+    .select('lot_number, prod_sessions!inner(section_id,date)')
     .in('variant', variantMatch).eq('grade', localOrExport).eq('is_spillage', false)
     .eq('prod_sessions.section_id', sectionId)
     .not('lot_number', 'is', null)
-    .order('created_at', { ascending: false }).limit(300)
+  if (sinceDate) q = q.gte('prod_sessions.date', sinceDate)
+  const { data } = await q.order('created_at', { ascending: false }).limit(300)
   const seen = new Set<string>(); const out: string[] = []
   ;(data ?? []).forEach((r: any) => {
     const l = (r.lot_number ?? '').trim()

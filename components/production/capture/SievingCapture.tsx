@@ -216,12 +216,23 @@ export function SievingCapture({
   // today, without opening the field back up to every lot ever seen at this
   // section (which is what let a mistyped/wrong batch onto an output bag).
   const [matchingBatches, setMatchingBatches] = useState<string[]>([])
+  // The day before this record's own production date, in SAST calendar terms.
+  const carryOverSince = (() => {
+    const d = new Date(`${date}T12:00:00Z`)
+    d.setUTCDate(d.getUTCDate() - 1)
+    return d.toISOString().slice(0, 10)
+  })()
   useEffect(() => {
     let cancelled = false
-    debaggedBatches(sectionId, variantWord, GRADE_TO_LOCAL_EXPORT[gradeLetter] ?? 'Export')
+    // Yesterday onwards only. The carve-out is for material fed in on an
+    // earlier shift and still being bagged out -- in practice this morning's
+    // debagging bagged out this afternoon, or yesterday's leftover in the
+    // tower. Anything older is not what is on the machine now, and offering it
+    // is how a batch that was never fed in gets onto an output bag.
+    debaggedBatches(sectionId, variantWord, GRADE_TO_LOCAL_EXPORT[gradeLetter] ?? 'Export', carryOverSince)
       .then(list => { if (!cancelled) setMatchingBatches(list) })
     return () => { cancelled = true }
-  }, [sectionId, variantWord, gradeLetter])
+  }, [sectionId, variantWord, gradeLetter, carryOverSince])
 
   const batchOptions = Array.from(new Set([
     assignment.lot_number ?? '',

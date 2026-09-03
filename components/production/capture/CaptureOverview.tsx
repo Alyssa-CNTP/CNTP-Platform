@@ -668,10 +668,96 @@ export function CaptureOverview({
           </div>
         )}
 
+        {/* ── Mass balance — one figure, stated in full ──────────────
+            Output − Input, over the two totals shown on the cards above.
+            Everything it leaves out is named underneath, in kg, so the
+            number can be checked rather than taken on trust. */}
+        {(mbInputKg > 0 || mbOutputKg > 0) && (
+          <div className={`rounded-xl border-2 overflow-hidden ${withinTol ? 'border-ok/30' : 'border-warn/40'}`}>
+            <div className={`flex items-center justify-between px-3 py-2 ${withinTol ? 'bg-ok/5' : 'bg-warn/5'}`}>
+              <span className="inline-flex items-center gap-1.5 text-[12px] font-bold text-stone-700">
+                <Scale size={14} className="text-stone-500" /> Mass balance
+                <span className="font-normal text-[10.5px] text-stone-400">
+                  output − input · {spansDay ? 'full day, both shifts' : 'this shift'}
+                </span>
+              </span>
+              <span className="inline-flex items-center gap-1.5 font-mono font-bold text-[14px]">
+                <span className={withinTol ? 'text-ok' : 'text-warn'}>
+                  {balanceKg >= 0 ? '+' : ''}{balanceKg.toFixed(1)} kg
+                  {mbInputKg > 0 && <span className="font-normal text-[12px]"> ({balancePct >= 0 ? '+' : ''}{balancePct.toFixed(1)}%)</span>}
+                </span>
+                {withinTol ? <CheckCircle2 size={14} className="text-ok" /> : <AlertTriangle size={14} className="text-warn" />}
+              </span>
+            </div>
+            <div className="grid grid-cols-3 divide-x divide-stone-100 border-t border-stone-100 bg-white">
+              {[
+                { label: 'Total input',  value: `${mbInputKg.toFixed(1)} kg` },
+                { label: 'Total output', value: `${mbOutputKg.toFixed(1)} kg` },
+                { label: 'Yield',        value: yieldPct != null ? `${yieldPct}%` : '—' },
+              ].map(t => (
+                <div key={t.label} className="px-3 py-2.5">
+                  <div className="font-mono font-bold text-[15px] leading-tight text-stone-800">{t.value}</div>
+                  <div className="text-[9.5px] text-stone-400 uppercase tracking-wide">{t.label}</div>
+                </div>
+              ))}
+            </div>
+            {/* Which of those kilograms are which grade. Only on a
+                changeover record -- one grade, one balance, no extra table. */}
+            {showGradeSplit && (
+              <div className="border-t border-stone-100 divide-y divide-stone-100">
+                <div className="px-3 py-1.5 bg-stone-50 text-[10px] font-semibold text-stone-500 uppercase tracking-wide">
+                  By grade — this shift changed over
+                </div>
+                {gradeTotals.map(g => (
+                  <div key={g.grade} className="flex items-center justify-between gap-3 px-3 py-2 text-[12px]">
+                    <span className="font-medium text-stone-700">{g.grade}</span>
+                    <span className="flex items-center gap-4 font-mono text-stone-600 tabular-nums">
+                      <span>in {g.inKg.toFixed(1)}</span>
+                      <span>out {g.outKg.toFixed(1)}</span>
+                      <span className="text-stone-400">{g.bags} bag{g.bags === 1 ? '' : 's'}</span>
+                    </span>
+                  </div>
+                ))}
+                {(bucketInKg > 0 || machineKg > 0 || bucketOutKg > 0 || topUpKg > 0) && (
+                  <div className="flex items-start justify-between gap-3 px-3 py-2 text-[11.5px] text-stone-500">
+                    <span>Not attributable to one grade
+                      <span className="block text-[10.5px] text-stone-400">bucket elevator across the changeover, machine spillage, half-bag top-ups</span>
+                    </span>
+                    <span className="font-mono tabular-nums shrink-0">
+                      in {(bucketInKg + machineKg).toFixed(1)} · out {topUpKg.toFixed(1)}
+                    </span>
+                  </div>
+                )}
+                <p className="px-3 py-2 bg-stone-50/60 text-[11px] text-stone-500 leading-relaxed">
+                  No balance per grade: the tower is one stream, so the elevator carries material
+                  across the changeover and what went in as one grade can come out as the other.
+                  The figures above are captured per bag and are real; a balance per grade would
+                  not be.
+                </p>
+              </div>
+            )}
+            <p className="px-3 py-2.5 border-t border-stone-100 bg-stone-50/60 text-[11.5px] text-stone-500 leading-relaxed">
+              Input is everything debagged plus machine spillage
+              {bucketInKg > 0 && <>, plus the {bucketInKg.toFixed(1)} kg of bucket elevator carried in from yesterday (always this run&apos;s own variant — the carry-over ledger keeps conventional and organic apart)</>}.
+              {' '}Output is bags bagged out
+              {topUpKg > 0 && <> plus the {topUpKg.toFixed(1)} kg added into other bags by half-bag top-up — only the amount added today, never a topped bag&apos;s full weight, and never an increment from another day</>}.
+              {bucketOutKg > 0 && <> The {bucketOutKg.toFixed(1)} kg left in the elevator for tomorrow is work in progress and counts on neither side.</>}
+              {duplicatesHidden > 0 && <> Excludes {duplicatesHidden} duplicate debagging row{duplicatesHidden === 1 ? '' : 's'} left by the changeover fault.</>}
+              {spansDay && <> These totals are the <strong>whole day, both shifts</strong> — the
+              debagging and bagging tables above are this record&apos;s own capture, which is why
+              they are smaller.</>}
+              {' '}Flagged outside ±1% of total input.
+            </p>
+          </div>
+        )}
+
         {!hasData ? (
           <div className="flex flex-col items-center gap-2 py-10 text-center">
             <Package size={22} className="text-stone-300" />
-            <p className="text-[12px] text-stone-400">Nothing captured yet — add debagging and bagging in the Capture step first.</p>
+            <p className="text-[12px] text-stone-400">
+              Nothing captured in this record yet — add debagging and bagging in the Capture step.
+              {spansDay && (mbInputKg > 0 || mbOutputKg > 0) ? ' The mass balance above is the whole day, including the other shift.' : ''}
+            </p>
           </div>
         ) : (
           <>
@@ -936,88 +1022,6 @@ export function CaptureOverview({
               </div>
             )}
 
-            {/* ── Mass balance — one figure, stated in full ──────────────
-                Output − Input, over the two totals shown on the cards above.
-                Everything it leaves out is named underneath, in kg, so the
-                number can be checked rather than taken on trust. */}
-            {(mbInputKg > 0 || mbOutputKg > 0) && (
-              <div className={`rounded-xl border-2 overflow-hidden ${withinTol ? 'border-ok/30' : 'border-warn/40'}`}>
-                <div className={`flex items-center justify-between px-3 py-2 ${withinTol ? 'bg-ok/5' : 'bg-warn/5'}`}>
-                  <span className="inline-flex items-center gap-1.5 text-[12px] font-bold text-stone-700">
-                    <Scale size={14} className="text-stone-500" /> Mass balance
-                    <span className="font-normal text-[10.5px] text-stone-400">
-                      output − input · {spansDay ? 'full day, both shifts' : 'this shift'}
-                    </span>
-                  </span>
-                  <span className="inline-flex items-center gap-1.5 font-mono font-bold text-[14px]">
-                    <span className={withinTol ? 'text-ok' : 'text-warn'}>
-                      {balanceKg >= 0 ? '+' : ''}{balanceKg.toFixed(1)} kg
-                      {mbInputKg > 0 && <span className="font-normal text-[12px]"> ({balancePct >= 0 ? '+' : ''}{balancePct.toFixed(1)}%)</span>}
-                    </span>
-                    {withinTol ? <CheckCircle2 size={14} className="text-ok" /> : <AlertTriangle size={14} className="text-warn" />}
-                  </span>
-                </div>
-                <div className="grid grid-cols-3 divide-x divide-stone-100 border-t border-stone-100 bg-white">
-                  {[
-                    { label: 'Total input',  value: `${mbInputKg.toFixed(1)} kg` },
-                    { label: 'Total output', value: `${mbOutputKg.toFixed(1)} kg` },
-                    { label: 'Yield',        value: yieldPct != null ? `${yieldPct}%` : '—' },
-                  ].map(t => (
-                    <div key={t.label} className="px-3 py-2.5">
-                      <div className="font-mono font-bold text-[15px] leading-tight text-stone-800">{t.value}</div>
-                      <div className="text-[9.5px] text-stone-400 uppercase tracking-wide">{t.label}</div>
-                    </div>
-                  ))}
-                </div>
-                {/* Which of those kilograms are which grade. Only on a
-                    changeover record -- one grade, one balance, no extra table. */}
-                {showGradeSplit && (
-                  <div className="border-t border-stone-100 divide-y divide-stone-100">
-                    <div className="px-3 py-1.5 bg-stone-50 text-[10px] font-semibold text-stone-500 uppercase tracking-wide">
-                      By grade — this shift changed over
-                    </div>
-                    {gradeTotals.map(g => (
-                      <div key={g.grade} className="flex items-center justify-between gap-3 px-3 py-2 text-[12px]">
-                        <span className="font-medium text-stone-700">{g.grade}</span>
-                        <span className="flex items-center gap-4 font-mono text-stone-600 tabular-nums">
-                          <span>in {g.inKg.toFixed(1)}</span>
-                          <span>out {g.outKg.toFixed(1)}</span>
-                          <span className="text-stone-400">{g.bags} bag{g.bags === 1 ? '' : 's'}</span>
-                        </span>
-                      </div>
-                    ))}
-                    {(bucketInKg > 0 || machineKg > 0 || bucketOutKg > 0 || topUpKg > 0) && (
-                      <div className="flex items-start justify-between gap-3 px-3 py-2 text-[11.5px] text-stone-500">
-                        <span>Not attributable to one grade
-                          <span className="block text-[10.5px] text-stone-400">bucket elevator across the changeover, machine spillage, half-bag top-ups</span>
-                        </span>
-                        <span className="font-mono tabular-nums shrink-0">
-                          in {(bucketInKg + machineKg).toFixed(1)} · out {topUpKg.toFixed(1)}
-                        </span>
-                      </div>
-                    )}
-                    <p className="px-3 py-2 bg-stone-50/60 text-[11px] text-stone-500 leading-relaxed">
-                      No balance per grade: the tower is one stream, so the elevator carries material
-                      across the changeover and what went in as one grade can come out as the other.
-                      The figures above are captured per bag and are real; a balance per grade would
-                      not be.
-                    </p>
-                  </div>
-                )}
-                <p className="px-3 py-2.5 border-t border-stone-100 bg-stone-50/60 text-[11.5px] text-stone-500 leading-relaxed">
-                  Input is everything debagged plus machine spillage
-                  {bucketInKg > 0 && <>, plus the {bucketInKg.toFixed(1)} kg of bucket elevator carried in from yesterday (always this run&apos;s own variant — the carry-over ledger keeps conventional and organic apart)</>}.
-                  {' '}Output is bags bagged out
-                  {topUpKg > 0 && <> plus the {topUpKg.toFixed(1)} kg added into other bags by half-bag top-up — only the amount added today, never a topped bag&apos;s full weight, and never an increment from another day</>}.
-                  {bucketOutKg > 0 && <> The {bucketOutKg.toFixed(1)} kg left in the elevator for tomorrow is work in progress and counts on neither side.</>}
-                  {duplicatesHidden > 0 && <> Excludes {duplicatesHidden} duplicate debagging row{duplicatesHidden === 1 ? '' : 's'} left by the changeover fault.</>}
-                  {spansDay && <> These totals are the <strong>whole day, both shifts</strong> — the
-                  debagging and bagging tables above are this record&apos;s own capture, which is why
-                  they are smaller.</>}
-                  {' '}Flagged outside ±1% of total input.
-                </p>
-              </div>
-            )}
           </>
         )}
       </div>
