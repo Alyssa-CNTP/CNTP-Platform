@@ -2,6 +2,64 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-02 — Alyssa (Phase plan committed to the repo; Phase 3 closed with proof)
+
+**Files changed:** `docs/capture-phases.md` (new), `lib/config/boundary-rule.test.ts` (new), `components/shared/FeatureBoundary.test.ts` (new), `vitest.config.mts`, `ARCHITECTURE.md`
+
+### The plan now lives in the repo
+
+`docs/capture-phases.md` is the plan of record for the capture module — Phases 0
+through 7, the two independent causes behind sections breaking each other, and the
+architecture decisions. It existed **only in chat** until today, which is exactly how the
+work drifted from it without anyone noticing.
+
+It carries a **live status table** and a list of deviations with the reason for each,
+including the one that matters: `features/acumatica-items` was built out of sequence
+(Phase 3 says "no feature moved yet"; Phase 6 designates `supervisor-adjustments` as the
+first feature module). `ARCHITECTURE.md` now points at it.
+
+The table records what the audit found: **Phase 0 is not closed** (the
+`prod_bagging_session_bag_uidx` drift migration is written but applied nowhere),
+**Phase 1B is built but never shipped** (flag unset, so the duplicate-serial race is
+still live), **Phase 2 regressed** (`as any` in the capture page went 57 → 61), and
+**Phases 4–7 are untouched** — including the `scan_events` bulk-delete that the plan
+names as the one place actively corrupting the audit ledger.
+
+### Phase 3 closed — both guardrails proven, not merely present
+
+Phase 3's own wording is *"this phase only proves the guardrails hold on a green build"*.
+Neither guardrail had ever been observed to work.
+
+**`lib/config/boundary-rule.test.ts`** runs ESLint programmatically over fixture source
+and asserts the boundary rule reports at **error** severity. A rule nobody has seen fail
+is indistinguishable from one that matches nothing — a typo'd glob, a config that
+silently stopped loading, a severity downgraded during unrelated cleanup. 11 cases cover
+what must be rejected (core importing features by alias *or* relative path, app, React,
+supabase), what must be allowed (core importing core, a feature importing core and doing
+I/O), the documented `lib/core/ledger` I/O exemption, and the ban on deep-importing
+another feature past its `index.ts`.
+
+Verified non-vacuous by mutation: downgrading the rule from `error` to `warn` fails 7 of
+the 11.
+
+**`components/shared/FeatureBoundary.test.ts`** exercises the crash guard, which had
+zero usages and zero tests. The load-bearing part is `getDerivedStateFromError` being a
+**static on a class** — that is the whole reason React treats it as an error boundary.
+Convert it to a function component, or lose the static in a refactor, and it silently
+stops catching while still rendering its children perfectly. Also pinned: the fallback
+names the feature and tells the operator their capture is unaffected, `silent` renders
+nothing, and the crash is logged rather than hidden.
+
+No DOM: React elements are plain objects, so the contract is checkable while the unit
+suite stays node-only. `vitest.config.mts` includes `components/shared/*.test.ts` for
+this one component, with a comment saying it is not an invitation to unit-test components
+generally — those belong in Playwright.
+
+**Verification:** 306 unit tests (up from 286), boundary lint clean, 36 type errors
+(unchanged), `next build` compiles. No product code changed.
+
+---
+
 ## 2026-09-02 — Alyssa (Reliability: a feature must not slow a core screen, or be able to crash it)
 
 **Files changed:** `lib/production/use-item-codes.ts`, `lib/production/use-item-codes.test.ts` (new), `lib/production/inventory.ts`, `lib/production/inventory.suggest.test.ts`, `features/acumatica-items/index.ts`, `ARCHITECTURE.md`
