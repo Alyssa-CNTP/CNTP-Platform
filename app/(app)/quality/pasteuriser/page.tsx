@@ -28,6 +28,7 @@ import { getDb } from '@/lib/supabase/db'
 import { format } from 'date-fns'
 import { isoDate, isoDateTime } from '@/lib/utils/formatDate'
 import { checkOutlier } from '@/lib/utils/outliers'
+import { checkAllPlausibility, bdMeasurementFor } from '@/lib/quality/plausibility'
 import { isNegative } from '@/lib/utils/validation'
 import { useQcNames } from '@/lib/hooks/useQcNames'
 import { cleanCustomerName, pickSpecForCustomer, customerOptions, docVersionOf } from '@/lib/quality/customer-spec-match'
@@ -970,6 +971,28 @@ function AddSampleModal({ batch, sampleIndex, initialRow, onSave, onClose }: {
     checkField('hourly_temp', 'Temp', row.hourly_temp, 1.0, '°C')
     return warns
   })()
+  // Declared before use below, then folded into anomalyWarnings via
+  // allAnomalyWarnings so one tick covers statistical and absolute alike.
+
+  // ── Absolute plausibility — see lib/quality/plausibility.ts ───────────────
+  // The statistical check above needs history AND spread, so it cannot catch
+  // the first sample of a batch or a batch where the same wrong number is typed
+  // every time. Production holds a pasteuriser moisture of 95% and two of 0%.
+  //
+  // Bulk density uses the family's OWN bounds: Rosehips is reported in ml/5g
+  // (normally under 10), so the cc/100g range would refuse every valid
+  // Rosehips reading.
+  const plaus = checkAllPlausibility([
+    ...(row.has_mb ? [
+      { key: 'moisture' as const,                              value: row.moisture },
+      { key: bdMeasurementFor(batch.product_family),           value: row.untapped_bd, label: 'Untapped BD' },
+      { key: bdMeasurementFor(batch.product_family),           value: row.customer_bd, label: 'Customer BD' },
+    ] : []),
+    ...(row.has_sieve ? sieveCols.map(c => ({ key: 'sieve_pct' as const, value: row[c.key], label: `Sieve ${c.label}` })) : []),
+  ])
+  // One list, one tick: a QC should not have to confirm twice because the
+  // reason came from two different checks.
+  const allAnomalyWarnings = [...anomalyWarnings, ...plaus.confirms]
   const [confirmAnomaly, setConfirmAnomaly] = useState(false)
 
   function submit() {
@@ -997,7 +1020,13 @@ function AddSampleModal({ batch, sampleIndex, initialRow, onSave, onClose }: {
     const negFields = ['needle_count', 'hourly_temp', 'moisture', 'untapped_bd', 'customer_bd', 'flow_mass', 'flow_time', 'final_weight_1', 'final_weight_2', 'final_weight_3',
       ...sieveCols.flatMap(c => [c.key, c.key + '_g'])]
     if (negFields.some(k => isNegative(row[k]))) { alert('Values cannot be negative.'); return }
-    if (anomalyWarnings.length > 0 && !confirmAnomaly) { alert('Please tick "Yes, these values are correct" before saving.'); return }
+    // Refused rather than confirmable: these readings cannot be real, so there
+    // is nothing for the QC to confirm.
+    if (plaus.blocks.length > 0) {
+      alert(`This cannot be saved:\n\n${plaus.blocks.map(b => `• ${b}`).join('\n')}\n\nCorrect the reading and try again.`)
+      return
+    }
+    if (allAnomalyWarnings.length > 0 && !confirmAnomaly) { alert('Please tick "Yes, these values are correct" before saving.'); return }
     const hr = parseInt((row.time||'').split(':')[0])
     if (hr >= 16 && !row.afternoon_qc?.trim()) { alert('Afternoon QC Controller name is required for samples taken after 16:00'); return }
     onSave(row)
@@ -1214,14 +1243,26 @@ function AddSampleModal({ batch, sampleIndex, initialRow, onSave, onClose }: {
             )
           })()}
 
+          {/* Impossible readings — refused, not confirmable. */}
+          {plaus.blocks.length > 0 && (
+            <div className="px-4 py-3 bg-err/8 border border-err/40 rounded-xl">
+              <div className="flex items-center gap-2 font-bold text-[12px] text-err mb-1">
+                <AlertTriangle size={14} /> Cannot save — these readings are not possible
+              </div>
+              <ul className="list-disc pl-5 space-y-0.5">
+                {plaus.blocks.map((b,i) => <li key={i} className="text-[11px] text-err">{b}</li>)}
+              </ul>
+            </div>
+          )}
+
           {/* Variation / outlier warnings — require explicit confirmation before saving */}
-          {anomalyWarnings.length > 0 && (
+          {allAnomalyWarnings.length > 0 && (
             <div className="px-4 py-3 bg-warn/8 border border-warn/40 rounded-xl">
               <div className="flex items-center gap-2 font-bold text-[12px] text-warn mb-1">
                 <AlertTriangle size={14} /> Unusual variation — please double-check before saving
               </div>
               <ul className="list-disc pl-5 space-y-0.5 mb-2">
-                {anomalyWarnings.map((w,i) => (
+                {allAnomalyWarnings.map((w,i) => (
                   <li key={i} className="text-[11px] text-warn">{w}</li>
                 ))}
               </ul>
@@ -1234,7 +1275,7 @@ function AddSampleModal({ batch, sampleIndex, initialRow, onSave, onClose }: {
 
           <div className="flex justify-end gap-3 pt-2 border-t border-surface-rule">
             <button onClick={onClose} className="px-5 py-2 rounded-xl border border-surface-rule text-text-muted text-[12px]">Cancel</button>
-            <button onClick={submit} disabled={anomalyWarnings.length > 0 && !confirmAnomaly}
+            <button onClick={submit} disabled={plaus.blocks.length > 0 || (allAnomalyWarnings.length > 0 && !confirmAnomaly)}
               className="px-6 py-2 rounded-xl bg-ok text-white text-[12px] font-semibold disabled:opacity-40 disabled:cursor-not-allowed">
               {isEdit ? '✏️ Update Sample' : `💾 Save Sample #${sampleIndex+1}`}
             </button>
