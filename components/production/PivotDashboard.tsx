@@ -23,6 +23,7 @@ import {
 } from 'lucide-react'
 import { sectionMeta, SECTION_ORDER } from '@/lib/production/capture-config'
 import AiAnalystPanel from '@/components/maintenance/AiAnalystPanel'
+import GradeBalanceSection from '@/components/production/GradeBalanceSection'
 
 const C = { brand: '#1A3A0E', accent: '#5A8A2A', azure: '#2A7CB8', warn: '#B85C0A', err: '#B81C1C', ok: '#1A7A3C', info: '#2A7CB8', gray: '#96A88A' }
 const VARIANTS = ['Conventional', 'Organic', 'RA-Conventional', 'RA-Organic', 'FT-CON', 'FT-ORG']
@@ -40,7 +41,7 @@ interface Row {
   qcName: string | null; qcCheckedAt: string | null
 }
 
-type Domain = 'floor' | 'quality' | 'machine' | 'supply' | 'solar'
+type Domain = 'floor' | 'quality' | 'machine' | 'supply' | 'solar' | 'balance'
 type ColDim = 'date' | 'variant'
 
 const num0 = (v: number | null) => (v == null ? null : v)
@@ -296,7 +297,7 @@ export default function PivotDashboard() {
           <p className="text-[12px] text-text-muted">Aggregates and totals, not the entire shift report — drill in via Needs action or the AI Analyst.</p>
         </div>
         <div className="flex gap-0.5 bg-surface-dim rounded-xl p-1">
-          {([['floor', 'Floor'], ['quality', 'Quality'], ['machine', 'Machine'], ['supply', 'Supply & demand'], ['solar', 'Solar']] as [Domain, string][]).map(([k, label]) => (
+          {([['floor', 'Floor'], ['quality', 'Quality'], ['machine', 'Machine'], ['supply', 'Supply & demand'], ['balance', 'Grade balance'], ['solar', 'Solar']] as [Domain, string][]).map(([k, label]) => (
             <button key={k} onClick={() => setDomain(k)}
               className={`text-[13px] font-medium px-4 py-2 rounded-lg ${domain === k ? 'bg-surface-card text-brand shadow-sm' : 'text-text-muted'}`}>
               {label}
@@ -394,10 +395,15 @@ export default function PivotDashboard() {
         </div>
       )}
 
-      {/* KPI row */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        {kpis.map((k, i) => <KpiTile key={i} {...k} />)}
-      </div>
+      {/* KPI row (balance tab brings its own) */}
+      {domain !== 'balance' && (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          {kpis.map((k, i) => <KpiTile key={i} {...k} />)}
+        </div>
+      )}
+
+      {/* Grade balance — Acumatica stock on hand + ageing vs floor output */}
+      {domain === 'balance' && <GradeBalanceSection outputMix={outputMix} />}
 
       {/* Pivot table + chart (Floor / Quality / Machine) */}
       {(domain === 'floor' || domain === 'quality' || domain === 'machine') && pivot && activeMetric && (
@@ -558,7 +564,7 @@ export default function PivotDashboard() {
           } />
           <span className="ml-auto text-[11.5px] text-text-faint">{flags.length} of {filteredRows.length} line-shifts in range</span>
         </div>
-        {domain === 'solar' || domain === 'supply' ? (
+        {domain === 'solar' || domain === 'supply' || domain === 'balance' ? (
           <div className="text-center text-[12px] text-text-faint py-6">No action items tracked for this domain yet.</div>
         ) : flags.length === 0 ? (
           <div className="text-center text-[12px] text-text-faint py-6">Nothing flagged in the current filters.</div>
@@ -579,7 +585,7 @@ export default function PivotDashboard() {
       </div>
 
       {/* AI Analyst — the real, existing panel, fed the current filtered view */}
-      {!loading && (
+      {!loading && domain !== 'balance' && (
         <AiAnalystPanel
           agg={aiAgg}
           insightsUrl="/api/production/dashboard-insights"
