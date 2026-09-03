@@ -17,6 +17,7 @@ import { useState, useEffect, useCallback, useRef, Fragment } from 'react'
 import { useAuth } from '@/lib/auth/context'
 import { getDb } from '@/lib/supabase/db'
 import { checkOutlier } from '@/lib/utils/outliers'
+import { checkAllPlausibility } from '@/lib/quality/plausibility'
 import { isNegative } from '@/lib/utils/validation'
 import { exportGranuleRun, exportGranuleRuns } from '@/lib/utils/exportExcel'
 import { useQcNames } from '@/lib/hooks/useQcNames'
@@ -492,6 +493,23 @@ function GranuleAddSampleModal({ run, initialDraft, onSave, onClose }: { run: an
     return warns
   })()
 
+  // ── Absolute plausibility — see lib/quality/plausibility.ts ───────────────
+  // Separate from the statistical check above, which needs history AND spread:
+  // granule BD 2200 got saved twice because every other sample in that run read
+  // exactly 220, so std was 0 and nothing was flagged. `blocks` refuses the
+  // save outright; `confirms` joins the confirm-to-save list.
+  const plaus = checkAllPlausibility([
+    { key: 'moisture',        value: form.moisture },
+    { key: 'bulk_density_cc', value: form.bulk_density },
+    { key: 'dryer_temp',      value: form.dryer_temp },
+    { key: 'moisture',        value: form.dryer2_moisture,      label: 'Dryer 2 moisture' },
+    { key: 'bulk_density_cc', value: form.dryer2_bulk_density,  label: 'Dryer 2 bulk density' },
+    { key: 'dryer_temp',      value: form.dryer2_dryer_temp,    label: 'Dryer 2 temp' },
+  ])
+  // One list, one tick: a QC should not have to confirm twice because the
+  // reason came from two different checks.
+  const allWarnings = [...outlierWarnings, ...plaus.confirms]
+
   const set = (k: string, v: any) => {
     setForm((f: any) => {
       const next: any = { ...f, [k]: v }
@@ -603,7 +621,13 @@ function GranuleAddSampleModal({ run, initialDraft, onSave, onClose }: { run: an
 
   function handleSave() {
     if (!validate()) return
-    if (outlierWarnings.length > 0 && !confirmAnomaly) { alert('Please tick "Yes, these values are correct" before saving.'); return }
+    // Refused, not confirmable: these values cannot be real, so there is
+    // nothing for the QC to confirm.
+    if (plaus.blocks.length > 0) {
+      alert(`This cannot be saved:\n\n${plaus.blocks.map(b => `• ${b}`).join('\n')}\n\nCorrect the reading and try again.`)
+      return
+    }
+    if (allWarnings.length > 0 && !confirmAnomaly) { alert('Please tick "Yes, these values are correct" before saving.'); return }
     const effectiveQcName = isAfterShift && form.qc_name.trim() ? form.qc_name : run.qc_name
     onSave({ ...form, qc_name: effectiveQcName, run_id: run.id, spec_json: run.spec_json })
   }
@@ -638,11 +662,19 @@ function GranuleAddSampleModal({ run, initialDraft, onSave, onClose }: { run: an
           {warnings.length > 0 && <div className="px-4 py-2 bg-warn/8 border border-warn/30 rounded-xl text-[11px] text-warn">⚠ {warnings.join(' · ')}</div>}
 
           {/* Variation / outlier warnings — require explicit confirmation before saving */}
-          {outlierWarnings.length > 0 && (
+          {plaus.blocks.length > 0 && (
+            <div className="rounded-xl border border-err/40 bg-err/8 p-3 mb-2">
+              <div className="text-[11px] font-bold text-err mb-1">🚫 Cannot save — these readings are not possible</div>
+              <ul className="ml-4 list-disc space-y-0.5">
+                {plaus.blocks.map((b, i) => <li key={i} className="text-[11px] text-err">{b}</li>)}
+              </ul>
+            </div>
+          )}
+          {allWarnings.length > 0 && (
             <div className="px-4 py-3 bg-warn/8 border border-warn/40 rounded-xl">
               <div className="font-bold text-[12px] text-warn mb-1">⚠ Unusual variation — please double-check before saving</div>
               <ul className="list-disc pl-5 space-y-0.5 mb-2">
-                {outlierWarnings.map((w, i) => <li key={i} className="text-[11px] text-warn">{w}</li>)}
+                {allWarnings.map((w, i) => <li key={i} className="text-[11px] text-warn">{w}</li>)}
               </ul>
               <label className="flex items-center gap-2 text-[11px] font-semibold text-warn cursor-pointer">
                 <input type="checkbox" checked={confirmAnomaly} onChange={e => setConfirmAnomaly(e.target.checked)} />
@@ -817,7 +849,7 @@ function GranuleAddSampleModal({ run, initialDraft, onSave, onClose }: { run: an
 
           <div className="flex justify-end gap-3 pt-2 border-t border-surface-rule">
             <button onClick={onClose} className="px-5 py-2 rounded-xl border border-surface-rule text-text-muted text-[12px]">Cancel</button>
-            <button onClick={handleSave} disabled={outlierWarnings.length > 0 && !confirmAnomaly}
+            <button onClick={handleSave} disabled={plaus.blocks.length > 0 || (allWarnings.length > 0 && !confirmAnomaly)}
               className="px-6 py-2 rounded-xl text-white text-[12px] font-bold disabled:opacity-40 disabled:cursor-not-allowed" style={{ background: '#166534' }}>💾 Save Sample</button>
           </div>
         </div>
@@ -868,6 +900,21 @@ function GranuleEditSampleModal({ sample, run, onSave, onClose }: { sample: any;
     return warns
   })()
 
+  // ── Absolute plausibility — see lib/quality/plausibility.ts ───────────────
+  // Separate from the statistical check above, which needs history AND spread:
+  // granule BD 2200 got saved twice because every other sample in that run read
+  // exactly 220, so std was 0 and nothing was flagged. `blocks` refuses the
+  // save outright; `confirms` joins the confirm-to-save list.
+  const plaus = checkAllPlausibility([
+    { key: 'moisture',        value: form.moisture },
+    { key: 'bulk_density_cc', value: form.bulk_density },
+    { key: 'dryer_temp',      value: form.dryer_temp },
+    // No dryer-2 entries here: the edit form does not carry them.
+  ])
+  // One list, one tick: a QC should not have to confirm twice because the
+  // reason came from two different checks.
+  const allWarnings = [...outlierWarnings, ...plaus.confirms]
+
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
       const tag = (document.activeElement as HTMLElement)?.tagName
@@ -912,7 +959,13 @@ function GranuleEditSampleModal({ sample, run, onSave, onClose }: { sample: any;
 
   async function handleSave() {
     if (!validate()) return
-    if (outlierWarnings.length > 0 && !confirmAnomaly) { alert('Please tick "Yes, these values are correct" before saving.'); return }
+    // Refused, not confirmable: these values cannot be real, so there is
+    // nothing for the QC to confirm.
+    if (plaus.blocks.length > 0) {
+      alert(`This cannot be saved:\n\n${plaus.blocks.map(b => `• ${b}`).join('\n')}\n\nCorrect the reading and try again.`)
+      return
+    }
+    if (allWarnings.length > 0 && !confirmAnomaly) { alert('Please tick "Yes, these values are correct" before saving.'); return }
     setSaving(true)
     await onSave(sample.id, { ...form, sieve_g: form.sieving_done ? grams : {}, sieve_pct: form.sieving_done ? pcts : {}, run_id: sample.run_id, spec_json: sp })
     setSaving(false)
@@ -943,11 +996,19 @@ function GranuleEditSampleModal({ sample, run, onSave, onClose }: { sample: any;
           {errors.length > 0 && <div className="px-4 py-2 bg-err/8 border border-err/20 rounded-xl text-[11px] text-err">⚠ Missing: {errors.join(' · ')}</div>}
 
           {/* Variation / outlier warnings — require explicit confirmation before saving */}
-          {outlierWarnings.length > 0 && (
+          {plaus.blocks.length > 0 && (
+            <div className="rounded-xl border border-err/40 bg-err/8 p-3 mb-2">
+              <div className="text-[11px] font-bold text-err mb-1">🚫 Cannot save — these readings are not possible</div>
+              <ul className="ml-4 list-disc space-y-0.5">
+                {plaus.blocks.map((b, i) => <li key={i} className="text-[11px] text-err">{b}</li>)}
+              </ul>
+            </div>
+          )}
+          {allWarnings.length > 0 && (
             <div className="px-4 py-3 bg-warn/8 border border-warn/40 rounded-xl">
               <div className="font-bold text-[12px] text-warn mb-1">⚠ Unusual variation — please double-check before saving</div>
               <ul className="list-disc pl-5 space-y-0.5 mb-2">
-                {outlierWarnings.map((w, i) => <li key={i} className="text-[11px] text-warn">{w}</li>)}
+                {allWarnings.map((w, i) => <li key={i} className="text-[11px] text-warn">{w}</li>)}
               </ul>
               <label className="flex items-center gap-2 text-[11px] font-semibold text-warn cursor-pointer">
                 <input type="checkbox" checked={confirmAnomaly} onChange={e => setConfirmAnomaly(e.target.checked)} />
@@ -1029,7 +1090,7 @@ function GranuleEditSampleModal({ sample, run, onSave, onClose }: { sample: any;
           </div>
           <div className="flex justify-end gap-3 pt-2 border-t border-surface-rule">
             <button onClick={onClose} className="px-5 py-2 rounded-xl border border-surface-rule text-text-muted text-[12px]">Cancel</button>
-            <button onClick={handleSave} disabled={saving || (outlierWarnings.length > 0 && !confirmAnomaly)}
+            <button onClick={handleSave} disabled={saving || plaus.blocks.length > 0 || (allWarnings.length > 0 && !confirmAnomaly)}
               className="px-6 py-2 rounded-xl text-white text-[12px] font-bold disabled:opacity-40 disabled:cursor-not-allowed" style={{ background: '#1d4ed8' }}>{saving ? 'Saving…' : '✓ Save Changes'}</button>
           </div>
         </div>
