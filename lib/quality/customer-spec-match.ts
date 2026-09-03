@@ -128,6 +128,77 @@ export function pickSpecForCustomer<T extends { customer?: string | null }>(
   }
 }
 
+/**
+ * One customer, many spellings.
+ *
+ * Normalising case and whitespace made 'ENTYCE' / 'Entyce ' / 'Entyce' resolve
+ * to one another, but it cannot match two genuinely different strings — and
+ * production runs carry exactly that: 'EWTC' against a spec row named
+ * 'East West Tea Company (EWTC)', 'Afri Tea and Coffee Blenders' against
+ * 'Afri Tea and Coffee\'s', 'Lipton&Infusion (Ekaterra)' against
+ * 'Lipton and Infusion'. Those runs were resolving to the GENERIC spec.
+ *
+ * Renaming the spec row cannot fix it: both spellings already exist in the data
+ * and both keep being typed, so any single name fixes some runs and breaks
+ * others. See qms.customer_aliases.
+ */
+export type CustomerAlias = { alias?: string | null; canonical_name?: string | null }
+
+/**
+ * Map a typed customer name to the spelling customer_specs uses. Returns the
+ * input (cleaned) when there is no alias — so this is always safe to call.
+ *
+ * Resolution is a SINGLE hop on purpose. Chaining aliases (a -> b -> c) invites
+ * cycles and makes "which spec applies?" depend on traversal order, which is
+ * the class of problem this whole area is being dug out of. The unique index on
+ * alias means a name resolves to at most one canonical target.
+ */
+export function resolveCustomerName(
+  name: string | null | undefined,
+  aliases: CustomerAlias[] | null | undefined,
+): string {
+  const cleaned = cleanCustomerName(name)
+  if (!cleaned) return ''
+  const key = normCustomerKey(cleaned)
+  for (const a of aliases ?? []) {
+    if (normCustomerKey(a.alias) === key) {
+      const target = cleanCustomerName(a.canonical_name)
+      // A blank or self-referential row is ignored rather than trusted: the DB
+      // constraints forbid both, but this function must not depend on that to
+      // avoid returning '' for a real customer.
+      if (target && normCustomerKey(target) !== key) return target
+    }
+  }
+  return cleaned
+}
+
+/** True when the name was reached through an alias rather than used as typed. */
+export function wasAliased(
+  name: string | null | undefined,
+  aliases: CustomerAlias[] | null | undefined,
+): boolean {
+  const cleaned = cleanCustomerName(name)
+  return !!cleaned && normCustomerKey(resolveCustomerName(cleaned, aliases)) !== normCustomerKey(cleaned)
+}
+
+/**
+ * Resolve through aliases, then pick the spec. The two steps are separate
+ * functions but nearly always wanted together, and a caller that forgot the
+ * alias hop would silently reintroduce the bug.
+ */
+export function pickSpecForCustomerWithAliases<T extends { customer?: string | null }>(
+  rows: T[] | null | undefined,
+  customer: string | null | undefined,
+  aliases: CustomerAlias[] | null | undefined,
+): SpecPick<T> & { resolvedCustomer: string; aliased: boolean } {
+  const resolved = resolveCustomerName(customer, aliases)
+  return {
+    ...pickSpecForCustomer(rows, resolved),
+    resolvedCustomer: resolved,
+    aliased: wasAliased(customer, aliases),
+  }
+}
+
 export type SpecKeyFields = {
   customer?: string | null
   product_family?: string | null
