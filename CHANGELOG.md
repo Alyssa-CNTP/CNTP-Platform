@@ -2,6 +2,91 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-03 — Gustav (Specs resolve on a normalised customer name; customer + QC required on a new run)
+
+**Files changed:** `lib/quality/customer-spec-match.ts` (new), `lib/quality/customer-spec-match.test.ts` (new), `app/(app)/quality/pasteuriser/page.tsx`, `app/(app)/quality/customer-specs/page.tsx`, `.github/workflows/ci.yml`
+
+### The bug: which spec a batch was judged against came down to row order
+
+Production `qms.customer_specs` holds **three Entyce rows** for Rooibos / Super
+Grade / Conventional — `'Entyce '`, `'ENTYCE '` and `'Entyce'` — carrying
+**different bulk-density limits** (280–300 vs 280–**320**). It also holds **two
+Edelweiss rows** for Botanicals / Phytoblend / Conventional differing on three
+sieve fractions (`>10 min`, `>12 min`, `>16 min`).
+
+Both Edelweiss rows match a case-insensitive lookup for "Edelweiss", so
+`rows.find(...)` returned whichever Postgres listed first — meaning the limits a
+pasteuriser run and its COA were checked against were effectively arbitrary.
+
+The Entyce rows failed differently: the old compare was a plain `toLowerCase()`,
+so `'entyce '` ≠ `'entyce'`. A run for "Entyce" **silently fell through to the
+generic spec** — different limits again, with "✓ Spec loaded" on screen either way.
+
+Row 49 additionally carries `product_family = 'Botanicals '` and
+`grade = 'Phytoblend '` with trailing spaces, which no `.ilike('Botanicals')`
+lookup can reach at all.
+
+### New `lib/quality/customer-spec-match.ts` — 30 tests
+
+- `normCustomerKey` / `cleanCustomerName` — trim and collapse internal
+  whitespace. Comparison folds case; **storage keeps the operator's own
+  capitalisation**, so `ADM WILD` is not restyled into `Adm Wild`.
+- `pickSpecForCustomer` — customer's row → generic → any remaining, and
+  **reports ambiguity** rather than silently taking the first of three.
+- `findDuplicateSpec`, `customerOptions`.
+
+### Pasteuriser New Run
+
+- **Customer and QC Controller are required.** A blank customer resolved quietly
+  to the generic spec. "Generic — no customer-specific spec" is still available,
+  but as a deliberate choice in the list rather than an empty box.
+- **Customer is a dropdown** built from the specs themselves and deduped on the
+  normalised key, so the three Entyce spellings offer **one** option and picking
+  it writes the spelling the lookup will actually match. An "Other" escape
+  covers a customer with no spec yet, and says it will fall back to generic.
+- **"Spec loaded" now says whose** — the customer's, the GENERIC one, or a
+  fallback — and warns when duplicate rows match.
+- Customer and QC are stored cleaned.
+
+### Reload Spec
+
+Both lookups now share `pickSpecForCustomer`, so a reload can never resolve to a
+different row than the run was created against. **Reload refuses outright when
+duplicates make the choice ambiguous** — otherwise it would clear an approval and
+re-check the batch against limits chosen by row order.
+
+### Customer Specs
+
+- **Customer is a dropdown** (existing customers, deduped) plus `+ New
+  customer…`, so the name is picked rather than retyped.
+- Identity fields are cleaned on **both** the add form and inline cell edits —
+  the inline edit is the likely origin of `'Entyce '`.
+- A duplicate **warns and asks for confirmation; it does not refuse.** The client
+  spec sheet has **seven Entyce documents**, six of them under one
+  family/grade/variant with different sieve limits, separated only by doc number
+  and product description — **neither of which this table has a column for**. So
+  a second row is sometimes legitimate; only the accidental one needs stopping,
+  and the dropdown is what stops the whitespace case.
+- **A banner lists the duplicates that already exist**, because the guards only
+  stop new ones and these have to be visible to be fixable.
+- The customer filter matches on the normalised key, so a deduped dropdown entry
+  cannot hide rows stored under a variant spelling.
+
+### Still open (not fixed here)
+
+- The **five existing duplicate rows in production** (3 × Entyce, 2 × Edelweiss)
+  and the trailing spaces on row 49. Which row is authoritative is a quality
+  decision, not a mechanical one — trimming `'Entyce '` would collide with the
+  existing `'Entyce'`.
+- `customer_specs` has **no `doc_no` column**, so it cannot represent what the
+  client sheet actually holds (IPS-ENT-001 … IPS-ENT-007). Until it does, two
+  legitimate specs for one customer+product are indistinguishable from an
+  accident. (Note: `reloadSpecFor` already reads `spec.doc_no`, which is
+  therefore always undefined — harmless, but the dialogs never show a doc number.)
+
+Lint 3022, two below baseline; `LINT_ERROR_BASELINE` lowered 3024 → 3022.
+Typecheck introduces nothing. Full suite 229/229.
+
 ## 2026-09-03 — Gustav (Pasteuriser: show what changed when a spec is reloaded)
 
 **Files changed:** `app/(app)/quality/pasteuriser/page.tsx`

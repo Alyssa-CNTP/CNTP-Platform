@@ -30,6 +30,7 @@ import { isoDate, isoDateTime } from '@/lib/utils/formatDate'
 import { checkOutlier } from '@/lib/utils/outliers'
 import { isNegative } from '@/lib/utils/validation'
 import { useQcNames } from '@/lib/hooks/useQcNames'
+import { cleanCustomerName, pickSpecForCustomer, customerOptions } from '@/lib/quality/customer-spec-match'
 import { useDraftAutosave, readDraft, clearDraft } from '@/lib/hooks/useDraftAutosave'
 import QCNameField from '@/components/shared/QCNameField'
 import DraftRecoveryBanner from '@/components/shared/DraftRecoveryBanner'
@@ -575,6 +576,16 @@ function NewBatchModal({ onSave, onClose }: { onSave:(b:any)=>void; onClose:()=>
   const [specPreview, setSpec] = useState<any>(null)
   const [specLoading, setSpecL] = useState(false)
   const [err, setErr]           = useState('')
+  // How the spec was resolved, so "loaded" never hides "loaded, but the GENERIC
+  // one, not this customer's" — and so a customer with more than one spec row
+  // for this product is called out instead of resolved by row order.
+  const [specVia, setSpecVia] = useState<'customer'|'generic'|'fallback'|'none'>('none')
+  const [specAmbiguous, setSpecAmbiguous] = useState(0)
+  // 'Generic' has to be a deliberate choice rather than an empty box, or
+  // "customer is required" just gets satisfied with whatever is first in the
+  // list. See save().
+  const GENERIC = '__generic__'
+  const [custMode, setCustMode] = useState<'list'|'other'>('list')
 
   // Local-storage safety net — see lib/hooks/useDraftAutosave.ts. Only one
   // "New Batch" modal can ever be open at a time, so a single fixed key is
@@ -589,11 +600,15 @@ function NewBatchModal({ onSave, onClose }: { onSave:(b:any)=>void; onClose:()=>
   // Data-driven dropdowns: load the families / grades / variants that actually
   // exist in the customer specs so any new product the lab adds (e.g. Pure Leaf)
   // is immediately selectable here — no hardcoded list to maintain.
-  const [specIndex, setSpecIndex] = useState<{ product_family: string; grade: string; variant: string }[]>([])
+  const [specIndex, setSpecIndex] = useState<{ product_family: string; grade: string; variant: string; customer: string | null }[]>([])
   useEffect(() => {
-    db.schema('qms').from('customer_specs').select('product_family, grade, variant')
+    db.schema('qms').from('customer_specs').select('product_family, grade, variant, customer')
       .then(({ data }: { data: any[] | null }) => setSpecIndex((data ?? []) as any))
   }, [])
+  // The customer list comes from the specs themselves, deduped on a normalised
+  // key — so 'Entyce', 'Entyce ' and 'ENTYCE ' offer ONE option, and picking it
+  // writes the one spelling the spec lookup will actually match.
+  const custOptions = customerOptions(specIndex)
   const uniqMerge = (base: string[], extra: (string | null | undefined)[]) => {
     const seen = new Set(base.map(x => x.toLowerCase())); const out = [...base]
     for (const e of extra) { const v = (e || '').trim(); if (v && !seen.has(v.toLowerCase())) { seen.add(v.toLowerCase()); out.push(v) } }
@@ -617,15 +632,15 @@ function NewBatchModal({ onSave, onClose }: { onSave:(b:any)=>void; onClose:()=>
       .ilike('grade', form.grade)
       .ilike('variant', form.variant)
       .then(({ data }: { data: any[] | null }) => {
-        let spec = null
-        if (data && data.length > 0) {
-          // Exact match: same customer name (case-insensitive) → first priority
-          // Generic (no customer) → second priority
-          // Any remaining → last resort
-          spec = data.find((s: any) =>
-            (s.customer || '').toLowerCase() === (form.customer || '').toLowerCase()
-          ) ?? data.find((s: any) => !s.customer || s.customer === '') ?? data[0]
-        }
+        // Resolution order (customer's own row → generic → anything) lives in
+        // pickSpecForCustomer, which compares on a normalised key so a spec row
+        // saved as 'Entyce ' still matches a run for 'Entyce'. The old inline
+        // toLowerCase() compare did not, and such a run silently fell through
+        // to the generic spec.
+        const picked = pickSpecForCustomer<any>(data, form.customer)
+        setSpecVia(data && data.length ? picked.via : 'none')
+        setSpecAmbiguous(picked.ambiguous.length)
+        const spec = picked.spec
         setSpec(spec)
         if (spec) {
           // Support both JSONB sieve_specs and flat columns (migrated data)
@@ -650,11 +665,33 @@ function NewBatchModal({ onSave, onClose }: { onSave:(b:any)=>void; onClose:()=>
 
   function save() {
     if (!form.batch_number.trim()) { setErr('Batch number is required'); return }
+    // Customer and QC are required because the whole spec chain hangs off them:
+    // the customer decides WHICH sieve spec this run (and its COA) is judged
+    // against, and the QC name is who signed for the readings. A blank customer
+    // used to resolve quietly to the generic spec, which is a different set of
+    // limits with nothing on screen to say so.
+    if (custMode === 'list' && !form.customer.trim()) {
+      setErr('Choose a customer — it decides which sieve spec this run is checked against. Pick "Generic" only if this run genuinely has no customer-specific spec.')
+      return
+    }
+    if (custMode === 'other' && !cleanCustomerName(form.customer)) {
+      setErr('Enter the customer name, or switch back and choose one from the list.')
+      return
+    }
+    if (!form.qc_name.trim()) { setErr('QC Controller is required'); return }
     const hasSpecs = batchSpecs.moisture_max !== '' || batchSpecs.bd_min !== '' || batchSpecs.bd_max !== '' ||
       ['gt6','gt10','gt12','gt16','gt20','gt40','gt60','dust'].some(k => (batchSpecs as any)[`${k}_min`] !== '' || (batchSpecs as any)[`${k}_max`] !== '')
     if (!hasSpecs) { setErr('Enter at least one spec value (moisture, BD, or sieve) before saving.'); return }
     if (Object.values(batchSpecs).some(v => isNegative(v))) { setErr('Spec values cannot be negative.'); return }
-    onSave({ ...form, type_grade:`${form.product_family} ${form.grade}`, _spec: specPreview, batch_specs: batchSpecs })
+    // Stored cleaned (trimmed, internal whitespace collapsed) so the batch's
+    // customer can never be the reason a spec lookup misses later.
+    onSave({
+      ...form,
+      customer: cleanCustomerName(form.customer),
+      qc_name: form.qc_name.trim(),
+      type_grade:`${form.product_family} ${form.grade}`,
+      _spec: specPreview, batch_specs: batchSpecs,
+    })
   }
 
   const setSp = (k: string, v: string) => setBatchSpecs(p => ({ ...p, [k]: v }))
@@ -705,15 +742,53 @@ function NewBatchModal({ onSave, onClose }: { onSave:(b:any)=>void; onClose:()=>
               ))}
             </div>
             <div className="mb-3">
-              <label className={`${lbl} text-info`}>👤 Customer Name <span className="text-text-muted font-normal normal-case">(optional — loads customer-specific spec)</span></label>
-              <input value={form.customer} onChange={e => setForm(p => ({ ...p, customer: e.target.value }))}
-                placeholder="e.g. Kunitaro — leave blank for generic spec" className={`${inp} w-full`} />
+              <label className={`${lbl} text-info`}>👤 Customer Name <span className="text-err">*</span> <span className="text-text-muted font-normal normal-case">(decides which sieve spec this run is checked against)</span></label>
+              {/* A list, not a free-text box: a typed name that differs from the
+                  spec row by a space or a capital resolves to the GENERIC spec
+                  instead of the customer's, and typing it into Customer Specs
+                  is how one customer ended up with three spec rows. */}
+              <select
+                value={custMode === 'other' ? '__other__' : (form.customer.trim() === '' ? '' : (custOptions.some(c => c === form.customer) ? form.customer : GENERIC))}
+                onChange={e => {
+                  const v = e.target.value
+                  if (v === '__other__') { setCustMode('other'); setForm(p => ({ ...p, customer: '' })) }
+                  else if (v === GENERIC) { setCustMode('list'); setForm(p => ({ ...p, customer: '' })) }
+                  else { setCustMode('list'); setForm(p => ({ ...p, customer: v })) }
+                }}
+                className={`${inp} w-full`}>
+                <option value="">— Select a customer —</option>
+                {custOptions.map(c => <option key={c} value={c}>{c}</option>)}
+                <option value={GENERIC}>Generic — no customer-specific spec</option>
+                <option value="__other__">Other — customer not in the spec list…</option>
+              </select>
+              {custMode === 'other' && (
+                <div className="mt-2">
+                  <input autoFocus value={form.customer} onChange={e => setForm(p => ({ ...p, customer: e.target.value }))}
+                    onBlur={e => setForm(p => ({ ...p, customer: cleanCustomerName(e.target.value) }))}
+                    placeholder="Customer name" className={`${inp} w-full`} />
+                  <div className="text-[10px] text-warn mt-1">
+                    ⚠ No spec exists for a customer that is not in the list, so this run falls back to the generic spec.
+                    Add the customer&apos;s spec in Customer Specs first if it should be checked against its own limits.
+                  </div>
+                </div>
+              )}
             </div>
-            <div className="flex items-center gap-2 mb-3">
+            <div className="flex items-center gap-2 mb-3 flex-wrap">
               <span className={`badge ${isOrganic ? 'badge-ok' : 'badge-info'}`}>{isOrganic ? '🌱 Organic' : '⚗️ Conventional'}{form.variant.startsWith('RA') ? ' · RA' : ''}</span>
               {specLoading && <span className="text-[11px] text-text-muted animate-pulse">Loading spec…</span>}
-              {!specLoading && specPreview && <span className="text-[11px] text-ok font-semibold">✓ Spec loaded</span>}
+              {/* "Spec loaded" alone was ambiguous: it said nothing about WHOSE
+                  spec loaded, so a run against the generic limits looked
+                  identical to one against the customer's own. */}
+              {!specLoading && specPreview && specVia === 'customer' && <span className="text-[11px] text-ok font-semibold">✓ Spec loaded for {form.customer}</span>}
+              {!specLoading && specPreview && specVia === 'generic' && <span className="text-[11px] text-warn font-semibold">⚠ Using the GENERIC spec — no spec on file for {form.customer || 'this customer'}</span>}
+              {!specLoading && specPreview && specVia === 'fallback' && <span className="text-[11px] text-warn font-semibold">⚠ No customer or generic spec — showing another row for this product; check the values below</span>}
               {!specLoading && !specPreview && <span className="text-[11px] text-warn">No spec found — enter manually below</span>}
+              {!specLoading && specAmbiguous > 1 && (
+                <span className="text-[11px] text-err font-semibold"
+                  title="Two or more spec rows match this product and customer. Which one wins comes down to row order, so the limits below may not be the ones you expect. Fix the duplicates in Customer Specs.">
+                  ⚠ {specAmbiguous} duplicate spec rows match — fix in Customer Specs
+                </span>
+              )}
             </div>
 
             {/* Editable batch specs */}
@@ -769,7 +844,7 @@ function NewBatchModal({ onSave, onClose }: { onSave:(b:any)=>void; onClose:()=>
               </select>
             </div>
             <div>
-              <label className={lbl}>QC Controller</label>
+              <label className={lbl}>QC Controller <span className="text-err">*</span></label>
               <QCNameField value={form.qc_name} onChange={v => setForm(p => ({ ...p, qc_name: v }))} names={qcNames} className={`${inp} w-full`} />
             </div>
             <div>
@@ -1608,13 +1683,21 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
       .ilike('product_family', b.product_family)
       .ilike('grade', b.grade)
       .ilike('variant', b.variant)
-    const rows = data ?? []
-    const spec = rows.length
-      ? (rows.find((s: any) => (s.customer || '').toLowerCase() === (b.customer || '').toLowerCase())
-          ?? rows.find((s: any) => !s.customer || s.customer === '')
-          ?? rows[0])
-      : null
+    // Same resolution as the New Run modal — one shared implementation, so a
+    // reload can never pick a different row than the run was created against.
+    const picked = pickSpecForCustomer<any>(data, b.customer)
+    const spec = picked.spec
     if (!spec) { alert(`No spec found for ${b.product_family} ${b.grade} · ${b.variant} — nothing changed.`); return }
+    if (picked.ambiguous.length > 1) {
+      // Refusing is the safe answer: with duplicates the row that wins comes
+      // down to Postgres row order, so reloading could clear an approval and
+      // then re-check the batch against limits picked essentially at random.
+      alert(`⚠ ${picked.ambiguous.length} duplicate spec rows match ${b.product_family} ${b.grade} · ${b.variant}${b.customer ? ` for ${b.customer}` : ''} (ids ${picked.ambiguous.map((s: any) => s.id).join(', ')}).\n\nWhich one applies is ambiguous, so nothing was changed. Please remove the duplicates in Customer Specs first.`)
+      return
+    }
+    if (picked.via !== 'customer' && (b.customer || '').trim()) {
+      if (!confirm(`No spec on file for "${b.customer}" — the ${picked.via === 'generic' ? 'GENERIC' : 'next available'} spec for ${b.product_family} ${b.grade} · ${b.variant} will be used instead.\n\nContinue?`)) return
+    }
 
     // A batch number can be split across more than one record (History merges
     // them back into a single row and keeps only the first record's id — see
