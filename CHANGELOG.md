@@ -2,6 +2,12 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-03 — Alyssa (production dashboard: Grade Balance tab — Acumatica stock vs floor)
+
+**Files changed:** `app/api/production/grade-balance/route.ts` (new), `components/production/GradeBalanceSection.tsx` (new), `components/production/PivotDashboard.tsx`
+
+New **Grade balance** tab on the production Pivot dashboard reconciling Acumatica stock-on-hand against live floor output (raw → produced → stock → sold). The route aggregates `acumatica.lot_details` (BHW, via `acumatica_get_lot_details`) into SOH by grade family + ageing by harvest year. The tab shows a stock-mix-vs-target **balance index** (provisional default target until the costing/WaardeModel yield split is wired in), SOH-by-grade and floor-output-mix panels, and a **harvest-year ageing chart** (the locked-capital view — old stock flagged). Matches the dashboard's house SVG chart style. NOT deployed; needs migration `20260902_002` + `/api/acumatica/sync-lots` to populate stock.
+
 ## 2026-09-02 — Alyssa (Acumatica lot details: OAuth2 REST client + stock-on-hand sync)
 
 **Files changed:** `lib/acumatica/rest.ts` (new), `lib/acumatica/lot-sync.ts` (new), `app/api/acumatica/sync-lots/route.ts` (new), `supabase/migrations/20260902_002_acumatica_lot_details.sql` (new)
