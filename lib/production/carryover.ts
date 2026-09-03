@@ -29,6 +29,16 @@ export interface CarryoverEntry {
 
 export async function logCarryover(kind: 'generated' | 'consumed', e: CarryoverEntry): Promise<void> {
   if (e.kg <= 0) return
+  // Same guard, and the same reasoning, as logBucketElevator(). Refusing the
+  // write keeps the dust where it is; guessing a family pools it with the wrong
+  // one, which is a certification failure rather than a rounding error.
+  if (e.variantFamily !== 'conventional' && e.variantFamily !== 'organic') {
+    throw new Error(
+      `Dust carry-over refused: the variant family could not be determined ` +
+      `(got ${JSON.stringify(e.variantFamily)}). Set the run's variant before carrying dust over — ` +
+      `organic and conventional dust are separate pools.`,
+    )
+  }
   await getDb().schema('production').from('dust_carryover_log').insert({
     section_id: e.sectionId, item_key: e.itemKey, variant_family: e.variantFamily,
     kind, kg: e.kg,
@@ -42,8 +52,11 @@ export async function logCarryover(kind: 'generated' | 'consumed', e: CarryoverE
  * aggregated across them.
  */
 export async function outstandingCarryover(
-  sectionId: string, itemKey: string, family: VariantFamily,
+  sectionId: string, itemKey: string, family: VariantFamily | null,
 ): Promise<number> {
+  // No recognised family means no pool to read from. Offer nothing rather than
+  // falling back to the conventional balance.
+  if (!family) return 0
   const { data } = await getDb().schema('production').from('dust_carryover_log')
     .select('kind, kg')
     .eq('section_id', sectionId).eq('item_key', itemKey).eq('variant_family', family)

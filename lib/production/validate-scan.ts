@@ -22,7 +22,7 @@
  */
 
 import { getDb } from '@/lib/supabase/db'
-import { normaliseVariant } from '@/lib/constants/manufacturing'
+import { variantFamily } from '@/lib/core/variants'
 import { SECTION_CONFIG } from '@/lib/production/live-types'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -75,14 +75,7 @@ export interface ValidateScanOptions {
 }
 
 // ── Helper — variant family ────────────────────────────────────────────────────
-
-function variantFamily(v: string | null | undefined): 'conventional' | 'organic' | null {
-  if (!v) return null
-  const n = normaliseVariant(v)
-  if (n === 'Conventional' || n === 'RA-Conventional') return 'conventional'
-  if (n === 'Organic'      || n === 'RA-Organic' || n === 'FT-ORG') return 'organic'
-  return null
-}
+// Was a private fourth copy of this rule. Now core — see lib/core/variants.ts.
 
 // ── Main validator ─────────────────────────────────────────────────────────────
 

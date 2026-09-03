@@ -833,24 +833,34 @@ export function GranuleCapture({
   const [carryoverKg, setCarryoverKg] = useState('')
   const [carryoverLogged, setCarryoverLogged] = useState(false)
   const [carryoverSaving, setCarryoverSaving] = useState(false)
+  const [carryoverError, setCarryoverError] = useState<string | null>(null)
   const [availableCarryover, setAvailableCarryover] = useState(0)
+  // Resolved once. null means the run's variant is not one we recognise, and no
+  // carry-over can be filed against a pool we cannot name — see
+  // lib/core/variants.ts.
+  const carryFamily = variantFamily(variantWord)
   useEffect(() => {
     let cancelled = false
     // Matched on dust type AND variant family: conventional and organic are
     // separate physical pools, and offering one to the other is a
     // certification failure rather than a rounding error.
-    outstandingCarryover(sectionId, dustForItem(item), variantFamily(variantWord))
+    outstandingCarryover(sectionId, dustForItem(item), carryFamily)
       .then(kg => { if (!cancelled) setAvailableCarryover(kg) })
     return () => { cancelled = true }
-  }, [sectionId, item, variantWord, carryoverLogged])
+  }, [sectionId, item, carryFamily, carryoverLogged])
 
   async function confirmCarryover() {
     const kg = n(carryoverKg || String(t.balance.toFixed(1)))
     if (kg <= 0) return
+    if (!carryFamily) {
+      setCarryoverError(`This run's variant (${variantWord || 'not set'}) isn't recognised, so the dust cannot be filed as conventional or organic. Set the variant on the batch record first — the two are separate pools and must not be combined.`)
+      return
+    }
+    setCarryoverError(null)
     setCarryoverSaving(true)
     try {
       await logCarryover('generated', {
-        sectionId, itemKey: dustForItem(item), variantFamily: variantFamily(variantWord),
+        sectionId, itemKey: dustForItem(item), variantFamily: carryFamily,
         kg, date, shift, sessionId,
       })
       // Record it on the capture data too, so the mass balance treats it as
@@ -865,6 +875,10 @@ export function GranuleCapture({
   // mirrors canAddBlend's own rule below.
   async function addCarryoverToBlend(openBlend: GranuleBlend) {
     if (availableCarryover <= 0) return
+    // Unreachable while availableCarryover > 0 — outstandingCarryover() returns
+    // 0 for a null family — but the ledger write must not depend on that
+    // holding somewhere else later.
+    if (!carryFamily) return
     const kg = availableCarryover
     const row: GranuleInputRow = {
       id: crypto.randomUUID(), dustKey: dustKeyForItem(item), serial: `CARRYOVER-${date}`, variant: variantWord || '',
@@ -872,7 +886,7 @@ export function GranuleCapture({
     }
     updateBlend(openBlend.id, { ...openBlend, rows: [...openBlend.rows, row] })
     await logCarryover('consumed', {
-      sectionId, itemKey: dustForItem(item), variantFamily: variantFamily(variantWord),
+      sectionId, itemKey: dustForItem(item), variantFamily: carryFamily,
       kg, date, shift, sessionId,
     })
     setAvailableCarryover(0)
@@ -1304,6 +1318,14 @@ export function GranuleCapture({
                     {carryoverSaving ? '…' : 'Confirm carry-over'}
                   </button>
                 </div>
+                {/* The button stays enabled and says why on press, rather than
+                    sitting greyed out with no explanation — a dead control is
+                    what sends an operator looking for a supervisor. */}
+                {carryoverError && (
+                  <div className="text-[12px] text-red-700 bg-red-50 border border-red-200 rounded-xl px-3 py-2">
+                    {carryoverError}
+                  </div>
+                )}
               </div>
             )
           )}
