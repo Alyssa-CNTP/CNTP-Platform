@@ -2,6 +2,14 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-03 — Alyssa (Acumatica REST: switch to Resource Owner Password grant)
+
+**Files changed:** `lib/acumatica/rest.ts`
+
+The Acumatica connected app rejects `client_credentials` (`unauthorized_client`); it's configured for the **Resource Owner Password** grant. `rest.ts` now requests the token with `grant_type=password` using a service user, reading `ACUMATICA_API_USER` / `ACUMATICA_API_PASSWORD` alongside `ACUMATICA_CLIENT_ID` / `ACUMATICA_CLIENT_SECRET`. Unblocks the LotDetail stock sync.
+
+**Deploy notes:** set `ACUMATICA_API_USER` / `ACUMATICA_API_PASSWORD` (the service login) in the env alongside the client id/secret.
+
 ## 2026-09-03 — Alyssa (Blender: one unregistered bag stopped all further scanning)
 
 **Files changed:** `components/production/capture/BlenderCapture.tsx`
