@@ -13,6 +13,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { getDb } from '@/lib/supabase/db'
+import { HEAVY_METALS, wantsHeavyMetals } from '@/lib/quality/heavy-metals'
 
 interface CoaSpec {
   id: number; doc_no: string; type: string | null; customer: string | null
@@ -30,7 +31,9 @@ const MICRO_FIELDS: [string, string][] = [
   ['bile_tolerant_gram_neg', 'Bile-tolerant Gram-neg'], ['ecoli_o157', 'E. coli O157'],
 ]
 const CONTAM_FIELDS: [string, string][] = [
-  ['lead', 'Lead'], ['cadmium', 'Cadmium'], ['mercury', 'Mercury'], ['arsenic', 'Arsenic'], ['copper', 'Copper'],
+  // Heavy metals come from the canonical list so the spec editor, the badge
+  // below and the COA builder can never disagree about which metals exist.
+  ...HEAVY_METALS.map(m => [m.key, m.label] as [string, string]),
   ['pyrrolizidine_alkaloids', 'Pyrrolizidine Alkaloids'], ['aflatoxins', 'Aflatoxins'],
   ['tropane_alkaloids', 'Tropane Alkaloids'], ['mycotoxins', 'Mycotoxins'], ['glyphosate', 'Glyphosate'],
   ['mosh_moah', 'MOSH/MOAH'], ['chlorate_perchlorate', 'Chlorate/Perchlorate'],
@@ -59,7 +62,7 @@ function blocks(s: CoaSpec) {
   return {
     micro: Object.values(sp.micro || {}).some(Boolean),
     sieving: Object.keys(sp.mesh || {}).length > 0,
-    heavyMetals: ['lead', 'cadmium', 'mercury', 'arsenic', 'copper'].some(k => sp.contaminants?.[k]),
+    heavyMetals: wantsHeavyMetals(sp.contaminants),
     pa: !!sp.contaminants?.pyrrolizidine_alkaloids,
     residue: !!sp.other?.residue_reg,
   }

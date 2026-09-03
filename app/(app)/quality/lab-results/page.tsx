@@ -18,7 +18,7 @@ import { RefreshCw, History, AlertTriangle, X } from 'lucide-react'
 const TEST_TYPES = [
   { key:'micro',       label:'🦠 Micro',         icon:'🦠', desc:'TPC · E.Coli · Salmonella · Listeria' },
   { key:'residue',     label:'🌿 Residue',        icon:'🌿', desc:'Multi-residue pesticide screening' },
-  { key:'heavy_metals',label:'⚗️ Heavy Metals',   icon:'⚗️', desc:'Lead · Cadmium · Mercury · Arsenic' },
+  { key:'heavy_metals',label:'⚗️ Heavy Metals',   icon:'⚗️', desc:'Lead · Cadmium · Mercury · Arsenic · Chromium' },
   { key:'eto',         label:'🧪 EtO',             icon:'🧪', desc:'Ethylene oxide + 2-Chloroethanol' },
   { key:'aflatoxins',  label:'🍄 Aflatoxins',      icon:'🍄', desc:'B1 · B2 · G1 · G2 · Ochratoxin A' },
   { key:'mosh_moah',   label:'🛢 MOSH/MOAH',       icon:'🛢', desc:'Mineral oil hydrocarbons' },

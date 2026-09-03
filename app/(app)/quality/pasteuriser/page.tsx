@@ -30,7 +30,7 @@ import { isoDate, isoDateTime } from '@/lib/utils/formatDate'
 import { checkOutlier } from '@/lib/utils/outliers'
 import { isNegative } from '@/lib/utils/validation'
 import { useQcNames } from '@/lib/hooks/useQcNames'
-import { cleanCustomerName, pickSpecForCustomer, customerOptions } from '@/lib/quality/customer-spec-match'
+import { cleanCustomerName, pickSpecForCustomer, customerOptions, docVersionOf } from '@/lib/quality/customer-spec-match'
 import { useDraftAutosave, readDraft, clearDraft } from '@/lib/hooks/useDraftAutosave'
 import QCNameField from '@/components/shared/QCNameField'
 import DraftRecoveryBanner from '@/components/shared/DraftRecoveryBanner'
@@ -581,6 +581,10 @@ function NewBatchModal({ onSave, onClose }: { onSave:(b:any)=>void; onClose:()=>
   // for this product is called out instead of resolved by row order.
   const [specVia, setSpecVia] = useState<'customer'|'generic'|'fallback'|'none'>('none')
   const [specAmbiguous, setSpecAmbiguous] = useState(0)
+  // Older documents for this customer+product that the latest one supersedes —
+  // not a problem, unlike specAmbiguous, but worth showing so "why this spec?"
+  // has a visible answer.
+  const [specSuperseded, setSpecSuperseded] = useState(0)
   // 'Generic' has to be a deliberate choice rather than an empty box, or
   // "customer is required" just gets satisfied with whatever is first in the
   // list. See save().
@@ -640,6 +644,7 @@ function NewBatchModal({ onSave, onClose }: { onSave:(b:any)=>void; onClose:()=>
         const picked = pickSpecForCustomer<any>(data, form.customer)
         setSpecVia(data && data.length ? picked.via : 'none')
         setSpecAmbiguous(picked.ambiguous.length)
+        setSpecSuperseded(picked.superseded.length)
         const spec = picked.spec
         setSpec(spec)
         if (spec) {
@@ -779,10 +784,21 @@ function NewBatchModal({ onSave, onClose }: { onSave:(b:any)=>void; onClose:()=>
               {/* "Spec loaded" alone was ambiguous: it said nothing about WHOSE
                   spec loaded, so a run against the generic limits looked
                   identical to one against the customer's own. */}
-              {!specLoading && specPreview && specVia === 'customer' && <span className="text-[11px] text-ok font-semibold">✓ Spec loaded for {form.customer}</span>}
+              {!specLoading && specPreview && specVia === 'customer' && (
+                <span className="text-[11px] text-ok font-semibold">
+                  ✓ Spec loaded for {form.customer}
+                  {specPreview.doc_no ? ` · ${specPreview.doc_no}${docVersionOf(specPreview.doc_no) != null ? ` (v${docVersionOf(specPreview.doc_no)})` : ''}` : ''}
+                </span>
+              )}
               {!specLoading && specPreview && specVia === 'generic' && <span className="text-[11px] text-warn font-semibold">⚠ Using the GENERIC spec — no spec on file for {form.customer || 'this customer'}</span>}
               {!specLoading && specPreview && specVia === 'fallback' && <span className="text-[11px] text-warn font-semibold">⚠ No customer or generic spec — showing another row for this product; check the values below</span>}
               {!specLoading && !specPreview && <span className="text-[11px] text-warn">No spec found — enter manually below</span>}
+              {!specLoading && specSuperseded > 0 && (
+                <span className="text-[11px] text-text-muted"
+                  title="This customer has more than one spec document for this product. The highest document number applies; the older ones are kept for reference.">
+                  · latest of {specSuperseded + 1} documents
+                </span>
+              )}
               {!specLoading && specAmbiguous > 1 && (
                 <span className="text-[11px] text-err font-semibold"
                   title="Two or more spec rows match this product and customer. Which one wins comes down to row order, so the limits below may not be the ones you expect. Fix the duplicates in Customer Specs.">
@@ -1953,7 +1969,11 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                       )}
                       {activeBatch.reference_batch && <><span>·</span><span>Ref: {activeBatch.reference_batch}</span></>}
                       {activeBatch._spec
-                        ? <span className="badge badge-ok text-[9px]">✓ Spec: {activeBatch.product_family} {activeBatch.grade} · {activeBatch.variant}</span>
+                        ? <span className="badge badge-ok text-[9px]" title={(activeBatch._spec as { product_description?: string } | null)?.product_description || undefined}>
+                            ✓ Spec: {activeBatch.product_family} {activeBatch.grade} · {activeBatch.variant}
+                            {(activeBatch._spec as { doc_no?: string } | null)?.doc_no
+                              ? ` · ${(activeBatch._spec as { doc_no?: string }).doc_no}` : ''}
+                          </span>
                         : <span className="badge badge-warn text-[9px]">⚠ Default spec</span>
                       }
                       {/* Available on a FINALISED batch too — a spec can change
