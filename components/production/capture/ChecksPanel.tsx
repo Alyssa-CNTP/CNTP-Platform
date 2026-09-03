@@ -6,7 +6,9 @@ import {
 } from 'lucide-react'
 import {
   visibleChecks, PHASE_LABEL, SECTION_TO_AREA, type MachineCheckDef, type CheckPhase,
+  storageKindFor,
 } from '@/lib/production/checks-config'
+import { formatMeshConfig, parseMeshConfig, isCanonicalMeshConfig, MESH_DECKS } from '@/lib/core/mesh'
 import { loadCheckSpecs, outOfRange, scaleOutOfTolerance, loadQualitySieveHint, type CheckSpec } from '@/lib/production/check-specs'
 import { ensureCheckRecord, appendCheckEvent, loadCheckRecord } from '@/lib/production/checks-db'
 import { getDb } from '@/lib/supabase/db'
@@ -102,7 +104,7 @@ export function ChecksPanel({
         events.forEach((e: any) => {
           if (e.kind === 'confirm') confirmsR[e.check_key] = { flagged: e.status === 'flagged', reason: e.reason ?? '' }
           else if (e.kind === 'number' && e.check_key !== 'infeed_vsd' && e.value_num != null) numbersR[e.check_key] = String(e.value_num)
-          else if (e.kind === 'text' && e.value_text != null) textsR[e.check_key] = e.value_text
+          else if ((e.kind === 'text' || e.kind === 'mesh') && e.value_text != null) textsR[e.check_key] = e.value_text
           else if (e.kind === 'scale') {
             const m = String(e.value_text ?? '').match(/std\s+([\d.]+)\s*\/\s*actual\s+([\d.]+)/)
             if (m) { scaleStdR = m[1]; scaleActR = m[2] } else if (e.value_num != null) scaleActR = String(e.value_num)
@@ -118,7 +120,7 @@ export function ChecksPanel({
         visibleChecks(sectionId, shift).forEach(c => {
           if (c.kind === 'confirm') snap[c.key] = serializeConfirm(confirmsR[c.key])
           else if (c.kind === 'number' && !c.hourly) snap[c.key] = (numbersR[c.key] ?? '').trim()
-          else if (c.kind === 'text') snap[c.key] = (textsR[c.key] ?? '').trim()
+          else if (c.kind === 'text' || c.kind === 'mesh') snap[c.key] = (textsR[c.key] ?? '').trim()
           else if (c.kind === 'scale') snap[c.key] = serializeScale(scaleStdR, scaleActR)
         })
         lastSavedRef.current = snap
@@ -276,7 +278,8 @@ export function ChecksPanel({
       case 'number':      return def.hourly ? (vsd.length > 0 ? 'logged' : 'pending')
                                             : ((numbers[def.key] ?? '').trim() ? 'logged' : 'pending')
       case 'scale':       return (scaleStd.trim() && scaleAct.trim()) ? 'logged' : 'pending'
-      case 'text':        return (texts[def.key] ?? '').trim() ? 'logged' : 'pending'
+      case 'text':
+      case 'mesh':        return (texts[def.key] ?? '').trim() ? 'logged' : 'pending'
       case 'massbalance': return mbConfirmed ? 'logged' : 'pending'
       default:            return 'ok'
     }
@@ -303,7 +306,7 @@ export function ChecksPanel({
     try {
       const id = await getRecord()
       await appendCheckEvent(id, {
-        phase: def.phase, check_key: def.key, check_label: def.label, kind: def.kind,
+        phase: def.phase, check_key: def.key, check_label: def.label, kind: storageKindFor(def.kind),
         status: 'fail', reason, source: 'keypad', maintenance_card_id: cardId,
         actor_id: soleOp?.id ?? null, actor_name: soleOp?.name ?? null,
       })
@@ -351,18 +354,15 @@ export function ChecksPanel({
           const fail = scaleOutOfTolerance(s, a, specs[c.key])
           await appendCheckEvent(id, { phase: c.phase, check_key: c.key, check_label: c.label, kind: 'scale',
             value_num: a, value_text: `std ${s} / actual ${a}`, unit: 'kg', status: fail ? 'fail' : 'ok', source: 'sign', ...actor })
-        } else if (c.kind === 'text') {
+        } else if (c.kind === 'text' || c.kind === 'mesh') {
           const t = (texts[c.key] ?? '').trim()
           if (!t) continue
-          await appendCheckEvent(id, { phase: c.phase, check_key: c.key, check_label: c.label, kind: 'text',
+          // storageKindFor() folds 'mesh' onto 'text' — see its doc comment:
+          // check_events.kind has a CHECK that does not know about UI-only
+          // kinds, and a mesh config is a string in the column either way.
+          await appendCheckEvent(id, { phase: c.phase, check_key: c.key, check_label: c.label, kind: storageKindFor(c.kind),
             value_text: t, status: 'ok', source: 'sign', ...actor })
         }
-      }
-      // Mass-balance snapshot at sign-off (if afternoon/shutdown applies).
-      if (checks.some(c => c.key === 'mass_balance') && !mbConfirmed) {
-        await appendCheckEvent(id, { phase: 'shutdown', check_key: 'mass_balance', check_label: 'Mass balance', kind: 'massbalance',
-          value_num: massBalance.variance, value_text: `${massBalance.totalIn.toFixed(1)} in / ${massBalance.totalOut.toFixed(1)} out`,
-          unit: 'kg', status: massBalance.withinTol ? 'ok' : 'flagged', source: 'sign', ...actor })
       }
 
       await getDb().schema('production').from('check_records').update({
@@ -582,6 +582,11 @@ function CheckCard(props: any) {
         </>
       )}
 
+      {/* Mesh sizes — three decks, the app writes the string */}
+      {d.kind === 'mesh' && (
+        <MeshCapture value={textValue} onChange={onText} disabled={readOnly} />
+      )}
+
       {/* Scale verification */}
       {d.kind === 'scale' && (
         <div className="grid grid-cols-2 gap-3">
@@ -619,7 +624,15 @@ function CheckCard(props: any) {
         </div>
       )}
 
-      {/* Mass balance (auto) */}
+      {/* Mass balance (auto).
+          NO SECTION CONFIGURES THIS ANY MORE — mass balance was removed from
+          the Sieving checks (checks-config.ts) because it has its own tab, its
+          own persisted prod_mass_balance row and its own tolerance, so this
+          asked the operator to re-confirm a figure they had already agreed
+          with, and blocked sign-off on it.
+          Kept, not deleted: the restore path above still reads historical
+          kind='massbalance' events, and this card is what would render them
+          if a section ever adds the check back. */}
       {d.kind === 'massbalance' && (
         <div className="space-y-2">
           <div className="grid grid-cols-3 gap-3 text-center">
@@ -643,6 +656,55 @@ function CheckCard(props: any) {
         <button onClick={onRaise} className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-err/10 text-err font-medium text-[13px]">
           <Wrench size={15} /> Raise to maintenance
         </button>
+      )}
+    </div>
+  )
+}
+
+// ── Mesh sizes — three decks ─────────────────────────────────────────────────
+// The operator fills in three numbers; lib/core/mesh.ts writes the stored
+// string. Typing the '#' is not the operator's job, and free text is what made
+// two shifts on the identical configuration fail to match in the reports.
+function MeshCapture({ value, onChange, disabled }: {
+  value: string; onChange: (v: string) => void; disabled: boolean
+}) {
+  // An old free-text value cannot be shown faithfully in three boxes, and a
+  // guess at what the words meant is worse than a blank: the operator would
+  // accept it without reading it. Leave the boxes empty and show the original
+  // underneath, so what was actually recorded stays visible until replaced.
+  const legacy = value.trim() !== '' && !isCanonicalMeshConfig(value)
+  const decks = legacy ? MESH_DECKS.map(() => '') : parseMeshConfig(value)
+
+  function setDeck(i: number, raw: string) {
+    const next = [...decks]
+    next[i] = raw.replace(/[^0-9.]/g, '')
+    onChange(formatMeshConfig(next))
+  }
+
+  return (
+    <div className="space-y-2">
+      <div className="grid grid-cols-3 gap-2">
+        {MESH_DECKS.map((deck, i) => (
+          <div key={deck} className="space-y-1">
+            <label className={LBL}>{deck}</label>
+            <div className="flex items-center gap-1">
+              <span className="text-[13px] text-text-muted font-mono">#</span>
+              <input
+                type="text" inputMode="numeric" value={decks[i]} disabled={disabled}
+                onChange={e => setDeck(i, e.target.value)}
+                placeholder="—"
+                className={INP + ' flex-1 text-center font-mono'} />
+            </div>
+          </div>
+        ))}
+      </div>
+      {value.trim() !== '' && !legacy && (
+        <p className="text-[11px] text-text-muted font-mono">Recorded as {value}</p>
+      )}
+      {legacy && (
+        <p className="text-[11px] text-warn">
+          Previously recorded as &ldquo;{value}&rdquo; — retype the three deck sizes above to replace it.
+        </p>
       )}
     </div>
   )

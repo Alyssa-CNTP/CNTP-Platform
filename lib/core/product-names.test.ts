@@ -78,3 +78,27 @@ describe('sameProduct', () => {
     expect(sameProduct(null, undefined)).toBe(false)
   })
 })
+
+describe('RB Blocks — the same drift as Heavy Sticks', () => {
+  it('folds every name the three layers used onto the floor name', () => {
+    // Acumatica said "Blocks: Clean" (15IGBL-C), so the picker read
+    // "15IGBL-C-C · Blocks: Clean - Conventional"; Sieving capture and the
+    // Acumatica summary said "RB Blocks"; Quality said "Rooibos Blocks".
+    for (const alias of ['Blocks: Clean', 'Blocks Clean', 'Rooibos Blocks', 'RB Block', 'Blocks', 'RB Blocks']) {
+      expect(canonicalProductType(alias)).toBe('RB Blocks')
+    }
+  })
+
+  it('strips the variant suffix the picker appended', () => {
+    expect(canonicalProductType('Blocks: Clean - Conventional')).toBe('RB Blocks')
+    expect(canonicalProductType('Rooibos Blocks - Organic')).toBe('RB Blocks')
+  })
+
+  it('does NOT fold cut blocks in — they are a different material', () => {
+    // The Acumatica summary reports Blocks Clean (C) and Blocks Cut (D) on
+    // separate lines; merging them would add the two together.
+    expect(canonicalProductType('Blocks: Cut')).not.toBe('RB Blocks')
+    expect(canonicalProductType('Blocks Cut / CHS')).not.toBe('RB Blocks')
+    expect(canonicalProductType('Cut Heavy Stick Fine')).not.toBe('RB Blocks')
+  })
+})

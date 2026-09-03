@@ -11,7 +11,7 @@
  * stay supervisor-editable and consistent — not hardcoded here.
  */
 export type CheckPhase = 'startup' | 'running' | 'shutdown'
-export type CheckKind  = 'confirm' | 'number' | 'text' | 'scale' | 'massbalance'
+export type CheckKind  = 'confirm' | 'number' | 'text' | 'scale' | 'massbalance' | 'mesh'
 
 export interface MachineCheckDef {
   key:                    string
@@ -27,21 +27,60 @@ export interface MachineCheckDef {
   help?:                  string
 }
 
+/**
+ * The UI kind a check renders as, mapped to the kind stored on the event.
+ *
+ * They are not the same list, and must not be conflated:
+ * `production.check_events.kind` carries
+ *
+ *     CHECK (kind IN ('confirm','number','text','scale','massbalance'))
+ *
+ * from migration 20260618_002, so a UI-only kind written straight to the column
+ * is REJECTED — the whole event fails to save, which on a tablet reads as a
+ * check that will not sign off. 'mesh' is three inputs on screen and a string
+ * in the column, which is what 'text' already means.
+ *
+ * Add a UI kind here the moment you add one to CheckKind; the compiler will
+ * not tell you, because CheckKind is a superset by design.
+ */
+export type CheckStorageKind = 'confirm' | 'number' | 'text' | 'scale' | 'massbalance'
+
+export function storageKindFor(kind: CheckKind): CheckStorageKind {
+  return kind === 'mesh' ? 'text' : kind
+}
+
 export const MACHINE_CHECKS: Record<string, MachineCheckDef[]> = {
   sieving: [
     // ── Start-up ──
     { key: 'indent_screen_speed', phase: 'startup', label: 'Indent screen speed', kind: 'number', unit: 'rpm', equipment: 'Indent Screen' },
     { key: 'indent_screen_angle', phase: 'startup', label: 'Indent screen angle', kind: 'number', unit: '°',  equipment: 'Indent Screen', allowNegative: true },
     { key: 'rotex_clean_start',   phase: 'startup', label: 'Cleaning of Rotex',   kind: 'confirm', afternoonOnly: true, equipment: 'Rotex', help: 'Start of afternoon shift only' },
-    { key: 'sieving_config',      phase: 'startup', label: 'Sieving configuration', kind: 'text', help: 'State the screen configuration in use' },
+    // Three deck sizes, not free text. The operator fills in the numbers and
+    // lib/core/mesh.ts writes '#12 / #14 / #16' — the '#' is the app's job.
+    // It was a text box, so what reached check_events.value_text was whatever
+    // was typed ('#12 #14 #16', '12/14/16', 'top 12 mid 14 bot 16'), and the
+    // four screens that read it back cannot group or compare free text: two
+    // shifts on the identical configuration did not match.
+    { key: 'sieving_config',      phase: 'startup', label: 'Sieving configuration (mesh sizes)', kind: 'mesh', help: 'Top, middle and bottom deck' },
     { key: 'scale_verification',  phase: 'startup', label: 'Scale verification',  kind: 'scale', unit: 'kg', equipment: 'Scale — Sieving', failRaisesMaintenance: true },
     { key: 'prestart_done',       phase: 'startup', label: 'Machine pre-start checks conducted', kind: 'confirm' },
+    // Asked ONCE here, with the rest of the start-up checks, then hinted
+    // hourly. It used to sit in 'running' with nothing asking for the first
+    // reading, so HourlyVsdPrompt auto-popped a full-screen modal the moment
+    // material was captured — which on the floor meant mid-way through adding
+    // a bulk bag. `hourly` still drives the hourly reminder; what changed is
+    // that the first reading is part of the start-up round.
+    { key: 'infeed_vsd',          phase: 'startup', label: 'Infeed speed (VSD)',  kind: 'number', unit: 'Hz', hourly: true },
     // ── Running ──
-    { key: 'infeed_vsd',          phase: 'running', label: 'Infeed speed (VSD)',  kind: 'number', unit: 'Hz', hourly: true },
     { key: 'dust_extraction',     phase: 'running', label: 'Dust extraction',     kind: 'confirm', equipment: 'Dust Extraction', failRaisesMaintenance: true },
     // ── Shut-down ──
     { key: 'rotex_clean_end',     phase: 'shutdown', label: 'Cleaning of Rotex',  kind: 'confirm', afternoonOnly: true, equipment: 'Rotex', help: 'Afternoon shift only' },
-    { key: 'mass_balance',        phase: 'shutdown', label: 'Mass balance',       kind: 'massbalance', afternoonOnly: true, help: 'At shut-down and at each grade/material/variant change-over' },
+    // Mass balance is NOT a check. It has its own tab, its own persisted
+    // prod_mass_balance row and its own +/-1% tolerance (ARCHITECTURE.md §5);
+    // confirming it a second time here asked the operator to agree with a
+    // figure they had already agreed with, and blocked sign-off on it. The
+    // 'massbalance' CheckKind stays defined because historical check_events
+    // rows carry kind='massbalance' and must still read back.
   ],
   refining1:   [],
   refining2:   [],
