@@ -534,6 +534,64 @@ is applied, `allocateBagSerial()` returns `source: 'local'` for every call.
 
 ---
 
+## 2026-09-03 — Gustav (Granule Line: bulk Excel export for History and Active Runs; Entyce/Edelweiss promoted to production)
+
+**Files changed:** `lib/utils/exportExcel.ts`, `app/(app)/quality/granule/page.tsx`
+
+### Bulk Excel export
+
+A per-run `⬇ Excel` already existed in both Active Runs and History
+(`exportGranuleRun`). What was missing was the **across-runs** export — the view
+you need to compare batches or hand a period to a customer.
+
+New `exportGranuleRuns()` mirrors `exportPasteuriserBatches()` so the two lines'
+exports read the same way. Two sheets, in this order on purpose — the summary is
+what gets read, the raw sheet is what gets checked:
+
+1. **Run Summary** — one row per run: batch, date, type/grade, customer, QC,
+   status, sample counts, average moisture / BD / dryer temp and average per
+   sieve fraction.
+2. **All Raw Samples** — every sample across every run.
+
+Two buttons:
+
+- **History → `⬇ Export all (n)`** — exports what is **currently filtered**, not
+  everything. The batch filter is how a period or product gets scoped, and an
+  export that ignored it would answer a different question.
+- **Active Runs → `⬇ Export active runs (n)`** — every open run in one workbook.
+
+Two details that matter for anyone averaging off these sheets:
+
+- Sieve averages count **only samples that actually had a sieve analysis**
+  (`sieving_done`). Including the rest would drag every fraction toward zero —
+  which is precisely how a spec gets set from a number nobody measured.
+- A sample with no sieve analysis exports **blank, not zero**, for the same reason.
+
+### Entyce / Edelweiss consolidation applied to PRODUCTION
+
+Migration `20260903_001` is now applied to the production project
+(`sxzjjcyuzyfneesnsjna`), matching staging. Verified after: Entyce → one row on
+**IPS-ENT-007** (BD max 300, `>20 max` 25), Edelweiss → one row on
+**IPS-EDE-002**, **zero** duplicate keys, **zero** rows with edge whitespace,
+49 → 46 rows.
+
+On production the Edelweiss row that **survived** was the one holding the
+impossible `>10` range (min 5.6 above max 5) — the opposite of staging, since the
+migration keeps the most recently updated row. Because the values are set
+**explicitly** to IPS-EDE-002 rather than inherited from whichever row wins, they
+were corrected: `>10 min` is now null and `>16` is 20–40. Confirmed by query.
+Note the `spec_revisions` note reads "the discarded row held an impossible range",
+which is accurate for staging but inverted for production — the `previous` array
+records both rows' actual values either way.
+
+**One behaviour change to be aware of:** the new unique index means a duplicate
+spec insert now **fails** with a database error instead of silently creating a
+second row. That is the point, but the code that gives a friendly message for it
+is on staging, not yet on `main` — so until this is promoted, a production user
+hitting it sees a raw Postgres error rather than an explanation.
+
+Lint 3021, at baseline. Tests 275/275. Typecheck introduces nothing.
+
 ## 2026-09-03 — Gustav (COA: generation blocked on missing results, cancel, post-sign-off edits, manager-only delete)
 
 **Files changed:** `lib/quality/coa-gating.ts` (new), `lib/quality/coa-gating.test.ts` (new), `app/(app)/quality/coa/page.tsx`, `.github/workflows/ci.yml`

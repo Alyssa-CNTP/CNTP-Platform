@@ -519,6 +519,128 @@ export async function exportGranuleRun(
   ], { subtitle }, `GranuleLine_${run.batch_number}_${date}.xlsx`)
 }
 
+/** Minimal shapes this exporter needs — enough to type it without `any`. */
+type GranuleSampleLike = {
+  sample_date?: string | null; sample_time?: string | null
+  dryer_number?: string | null; bulk_bag_serial?: string | null; bag_type?: string | null
+  moisture?: number | string | null; bulk_density?: number | string | null; dryer_temp?: number | string | null
+  sieving_done?: boolean | null
+  sieve_pct?: Record<string, unknown> | null
+  violations?: unknown
+}
+type GranuleRunLike = {
+  batch_number?: string | null; production_date?: string | null; type_grade?: string | null
+  customer?: string | null; qc_name?: string | null; is_cntp?: boolean | null
+  final_status?: string | null; overall_status?: string | null
+  samples?: GranuleSampleLike[] | null
+}
+type SheetRow = Record<string, string | number | null>
+
+/**
+ * Many granule runs in one workbook — the History and Active Runs "export all"
+ * buttons. exportGranuleRun() above covers a single run in depth; this is the
+ * across-runs view you need to compare batches or hand a period to a customer,
+ * and it mirrors exportPasteuriserBatches() so the two lines' exports read the
+ * same way.
+ *
+ * Sheet 1 is one row per RUN (averages), sheet 2 every sample across every run.
+ * That order is deliberate: the summary is what gets read, the raw sheet is what
+ * gets checked.
+ */
+export async function exportGranuleRuns(
+  runs: GranuleRunLike[],
+  sieves: Array<{ key: string; label: string }>,
+  filename: string,
+  subtitle?: string,
+) {
+  // ── Sheet 1: Run Summary — one row per run ────────────────────────────────
+  const summaryRows: SheetRow[] = runs.map(r => {
+    const samples: GranuleSampleLike[] = r.samples || []
+    // Only samples that actually had a sieve analysis count toward a sieve
+    // average — including the rest would drag every fraction toward zero, which
+    // is exactly how a spec gets set from a number nobody measured.
+    const sieveSS = samples.filter(s => s.sieving_done)
+    const row: SheetRow = {
+      'Batch Number':     r.batch_number || '',
+      'Production Date':  r.production_date || '',
+      'Type / Grade':     r.type_grade || '',
+      'Customer':         r.customer || '',
+      'QC Controller':    r.qc_name || '',
+      'CNTP Batch':       r.is_cntp ? 'Yes' : 'No',
+      'Final Status':     r.final_status || 'In Progress',
+      'Overall Status':   r.overall_status || '',
+      'Samples':          samples.length,
+      'Sieve Samples':    sieveSS.length,
+      'Avg Moisture %':   avg(samples.map(s => s.moisture)),
+      'Avg BD (cc/100g)': avg(samples.map(s => s.bulk_density)),
+      'Avg Dryer Temp (°C)': avg(samples.map(s => s.dryer_temp)),
+    }
+    sieves.forEach(sv => { row[`Avg ${sv.label}%`] = avg(sieveSS.map(s => n(s.sieve_pct?.[sv.key]))) })
+    return row
+  })
+
+  // ── Sheet 2: All Raw Samples across every run ─────────────────────────────
+  const rawRows: SheetRow[] = []
+  runs.forEach(r => {
+    (r.samples || []).forEach((s, i) => {
+      const row: SheetRow = {
+        'Batch Number':    r.batch_number || '',
+        'Type / Grade':    r.type_grade || '',
+        'Customer':        r.customer || '',
+        'Final Status':    r.final_status || 'In Progress',
+        'Sample #':        i + 1,
+        'Date':            s.sample_date || '',
+        'Time':            s.sample_time || '',
+        'Dryer':           s.dryer_number || '',
+        'Bag/Serial':      s.bulk_bag_serial || '',
+        'Bag Type':        s.bag_type || '',
+        'Moisture %':      n(s.moisture),
+        'BD (cc/100g)':    n(s.bulk_density),
+        'Dryer Temp (°C)': n(s.dryer_temp),
+        'Sieving Done':    s.sieving_done ? 'Yes' : 'No',
+      }
+      // Blank, not zero, when the sieve was not run — a zero here would read as
+      // a real measurement in any average taken off this sheet.
+      sieves.forEach(sv => { row[`${sv.label}%`] = s.sieving_done ? n(s.sieve_pct?.[sv.key]) : null })
+      row['Violations'] = Array.isArray(s.violations) ? s.violations.join('; ') : ''
+      rawRows.push(row)
+    })
+  })
+
+  const pct = '0.0"%"'
+  const sumNumFmt: Record<string, string> = {
+    'Samples': '0', 'Sieve Samples': '0', 'Avg Moisture %': '0.00"%"',
+    'Avg BD (cc/100g)': '0', 'Avg Dryer Temp (°C)': '0.0',
+  }
+  sieves.forEach(sv => { sumNumFmt[`Avg ${sv.label}%`] = pct })
+  const rawNumFmt: Record<string, string> = {
+    'Moisture %': '0.00"%"', 'BD (cc/100g)': '0', 'Dryer Temp (°C)': '0.0',
+  }
+  sieves.forEach(sv => { rawNumFmt[`${sv.label}%`] = pct })
+
+  const statusTone = (v: unknown): Tone | undefined => {
+    const t = String(v)
+    return /pass|approved/i.test(t) ? 'ok' : /fail|reject/i.test(t) ? 'err' : /concession/i.test(t) ? 'warn' : undefined
+  }
+  const sumFill = (r: SheetRow) => {
+    const t: Record<string, Tone> = {}
+    const fs = statusTone(r['Final Status']); if (fs) t['Final Status'] = fs
+    const os = statusTone(r['Overall Status']); if (os) t['Overall Status'] = os
+    return Object.keys(t).length ? t : undefined
+  }
+  const rawFill = (r: SheetRow) => {
+    const t: Record<string, Tone> = {}
+    if (r['Violations']) t['Violations'] = 'err'
+    const fs = statusTone(r['Final Status']); if (fs) t['Final Status'] = fs
+    return Object.keys(t).length ? t : undefined
+  }
+
+  await buildStyledWorkbook([
+    { name: 'Run Summary',      rows: summaryRows, numFmt: sumNumFmt, fill: sumFill },
+    { name: 'All Raw Samples',  rows: rawRows,     numFmt: rawNumFmt, fill: rawFill },
+  ], { subtitle: subtitle || `Granule Line — ${runs.length} run${runs.length === 1 ? '' : 's'}` }, filename)
+}
+
 // ── Sieving Tower ─────────────────────────────────────────────────────────────
 
 export async function exportSievingRuns(
