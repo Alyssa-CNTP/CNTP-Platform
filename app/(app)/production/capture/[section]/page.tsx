@@ -1811,11 +1811,15 @@ function CaptureScreen() {
   // was never a reason for it to be down there.
   // What the session's OTHER batches already hold, for SievingCapture's self-heal.
   // prod_debagging and bag_tags are keyed on session_id alone — no batch
-  // discriminator — so a changeover (addProduction) leaves every batch's rows
-  // under one id, and the freshly-mounted empty batch would otherwise read the
-  // whole session as "missing" and restore a copy of it into itself, doubling the
-  // session's inputs on the next save. Only THIS session's batches: the self-heal
-  // queries are session-scoped, so siblings/other shifts are already out of range.
+  // discriminator — so a session holding more than one batch leaves every
+  // batch's rows under one id, and a freshly-mounted empty batch would otherwise
+  // read the whole session as "missing" and restore a copy of it into itself,
+  // doubling the session's inputs on the next save. Only THIS session's batches:
+  // the self-heal queries are session-scoped, so siblings and other shifts are
+  // already out of range.
+  //
+  // Changeover no longer creates sibling batches (it opens its own session), but
+  // sessions captured before that change still hold them, so this stays.
   //
   // Guarded on the section kind, never on a field name — `data` is the section
   // union and only Sieving's arm has these shapes (§4).
@@ -1900,9 +1904,10 @@ function CaptureScreen() {
       }
     }
   }
-  async function addProduction() {
-    // Change-over: snapshot the closing mass balance of the production we're
-    // leaving into the append-only checks trail (auto-derived, no typing).
+  // Snapshot the closing mass balance of the record being left, into the
+  // append-only checks trail (auto-derived, no typing). Best-effort: a
+  // changeover must not be blocked by a failed audit write.
+  async function snapshotChangeoverBalance() {
     try {
       const prev = prodTotals(active!)
       const recId = await ensureCheckRecord(sectionId, dateParam, shift, sessionId)
@@ -1913,21 +1918,31 @@ function CaptureScreen() {
         production_idx: activeIdx, source: 'auto',
       })
     } catch { /* snapshot is best-effort */ }
-    setProductions(ps => [...ps, emptyProduction(sectionId, null, assignment?.lot_number)])
-    setActiveIdx(productions.length)
-    setTab('production')
   }
 
-  // Mid-shift grade/variant changeover (Sieving): the closing batch's leftover
-  // mass balance is still part of the SAME production run and can go out as
-  // Blocks/Sticks under the new grade — so it stays in the same session
-  // (addProduction, combined mass balance) rather than a hard reset, UNLESS the
-  // closing batch is organic, which must never share a balance with anything
-  // else and gets a fully separate session (startNewProduction).
-  function confirmGradeChangeover() {
+  // Mid-shift grade/variant changeover (Sieving). ALWAYS opens a new SESSION.
+  //
+  // It used to append a batch to the same session for non-organic material, on
+  // the reasoning that the leftover is still part of the same run. That is true
+  // on the floor and false in the database: a capture screen is mounted
+  // key={active.id} for ONE batch, while the debag self-heal is scoped to
+  // session_id with no batch discriminator. The fresh empty batch therefore read
+  // the whole session as "missing" and copied it in, and persist() wrote that
+  // back — doubling the debagging rows on every changeover: 8, 16, 32, 64, 128.
+  // The morning of 2026-09-01 reached 262 rows for 17 bags actually debagged.
+  //
+  // A separate session has no sibling batch under one session_id for the
+  // self-heal to cross-copy, which removes the mechanism rather than patching
+  // it. The leftover can still be bagged out under the new grade — it is simply
+  // recorded on its own balance, which is also what the organic path always did.
+  //
+  // The unsaved edits are flushed first: startNewProduction() drops the current
+  // session from local state, so anything not yet persisted would go with it.
+  async function confirmGradeChangeover() {
     setGradeChangeover(false)
-    if (isOrganicVariant(active?.variant)) startNewProduction()
-    else addProduction()
+    await snapshotChangeoverBalance()
+    try { await flushSave() } catch { /* the snapshot and the new record still proceed */ }
+    startNewProduction()
   }
 
   // Start a fresh batch record for the next variant/grade after the current one is
@@ -2010,12 +2025,15 @@ function CaptureScreen() {
             <div className="p-5 space-y-3">
               {isOrganicVariant(active.variant) ? (
                 <p className="text-[13px] text-text-muted">
-                  This batch is <strong className="text-text">{VARIANT_OPTIONS.find(v => v.value === active.variant)?.label ?? active.variant}</strong> — organic material must stay segregated, so this closes it off as its own record. The new grade/variant starts a fresh batch with its own mass balance.
+                  This batch is <strong className="text-text">{VARIANT_OPTIONS.find(v => v.value === active.variant)?.label ?? active.variant}</strong> — organic material must stay segregated, so this closes it off as its own record. The new grade/variant starts a fresh record with its own mass balance.
                 </p>
               ) : (
                 <>
                   <p className="text-[13px] text-text-muted">
-                    This carries into the new batch — leftover raw material is still part of the same run and can be bagged out as Blocks / Heavy Sticks / Indent Sticks under the new grade.
+                    This closes the current record off with its own mass balance, and starts a fresh one for the new grade/variant.
+                  </p>
+                  <p className="text-[13px] text-text-muted">
+                    Leftover raw material can still be bagged out as Blocks / Heavy Sticks / Indent Sticks under the new grade — it is just recorded against the new record rather than carried across.
                   </p>
                 </>
               )}
