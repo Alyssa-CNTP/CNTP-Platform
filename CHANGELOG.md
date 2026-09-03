@@ -2,6 +2,83 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-03 — Gustav (QC entry: a bulk density or moisture that cannot be real is now refused)
+
+**Files changed:** `lib/quality/plausibility.ts` (new), `lib/quality/plausibility.test.ts` (new), `app/(app)/quality/granule/page.tsx`, `app/(app)/quality/pasteuriser/page.tsx`
+
+### Why the existing check missed these
+
+`lib/utils/outliers.ts` already flagged unusual readings, but it is
+**statistical**: it compares a value against the other samples in the run, and
+only fires once the run already has real spread (`std > stdFloor`). Both
+conditions failed for the values that are actually in production:
+
+- **Granule samples 754 / 755 — bulk density `2200`** (a 220 with a stray zero).
+  Every other sample in that run read exactly 220, so the standard deviation was
+  **zero**, `checkOutlier` returned null, and nothing was flagged. It then saved
+  twice.
+- **Granule sample 117 — moisture `121` and dryer temp `1215`**: one row where
+  the decimal point was dropped throughout (12.1 % and 121.5 °C).
+- Granule samples 158 / 160 / 347 (BD `0`), 464 (dryer temp `1`), 306 / 307
+  (dryer temp 230 / 220).
+- Pasteuriser samples 310 (BD `0`, moisture `0`), 734 (moisture `95`),
+  1098 (moisture `0.8`).
+
+**14 implausible values in total.** A statistical check can never catch the first
+sample of a run, or a run where everyone typed the same wrong number.
+
+### New `lib/quality/plausibility.ts` — 26 tests
+
+Absolute bounds, needing no history. Two levels, deliberately:
+
+- **`block`** — physically impossible or an obvious decimal slip. **Refused**;
+  the save button is disabled and there is nothing to confirm.
+- **`confirm`** — unusual but genuinely producible (a real dryer fault does make
+  11 % moisture). Joins the existing confirm-to-save list.
+
+| Measurement | Refused outside | Confirm outside | Observed in 650 samples |
+|---|---|---|---|
+| Moisture | 1–25 % | 4–11 % | 3.2–11.34 % (p01 6.4, p99 10.6) |
+| Bulk density (cc/100g) | 80–450 | 160–330 | 170–320 (p01 190, p99 266) |
+| Bulk density (ml/5g) | 1–50 | 2–20 | Rosehips, normally "<10" |
+| Dryer temp | 20–200 °C | 100–145 °C | p01 115, p99 133 |
+| Sieve fraction | 0–100 % | — | block only |
+
+The soft band comes from the observed p01–p99, widened outward. It is
+**deliberately not a spec**: a spec says whether the product is acceptable, this
+says whether the *number was typed correctly*.
+
+**Rosehips bulk density gets its own bounds.** It is reported volumetrically as
+`ml/5g` (normally under 10) — the cc/100g range would have refused **every valid
+Rosehips reading**. `bdMeasurementFor(family)` routes it, mirroring
+`pastBdUnit()`.
+
+**Decimal-slip suggestions.** When shifting the decimal one or two places lands
+in range, the message says so: `2200 → 220`, `1215 → 121.5`, `121 → 12.1`,
+`95 → 9.5`. Offered only — never applied automatically, because silently
+rewriting a QC's reading is worse than refusing it.
+
+### Wiring
+
+Both granule modals (add and edit) and the pasteuriser sample modal. A block
+shows a red panel and disables save; confirms are folded into the **same** list
+the existing tick already governs, so a QC never has to confirm twice because
+the reason came from two different checks.
+
+Blank or half-typed input is always `ok` — "required" is a separate question
+from "plausible", and conflating them would block a QC mid-keystroke.
+
+The granule **edit** modal checks only the three primary readings: its form
+carries no dryer-2 fields, unlike the add modal.
+
+### Not done
+
+The **14 existing bad values are untouched.** Correcting historical quality
+records is a separate decision — say which should be corrected (to the suggested
+value) and which left as-is, and I will write the migration.
+
+Tests **312/312** (26 new). Lint 3021, at baseline. Typecheck introduces nothing.
+
 ## 2026-09-02 — Alyssa (Phase plan committed to the repo; Phase 3 closed with proof)
 
 **Files changed:** `docs/capture-phases.md` (new), `lib/config/boundary-rule.test.ts` (new), `components/shared/FeatureBoundary.test.ts` (new), `vitest.config.mts`, `ARCHITECTURE.md`
