@@ -10,6 +10,7 @@ import { getDb } from '@/lib/supabase/db'
 import { useDraftAutosave, readDraft, clearDraft } from '@/lib/hooks/useDraftAutosave'
 import DraftRecoveryBanner from '@/components/shared/DraftRecoveryBanner'
 import CoaSpecsTab from '@/components/quality/CoaSpecsTab'
+import { cleanCustomerName, findDuplicateSpec, customerOptions, normCustomerKey } from '@/lib/quality/customer-spec-match'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -122,6 +123,10 @@ export default function CustomerSpecsPage() {
     const cust = q.get('customer'); if (cust) setFilterCust(cust)
   }, [])
   const [showAdd,setShowAdd]=useState(false)
+  const [addNewCust,setAddNewCust]=useState(false)
+  // Typed patch helper — addForm is a loose bag of fields, but a setter that
+  // merges a partial does not need `any` to say so.
+  const patchAdd=(patch:Record<string,unknown>)=>setAddForm((p:Record<string,unknown>)=>({...p,...patch}))
   const [addForm,setAddForm]=useState<any>(EMPTY())
   const [addSaving,setAddSaving]=useState(false)
   const [addErr,setAddErr]=useState('')
@@ -155,8 +160,27 @@ export default function CustomerSpecsPage() {
       .then(({data}:{data:any[]|null})=>{setHistSpecs(data??[]);setHistLoading(false)})
   },[showHistory,db])
 
+  // The four columns that together identify a spec. Editing any of them can
+  // collide with another row, and a trailing space in one of them is how
+  // production ended up with three Entyce rows carrying different limits — so
+  // they are cleaned on the way in and checked against the rest of the table.
+  const IDENTITY_COLS = ['customer','product_family','grade','variant']
+
   async function saveField(id:number,col:string,val:any){
-    const {data:updated,error}=await db.schema('qms').from('customer_specs').update({[col]:val}).eq('id',id).select().single()
+    let value = val
+    if (IDENTITY_COLS.includes(col)) {
+      value = cleanCustomerName(val)                     // trim + collapse, case kept
+      if (col !== 'customer' && !value) { alert('Product family, grade and variant cannot be blank.'); return }
+      const row = specs.find(r=>r.id===id)
+      if (row) {
+        const dup = findDuplicateSpec(specs, {...row, [col]: value}, id)
+        if (dup && !confirm(
+          `That makes this a second spec for the same customer and product.\n\n`+
+          `${dup.customer||'Generic'} — ${dup.product_family} ${dup.grade} · ${dup.variant} already exists (id ${dup.id}).\n\n`+
+          `The pasteuriser and the COA will then pick one of the two by database row order. Continue?`)) return
+      }
+    }
+    const {data:updated,error}=await db.schema('qms').from('customer_specs').update({[col]:value}).eq('id',id).select().single()
     if(error){alert('Save failed: '+error.message);return}
     setSpecs(p=>p.map(r=>r.id===id?(updated as Spec):r))
   }
@@ -170,11 +194,31 @@ export default function CustomerSpecsPage() {
 
   async function saveNew(){
     if(!addForm.product_family||!addForm.grade||!addForm.variant){setAddErr('Product family, grade and variant are required');return}
+    // Clean before checking AND before saving: a spec whose customer or product
+    // carries stray whitespace is unreachable by the lookups that read it.
+    const ident = {
+      customer:       cleanCustomerName(addForm.customer),
+      product_family: cleanCustomerName(addForm.product_family),
+      grade:          cleanCustomerName(addForm.grade),
+      variant:        cleanCustomerName(addForm.variant),
+    }
+    // Warn, don't refuse. The client spec sheet has SEVEN Entyce documents, six
+    // of them under the same family/grade/variant with different sieve limits,
+    // separated only by doc number and product description — neither of which
+    // this table has a column for. So a second row for one customer+product is
+    // sometimes legitimate. What must not happen silently is the ACCIDENTAL
+    // one, so it takes an explicit confirmation and names the row it clashes
+    // with. (The dropdown above is what stops the whitespace/case variants.)
+    const dup = findDuplicateSpec(specs, ident)
+    if (dup && !confirm(
+      `${dup.customer||'Generic'} — ${dup.product_family} ${dup.grade} · ${dup.variant} already has a spec (id ${dup.id}).\n\n`+
+      `Nothing in this table separates two specs for the same customer and product, so the pasteuriser and the COA will pick one of them by database row order — not necessarily this one.\n\n`+
+      `Add it anyway?`)) { setAddErr('Not saved — edit the existing spec instead, or change the product family / grade / variant.'); return }
     setAddSaving(true);setAddErr('')
-    const body:any={...addForm}
+    const body:any={...addForm,...ident}
     ;['gt6_min','gt6_max','gt10_min','gt10_max','gt12_min','gt12_max','gt16_min','gt16_max','gt20_min','gt20_max','gt40_min','gt40_max','gt60_min','gt60_max','dust_min','dust_max','moisture_max','bulk_density_min','bulk_density_max','bd_target']
       .forEach(k=>{body[k]=numOrNull(body[k])})
-    body.customer=addForm.customer||'';body.notes=addForm.notes||null
+    body.customer=ident.customer;body.notes=addForm.notes||null
     const {data:saved,error}=await db.schema('qms').from('customer_specs').insert(body).select().single()
     if(error){setAddErr(error.message);setAddSaving(false);return}
     clearDraft(draftKey)
@@ -182,10 +226,29 @@ export default function CustomerSpecsPage() {
   }
 
   const families=[...new Set(specs.map(r=>r.product_family))].sort()
-  const customers=[...new Set(specs.map(r=>r.customer||'').filter(Boolean))].sort()
+  // Deduped on a normalised key, so 'Entyce', 'Entyce ' and 'ENTYCE ' offer
+  // ONE option and picking it writes the spelling the lookups will match.
+  const specCustomers=customerOptions(specs)
+  // Existing duplicates: one spec per (customer, family, grade, variant) is
+  // the rule, and until today nothing enforced it. Whichever row Postgres
+  // returns first is the one the pasteuriser and the COA are judged against,
+  // so these have to be visible here to be fixable — the guards below only
+  // stop NEW ones.
+  const dupGroups=(()=>{
+    const by=new Map<string,Spec[]>()
+    specs.forEach(r=>{
+      const k=[r.customer,r.product_family,r.grade,r.variant].map(v=>normCustomerKey(v)).join('|')
+      by.set(k,[...(by.get(k)??[]),r])
+    })
+    return [...by.values()].filter(g=>g.length>1)
+  })()
+  const customers=specCustomers
   let filtered=specs
   if(filterFam)filtered=filtered.filter(r=>r.product_family===filterFam)
-  if(filterCust)filtered=filtered.filter(r=>(r.customer||'')===filterCust)
+  // Matched on the normalised key, not the raw string: the dropdown now offers
+  // one deduped spelling per customer, so an exact compare would hide the rows
+  // stored under a variant spelling — the opposite of what this filter is for.
+  if(filterCust)filtered=filtered.filter(r=>normCustomerKey(r.customer)===normCustomerKey(filterCust))
   const grouped:Record<string,Spec[]>={}
   filtered.forEach(r=>{if(!grouped[r.product_family])grouped[r.product_family]=[];grouped[r.product_family].push(r)})
   const fld:React.CSSProperties={width:'100%',padding:'5px 7px',border:'1px solid #d1d5db',borderRadius:6,fontSize:11,boxSizing:'border-box',fontFamily:'monospace'}
@@ -207,6 +270,23 @@ export default function CustomerSpecsPage() {
 
       {tab==='sieve' && (<>
       {/* Toolbar */}
+      {dupGroups.length>0&&(
+        <div style={{marginBottom:12,padding:'10px 14px',borderRadius:10,border:'1px solid #fca5a5',background:'#fef2f2'}}>
+          <div style={{fontSize:12,fontWeight:700,color:'#991b1b',marginBottom:4}}>
+            ⚠ {dupGroups.length} customer{dupGroups.length===1?'':'s'} {dupGroups.length===1?'has':'have'} more than one spec for the same product
+          </div>
+          <div style={{fontSize:11,color:'#7f1d1d',marginBottom:6}}>
+            Only one of each is used, and which one comes down to database row order — so a pasteuriser run or a COA may be checked
+            against limits nobody chose. Keep the correct row, delete the rest.
+          </div>
+          {dupGroups.map((g,i)=>(
+            <div key={i} style={{fontSize:11,color:'#7f1d1d',fontFamily:'monospace',marginTop:2}}>
+              {(g[0].customer||'Generic')} — {g[0].product_family} {g[0].grade} · {g[0].variant}:{' '}
+              {g.map(r=>`id ${r.id} (${JSON.stringify(r.customer)})`).join('  vs  ')}
+            </div>
+          ))}
+        </div>
+      )}
       <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:12,flexWrap:'wrap'}}>
         <span style={{fontWeight:700,fontSize:13}}>📋 Product Specifications</span>
         <span style={{fontSize:10,color:'#9ca3af'}}>{specs.length} specs · {families.length} families</span>
@@ -272,8 +352,27 @@ export default function CustomerSpecsPage() {
                   </select>
                 </div>
                 <div>
-                  <label style={{fontSize:10,fontWeight:700,color:'#374151',display:'block',marginBottom:3,textTransform:'uppercase'}}>Customer (optional)</label>
-                  <input value={addForm.customer} onChange={e=>setAddForm((p:any)=>({...p,customer:e.target.value}))} placeholder="Leave blank for generic" style={fld}/>
+                  <label style={{fontSize:10,fontWeight:700,color:'#374151',display:'block',marginBottom:3,textTransform:'uppercase'}}>Customer</label>
+                  {/* A list rather than a free-text box: typing the name is how
+                      one customer ends up with several spec rows differing only
+                      by a space or a capital, and the pasteuriser/COA lookups
+                      then resolve to whichever row Postgres returns first. */}
+                  <select value={addNewCust?'__new__':addForm.customer} style={fld}
+                    onChange={e=>{
+                      const v=e.target.value
+                      if(v==='__new__'){setAddNewCust(true);patchAdd({customer:''})}
+                      else{setAddNewCust(false);patchAdd({customer:v})}
+                    }}>
+                    <option value="">Generic — applies to every customer</option>
+                    {specCustomers.map(c=><option key={c} value={c}>{c}</option>)}
+                    <option value="__new__">+ New customer…</option>
+                  </select>
+                  {addNewCust&&(
+                    <input autoFocus value={addForm.customer} placeholder="New customer name"
+                      onChange={e=>patchAdd({customer:e.target.value})}
+                      onBlur={e=>patchAdd({customer:cleanCustomerName(e.target.value)})}
+                      style={{...fld,marginTop:4}}/>
+                  )}
                 </div>
               </div>
               <div style={{fontWeight:700,fontSize:11,color:'#374151',marginBottom:2}}>Sieve Specifications (%)</div>
