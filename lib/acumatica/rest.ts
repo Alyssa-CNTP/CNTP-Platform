@@ -1,7 +1,7 @@
 // ══════════════════════════════════════════════════════════════════════════════
 // lib/acumatica/rest.ts
 //
-// OAuth2 (client-credentials) client for Acumatica's CONTRACT-BASED REST API.
+// OAuth2 (Resource Owner Password) client for Acumatica's CONTRACT-BASED REST API.
 //
 // Unlike odata.ts (read-only Basic auth over Generic Inquiries), this authenticates
 // with a short-lived bearer token and can call entity endpoints:
@@ -20,20 +20,26 @@ export interface AcumaticaRestConfig {
   baseUrl: string       // e.g. https://rooibostea.acumatica.com
   clientId: string
   clientSecret: string
+  apiUser: string       // Acumatica service-user login (Resource Owner Password grant)
+  apiPassword: string
   endpoint: string      // contract endpoint name/version, e.g. "CNTP/25.201.0213"
 }
 
 // Pull config from env; null (not throw) when unconfigured so routes can answer a
-// clean 503, mirroring odata.ts.
+// clean 503, mirroring odata.ts. Acumatica's connected app is configured for the
+// Resource Owner Password grant, so we need a service user's username + password
+// in addition to the client id/secret.
 export function getAcumaticaRestConfig(): AcumaticaRestConfig | null {
   const baseUrl      = process.env.ACUMATICA_BASE_URL      ?? ''
   const clientId     = process.env.ACUMATICA_CLIENT_ID     ?? ''
   const clientSecret = process.env.ACUMATICA_CLIENT_SECRET ?? ''
+  const apiUser      = process.env.ACUMATICA_API_USER      ?? ''
+  const apiPassword  = process.env.ACUMATICA_API_PASSWORD  ?? ''
   const endpoint     = process.env.ACUMATICA_REST_ENDPOINT ?? 'CNTP/25.201.0213'
-  if (!baseUrl || !clientId || !clientSecret) return null
+  if (!baseUrl || !clientId || !clientSecret || !apiUser || !apiPassword) return null
   return {
     baseUrl: baseUrl.replace(/\/+$/, ''),
-    clientId, clientSecret,
+    clientId, clientSecret, apiUser, apiPassword,
     endpoint: endpoint.replace(/^\/+|\/+$/g, ''),
   }
 }
@@ -61,9 +67,11 @@ async function getToken(cfg: AcumaticaRestConfig, force = false): Promise<string
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
-      grant_type:    'client_credentials',
+      grant_type:    'password',
       client_id:     cfg.clientId,
       client_secret: cfg.clientSecret,
+      username:      cfg.apiUser,
+      password:      cfg.apiPassword,
       scope:         'api',
     }),
   }, 15_000)
