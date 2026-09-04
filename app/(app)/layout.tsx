@@ -71,16 +71,15 @@ const ROUTE_GUARDS: Array<{
   { prefix: '/production/blends',    departments: ['Production','Management'], permission: 'can_view_blends',    orPermission: true },
   { prefix: '/production',           departments: ['Production'], permission: 'can_view_ops_dashboard', orPermission: true },
 
-  // Maintenance — full module is Maintenance + Management. Production may only
-  // reach Job Cards (to report breakdowns + track their own cards). Longest-prefix
-  // matcher means the job-cards rule wins for that sub-route.
-  { prefix: '/maintenance/job-cards', departments: ['Maintenance','Management','Production'], permission: 'can_access_maintenance', orPermission: true },
-  // Job cards specifically are reachable by QUALITY (the QC does the
-  // post-maintenance check on a card) and PRODUCTION (they raise breakdowns and
-  // are the originator who verifies the work). Both are shown the link in the
-  // Sidebar, so without this more-specific rule the route bounced them straight
-  // back to /home — QC could not open a QC check and an originator could not
-  // verify, leaving the card stuck. The rest of /maintenance stays restricted.
+  // Maintenance — full module is Maintenance + Management. Job cards specifically
+  // are also reachable by PRODUCTION (they raise breakdowns and track their own
+  // cards) and QUALITY (the QC does the post-maintenance check on a card). Both
+  // are shown the link in the Sidebar, so without QUALITY here the route bounced
+  // the QC straight back to /home and a check could never be opened.
+  // Longest-prefix matcher means this job-cards rule wins for that sub-route.
+  // NOTE: there must be exactly ONE rule for this prefix — two rules with the
+  // same prefix tie on length and the FIRST wins the stable sort, which silently
+  // reinstated the bug when a duplicate crept in.
   { prefix: '/maintenance/job-cards', departments: ['Maintenance','Management','Production','Quality'], permission: 'can_access_maintenance', orPermission: true },
   { prefix: '/maintenance',           departments: ['Maintenance','Management'],              permission: 'can_access_maintenance', orPermission: true },
 

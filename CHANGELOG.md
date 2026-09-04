@@ -2,6 +2,19 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-01 — Gustav (Maintenance: monthly checklists imported from the QM-FM workbooks; reading-checklist text no longer cut off)
+
+**Files changed:** `app/(app)/maintenance/scheduled/page.tsx`, `app/(app)/layout.tsx`, `supabase/migrations/20260901_010_monthly_checklists_from_workbooks.sql` (new, applied to staging)
+
+- **Monthly checklists now carry the REAL questions from the QM-FM workbooks.** All 16 supplied workbooks were parsed and imported verbatim — **836 tasks**, up from 130 placeholder lines. Every task is prefixed with the **EQUIPMENT** column from the sheet (e.g. *"Big Pellet Mill (FKJ 35) — Inspect die ring for wear…"*), so each question stays linked to the item it belongs to. `doc_ref` is set to the revision actually imported (Granules → `/10`, Facility → `/6`). Nothing was invented or paraphrased.
+- Imported: Granules (154), Facility (105), Pasteurizer (102), Sieving Tower (85), Magnets (56), Rosehips Crusher (47), Rosehips Cutter (44), Refining 2 (40), Rosehips Blending (38), Rosehips Hammer Mill (36), Refining 1 (35), Boiler (28), Vacuum Packing (28), Rosehips Granules (21), Pallet Wrapper (9), Stitching Machine (8).
+- **NOT imported — no workbook supplied:** *Diamond Blender* (QM-FM-039). **Not imported — wrong frequency:** the *Generator GKSD-440* file (QM-FM-028) is a **weekly readings grid** (run hours, fuel %, oil/coolant level), not a monthly fault checklist, so it does not fit the monthly template. Both were left untouched rather than guessed at.
+- **FIXED: reading-checklist wording was being cut off.** `INP` already carries `w-full`, so `${INP} w-28` emitted two competing width utilities and Tailwind's stylesheet order let `w-full` win — the value box expanded to the full row and crushed the label to one word per line. The inputs now sit in fixed-width wrappers, so IP Measurement, Water Meters, Generator / Diesel and JoJo Tanks read properly. Same fix applied to the fault/no-fault selector.
+- Checklist card headers now always stack (name / doc-ref / last-completed on top, controls beneath). The cards sit in a 2–3 column grid, so they are narrow even on a wide screen, but `sm:` breakpoints only see the viewport — the text was being squeezed regardless.
+- **FIXED: a duplicate `/maintenance/job-cards` route rule had silently reinstated the QC access bug.** Two rules shared the same prefix; they tie on length and the first wins the stable sort, so the copy *without* Quality was taking effect and QC was still being bounced to `/home`. Merged into a single rule.
+
+---
+
 ## 2026-09-04 — Alyssa (Promotion: both forked concerns decided; what can move to main, probed)
 
 **Files changed:** `docs/capture-phases.md`
