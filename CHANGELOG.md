@@ -2,6 +2,67 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-04 — Alyssa (Core stops reaching into components; Phase 1B found already provisioned)
+
+**Files changed:** `lib/core/types/capture-data.ts` (new), `components/production/capture/core-conformance.ts` (new), `lib/core/capture-rows/index.ts`, `eslint.boundaries.mjs`, `docs/capture-phases.md`
+
+### The boundary rule had a hole and core was through it
+
+`lib/core/capture-rows` imported its five section data types from the capture
+**components**. `eslint.boundaries.mjs` listed `features/`, `app/`, React/Next and
+`lib/supabase/` — but not `components/` — so this was legal by the letter of the rule and
+against every word of ARCHITECTURE.md §2.
+
+Fixed the way core already answers this elsewhere: `lib/core/mass-balance/sieving.ts`
+declares `SievingBalanceData` as "only the fields the balance needs".
+`lib/core/types/capture-data.ts` now does the same for the row builders — every field is
+one core actually reads. **`lib/core` imports nothing outside `lib/core`.**
+
+**Why structural rather than moving the types into core** — the textbook answer, one
+declaration, no drift. It edits all five section components, the most contested files in
+the fork. Deepening the fork to tidy a type import makes the promotion harder exactly
+where it is already hardest.
+
+Drift is pinned instead, at compile time, by `core-conformance.ts` on the components side
+(core may not import components; components importing core is the allowed direction). It
+emits nothing — `tsc` enforces it, vitest could not, since vitest strips types without
+checking them.
+
+**The guard caught two of my own errors before commit:** `RefiningData` types its output
+groups `RefiningOutputGroup | null` and I had written them optional-only; and `dustKey`
+feeds `dustProductType(key: string)` directly, so it is required. Either would have
+reached `prod_bagging` as a NULL column.
+
+`components/` added to `CORE_FORBIDDEN`, **`import type` included** — an erased import
+still makes core depend on a `'use client'` component parsing. Proven by restoring the
+exact import that used to pass: 1 error, naming the file and the fix.
+
+### Phase 1B — the migration is already applied on staging
+
+Checked read-only rather than assumed. `production.bag_serial_counters` returns
+`42501 permission denied`, which only an **existing** table raises — a missing one gives
+`42P01`. A known-good control (`prod_bagging`) returns the identical shape.
+
+So Phase 1B is not "built, not shipped". The code is wired in all four output sections and
+the database side is provisioned. **The only thing standing between production and the
+duplicate-serial fix is one environment variable:**
+
+    NEXT_PUBLIC_FF_DB_SERIAL_ALLOCATION=sieving
+
+Not set by this change — that is a deploy decision, and the flag is per-section precisely
+because serials get printed onto physical bags. Worth knowing the DB work is already done.
+
+### What running the app actually showed
+
+The capture route compiles cleanly in Turbopack. But a syntax error planted in the new core
+module, on a cold cache, **still returned 200** — because an unauthenticated request
+redirects at the auth gate before the page body is ever compiled. So the capture UI cannot
+be exercised at runtime without a Microsoft SSO session, and the compile evidence proves
+less than it first appeared. Recorded because it also bounds what the render smoke tests
+and any future local check can claim.
+
+540 tests. Type errors 32, unchanged. Boundary lint clean.
+
 ## 2026-09-04 — Alyssa (The changeover becomes a feature module — the first one done to the plan)
 
 **Files changed:** `features/changeover/{index.ts,ChangeoverTrigger.tsx,ChangeoverDialog.tsx,changeover-ui.test.tsx}` (new), `app/(app)/production/capture/[section]/page.tsx`, `lib/config/flags.ts`, `vitest.config.mts`, `docs/capture-phases.md`
