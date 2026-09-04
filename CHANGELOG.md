@@ -4,6 +4,23 @@ All changes deployed to staging are logged here automatically.
 
 ## 2026-09-04 — Alyssa (Guardrails on production: tests, the boundary rule, the hooks gate)
 
+**Updated 2026-09-04, before merge:** `lib/core` is now self-contained. It previously
+imported the five section data types from the capture components, which meant it would
+only compile here if `main`'s components happened to export those names with compatible
+shapes. They do — but by luck, and the luck would run out the first time either branch
+touched a component. Core now declares the shapes it reads
+(`lib/core/types/capture-data.ts`) and `components/` is in `CORE_FORBIDDEN`, `import type`
+included.
+
+`components/production/capture/core-conformance.ts` comes with it, and it was **checked
+against this branch's own components**: `main`'s `SievingData`, `RefiningData`,
+`GranuleData`, `BlenderData` and `PasteuriserData` all satisfy core's declared shapes —
+`tsc` reports 36 errors, `main`'s baseline, none from the guard. Worth recording beyond
+this PR: despite 1,187 differing lines across the capture module, the two branches agree
+on the data shapes core reads, which removes one class of risk from the eventual capture
+promotion.
+
+
 **Files changed:** `lib/core/**` (29 new), `eslint.boundaries.mjs` (new),
 `eslint.hooks.mjs` (new), `vitest.config.mts` (new), `ARCHITECTURE.md` (new),
 `CODEOWNERS` (new), `docs/capture-phases.md` (new), `package.json`

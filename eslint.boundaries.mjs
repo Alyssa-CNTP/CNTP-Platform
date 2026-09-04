@@ -38,6 +38,25 @@ const CORE_FORBIDDEN = [
     message:
       'lib/core must not perform I/O. Take the data as an argument so the function stays pure and unit-testable. Exception: lib/core/ledger, which owns ledger access.',
   },
+  {
+    // Added 2026-09-04. This rule listed features/, app/, React/Next and
+    // lib/supabase/ but NOT components/ — so lib/core/capture-rows importing
+    // its five section data types from the capture components was legal by the
+    // letter of the rule and against every word of ARCHITECTURE.md §2. Core was
+    // already through the gap.
+    //
+    // `import type` is caught too, deliberately. It is erased at runtime, so it
+    // looks free, but it makes core's contract depend on a 'use client' React
+    // component parsing — and it is what stopped lib/core being liftable to
+    // another branch on its own.
+    //
+    // If core needs a shape a component owns, DECLARE THE SHAPE core reads, as
+    // lib/core/types/capture-data.ts and mass-balance/sieving.ts both do, and
+    // pin it with a Conforms<> alias on the components side.
+    group: ['@/components/*', '@/components', '**/components/*'],
+    message:
+      'lib/core must not import from components/. Declare the shape core reads in lib/core/types/ and assert conformance from the component side — see lib/core/types/capture-data.ts. This applies to `import type` as well: an erased import still couples core to a client component. See ARCHITECTURE.md §2.',
+  },
 ]
 
 // lib/core/ledger is the one part of core that owns database access, so it is

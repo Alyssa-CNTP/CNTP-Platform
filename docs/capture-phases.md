@@ -12,9 +12,9 @@ status table in the same commit as the work.
 |---|---|---|
 | **0** Guardrails | **Effectively closed** | Item 7: both index migrations verified 2026-09-04 against staging *and* production — the indexes already exist, matching their files exactly, so running them is a confirmed no-op that only closes the repo/live gap. Neither file has been run yet. |
 | **1** Populate core | **Done** | `n()`, `metrics`, `serials`, mass-balance, variant identity, `lookupSerial` all extracted — see the `n()` note below |
-| **1B** Serialization | **Built, not shipped** | `NEXT_PUBLIC_FF_DB_SERIAL_ALLOCATION` unset — no section is on it, so the duplicate-serial race is still live |
-| **2** Typed contracts | **Done, still regressing** | Duck-typing gone, `assertNever` in place. But `as any` in `[section]/page.tsx` is **62** as of 2026-09-04, measured — the "61" written here on 09-02 was already wrong. Trend: 58 on 08-25, 59 on 08-26, 62 now. It has gone **up** through the whole clean-up. Also unfinished: the five section data types still live in component files; Phase 2 only moved `SectionKind` and `assertNever`. |
-| **3** Feature boundary | **Done** | Guardrails in place, proven by tests, **and now actually mounted** — see below |
+| **1B** Serialization | **Built and provisioned; one env var from live** | Code wired in all four output sections (Sieving, Refining, Granule, Blender — Pasteuriser is out of the scheme by design, §5). **The migration IS applied on staging** — verified read-only 2026-09-04: `production.bag_serial_counters` returns `42501 permission denied`, which only an EXISTING table raises; a missing one gives `42P01`. So the only thing left is `NEXT_PUBLIC_FF_DB_SERIAL_ALLOCATION=sieving` in staging's env. Until then the race is still live. |
+| **2** Typed contracts | **Done, still regressing** | Duck-typing gone, `assertNever` in place. But `as any` in `[section]/page.tsx` is **62** as of 2026-09-04, measured — the "61" written here on 09-02 was already wrong. Trend: 58 on 08-25, 59 on 08-26, 62 now. It has gone **up** through the whole clean-up. The five section data types still live in component files — deliberately, now: core declares the shapes it reads instead (see the boundary note below), so this is no longer blocking anything. |
+| **3** Feature boundary | **Done** | Guardrails in place, proven by tests, mounted, **and the first capture feature actually moved** — `features/changeover/` (2026-09-04). `features/acumatica-items` was built out of sequence; the changeover is the first one done to the plan. |
 | **4** Ledger foundation | Not started | `lib/core/ledger/` absent; `scan_events` unextended; `live/capture/page.tsx` still bulk-deletes the ledger |
 | **5** Reconciliation | Not started | |
 | **6** Adjustment page | Not started | flag `supervisorAdjustments` exists, page does not |
@@ -70,10 +70,76 @@ the earlier code kept getting wrong:
 than reading the clock, so both are testable and neither can drift from
 `productionDayFor()`.
 
-**What is left is the UI.** Roughly 150 lines of dialog JSX still sit in
-`[section]/page.tsx`. Moving them to `features/changeover/` is the next feature-shaped
-piece of work, and it must happen before the promotion, not after — see below.
+**Done — 2026-09-04.** The UI is now `features/changeover/`, behind `flags.changeover`
+and wrapped in `<FeatureBoundary>`. The page went 2,783 → 2,728 lines and the type-error
+count fell 36 → 32.
 
+The three-way split, which is the shape every later feature should copy:
+
+| Layer | Owns | Lives in |
+|---|---|---|
+| core | the **rules** | `lib/core/changeover.ts` |
+| feature | the **presentation** | `features/changeover/` |
+| page | the **session lifecycle** | `capture/[section]/page.tsx` |
+
+**The handler deliberately stayed on the page.** It flushes unsaved edits, snapshots the
+closing balance, appends to the bucket-elevator ledger and opens a new session — all
+session lifecycle. Pulling it into the feature would mean threading six callbacks through
+and would make the feature a second owner of the save path, which §4's hard constraint
+forbids until Phase 7. What moved is the JSX; what stayed is what the page is for.
+
+**14 tests**, built through `planChangeover()` rather than hand-written plan objects — a
+hand-written plan can express a state core would never produce, and then the test passes
+while the screen breaks. The last one is the invariant the whole split exists for: for
+every plan, the dialog offers the carry option **iff** `plan.mayCarry`, and the trigger
+renders a button **iff** `plan.allowed`. Proven to bite by planting the exact defect
+(`{plan.mayCarry ? (` → `{true ? (`): 5 tests fail, naming the organic case.
+
+Two things sharing the word `changeover` were **left alone**, because they are shift
+*handover*, not grade/variant, and neither reads a `ChangeoverPlan`: `ChangeoverModal`
+(the 16h00 PIN gate) and `ChangeoverSubmitModal` (the early-submit prompt). Folding them
+in because the name matches is the §1A duck-typing mistake applied to names.
+
+**`flags.changeover` defaults to `true`, unlike every other flag.** It is shipped, working
+behaviour here — a `false` default would silently remove a supervisor control on merge,
+which is the silent-latch class, not a safe default. The flag exists for the promotion:
+production must receive `NEXT_PUBLIC_FF_CHANGEOVER=false` **in the same change that ships
+the feature**, since `main` removed this button for being broken.
+
+
+### The boundary rule had a hole, and core was through it — closed 2026-09-04
+
+`eslint.boundaries.mjs` forbade `features/`, `app/`, React/Next and `lib/supabase/` —
+**but not `components/`**. So `lib/core/capture-rows` importing its five section data
+types from the capture components was legal by the letter of the rule and against every
+word of §2.
+
+**Fixed the way core already answers this question.** `lib/core/mass-balance/sieving.ts`
+declares `SievingBalanceData` as "only the fields the balance needs".
+`lib/core/types/capture-data.ts` now does the same for the row builders. **`lib/core`
+imports nothing outside `lib/core`.**
+
+**Why structural, rather than moving the components' types into core** — which is the
+textbook answer and gives one declaration with no possible drift. It edits all five
+section components, and those are the most contested files in the fork. Deepening the
+fork to tidy a type import makes the promotion harder in exactly the place it is already
+hardest. Revisit after step 5, when those files stop being contested.
+
+The cost of a structural copy is drift, so it is pinned:
+`components/production/capture/core-conformance.ts` asserts at compile time that each
+component's real type is assignable to core's shape. It cannot live in core (core may not
+import components); components importing core is the allowed direction. It emits nothing —
+`tsc` enforces it, vitest could not, because vitest strips types without checking them.
+
+**The guard earned its place before it was even committed**, rejecting two errors in the
+first draft: `RefiningData` types its output groups `RefiningOutputGroup | null` and they
+had been written optional-only; and `dustKey` is passed straight to
+`dustProductType(key: string)`, so it is required, not optional. Both were mistakes in the
+new core types, caught by the compiler rather than by a NULL column in `prod_bagging`.
+
+`components/` is now in `CORE_FORBIDDEN`, **`import type` included** — an erased import
+still makes core's contract depend on a `'use client'` component parsing, and it is what
+stopped `lib/core` being liftable to another branch on its own.
 
 ### Promotion to production — measured 2026-09-04
 
@@ -212,9 +278,10 @@ in depth, not a fix.
    any feature, so every later cherry-pick arrives with the net under it.
 3. ~~**The blank-serial fix**~~ — **withdrawn.** There is nothing to fix; `main` has the
    same `blankSerialToNull` guard in the same place. See the correction above.
-4. **The changeover** — extract the dialog to `features/changeover/` on staging first
-   (the rules are already core), then cherry-pick the whole feature. **This is now the
-   next piece of work.**
+4. **The changeover** — ✅ extracted on staging (`features/changeover/`, 14 tests). What
+   remains is the cherry-pick, and it **must** carry `NEXT_PUBLIC_FF_CHANGEOVER=false`
+   into production's environment in the same change. `main` removed this button because
+   it was broken; it must arrive switched off and be turned on once a shift has run.
 5. **The capture module itself** — the 1,187 differing lines, all five section
    components, the reconcile deletion and the top-up accounting. **This is where the care
    goes.** Not one PR: one concern at a time, each with the E2E capture spec run against
@@ -226,6 +293,36 @@ in depth, not a fix.
 **Steps 1–3 cannot change production behaviour** and are worth doing on their own merit
 regardless of whether the full promotion ever happens. Step 5 is the actual promotion and
 should not begin until 1–4 are on `main` and a shift has run against them.
+
+#### Does `lib/core` have to go to `main`?
+
+Asked directly, 2026-09-04. **Not for `main` to work — but yes, and first.**
+
+*Not for correctness.* Nothing on `main` imports `@/lib/core`; `main` mints its serials and
+builds its rows with its own inline code. Withhold core entirely and production behaves
+exactly as it does today. It is not a dependency of anything on that branch.
+
+*Yes, because it is the carrier for everything else.* Every later cherry-pick — the
+changeover, the reconcile, the top-up accounting — imports core. Landing it separately and
+first means each of those arrives as a small diff against a branch that already has the
+foundation, instead of one enormous change that mixes new architecture with new behaviour.
+It also brings the tests and the boundary rule with it, so the later steps land with a net
+under them rather than after them.
+
+*And the risk is measured, not assumed.* Probed against `main`'s actual tree: boundary lint
+passes, 413/413 core tests pass, `tsc` reports 0 errors in `lib/core` and 36 overall, which
+is already `main`'s number. It lands as dead code.
+
+**The restructure above made this strictly better.** Before it, `lib/core/capture-rows`
+imported types from the five capture components, so core would only compile on `main` if
+`main`'s components happened to export those names with compatible shapes. They did — but
+by luck, and the luck would have run out the first time either branch touched a component.
+Core is now self-contained, so it lifts to any branch without caring what that branch's
+components look like. That is the practical reason this was worth doing before the
+promotion rather than after.
+
+PR #916 carries `lib/core` to `main` and must be **updated to include this restructure**
+before it merges, or it ships the version with the components dependency.
 
 **Do not merge `staging` into `main`.** With 325 commits of divergence and no common
 recent ancestor, the conflict surface is the whole capture module, and a mis-resolution

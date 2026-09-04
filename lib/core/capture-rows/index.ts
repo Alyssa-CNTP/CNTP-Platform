@@ -44,11 +44,13 @@ import { n } from '@/lib/core/num'
 import { variantForDb } from '@/lib/core/variants'
 import { assertNever, type SectionKind } from '@/lib/core/types/capture'
 
-import type { SievingData } from '@/components/production/capture/SievingCapture'
-import type { RefiningData } from '@/components/production/capture/RefiningCapture'
-import type { GranuleData } from '@/components/production/capture/GranuleCapture'
-import type { BlenderData } from '@/components/production/capture/BlenderCapture'
-import type { PasteuriserData } from '@/components/production/capture/PasteuriserCapture'
+import type {
+  CoreSievingData     as SievingData,
+  CoreRefiningData    as RefiningData,
+  CoreGranuleData     as GranuleData,
+  CoreBlenderData     as BlenderData,
+  CorePasteuriserData as PasteuriserData,
+} from '@/lib/core/types/capture-data'
 
 /** One batch record on a capture screen. Mirrors the page's own `Production`. */
 export interface CaptureProduction {
