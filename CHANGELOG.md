@@ -2,6 +2,76 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-04 — Alyssa (Promotion: both forked concerns decided; what can move to main, probed)
+
+**Files changed:** `docs/capture-phases.md`
+
+### Decision
+
+Both diverged concerns resolve **in staging's direction** — the healthier long-term route.
+
+- **#867 reconcile** → `debag-reconcile.ts`. The 2026-08-31 incident is the evidence: a
+  session-scoped self-heal against batch-scoped writes doubled rows on every page load.
+- **Top-up accounting** → `transferInKg` in `lib/core/mass-balance/`, where the rule has
+  one owner and tests, rather than absorbed in an 845-line `order-detail.ts`.
+
+Recorded with a warning attached: `self-heal-reconcile.ts` must be **deleted** from `main`
+as part of the cherry-pick, not left alongside the replacement, or production ends up
+running two reconciles with opposite scoping assumptions — the row-doubling mechanism
+again.
+
+### The `lib/core` question, probed rather than assumed
+
+The concern was fair: `lib/core` was extracted *from* capture pages `main` does not have.
+The capture page differs by **1,187 lines** between branches and all five section
+components are contested. So it was tested — `main`'s tree checked out, staging's
+`lib/core` and the three lint/test configs dropped on top, gates run:
+
+| Probe | Result |
+|---|---|
+| `lint:boundaries` | passes |
+| `npm run test` (lib/core) | **413/413 pass** against `main`'s tree |
+| `tsc` over `lib/core` | **0 errors** |
+| Source type errors on `main` | **36** — same as staging's baseline, transplants as-is |
+| `lint:hooks` | **fails, 1 error** — a live production crash |
+
+It works because **nothing on `main` imports `@/lib/core`** — not one file — so the module
+lands as dead code with no runtime effect, and `main` keeps its own inline
+`buildDebag`/`buildBag` until the page is deliberately switched over. And because `main`
+already exports the five section data types with compatible shapes.
+
+An earlier count of 97 type errors on `main` was a probe artefact — a stale `.next` built
+from staging's routes. The real figure is 36.
+
+### Two live production faults the probe turned up
+
+- **`app/(app)/admin/inventory-import/page.tsx:129`** — `useCallback` below an
+  `if (role !== 'admin') return`. `role` starts unresolved then resolves, so the hook count
+  changes between renders: React error #310, and the page comes down **for admins only**,
+  which is exactly who it is for. Same class as HOTFIX #901. **Staging already has the fix.**
+- **`main`'s inline `buildBag` writes `bag_serial_no: b.serial` raw on six of seven paths.**
+  The same fault PR #912 fixed here — two blank serials in one session are not distinct
+  under `prod_bagging_session_serial_uniq`, so the whole insert is rejected.
+
+### One hole in the boundary rule, found while probing
+
+`lib/core/capture-rows/index.ts` imports the section data types from
+`@/components/production/capture/*`. `eslint.boundaries.mjs` forbids `features/`, `app/`,
+React/Next and `lib/supabase/` — **but not `components/`**, so core reaching into
+components is currently legal, against the spirit of §2. It only works because the types
+happen to match on both branches. This is the Phase 2 unfinished half in another guise:
+move the five types to `lib/core/types/`, then add `components/` to `CORE_FORBIDDEN`.
+
+### Order of work
+
+Steps 1–3 (the hook crash, the guardrails, a one-line blank-serial patch to `main`'s own
+builder) cannot change production behaviour and stand on their own merit. Step 4 is the
+changeover. **Step 5 — the capture module itself — is where the care goes**, one concern
+at a time, with the E2E spec run against staging first, because unit tests do not cover
+the components and `renderToStaticMarkup` catches crashes, not wrong numbers.
+
+Docs only. No code, no behaviour change.
+
 ## 2026-09-04 — Alyssa (Plan of record caught up; the promotion gap measured)
 
 **Files changed:** `docs/capture-phases.md`
