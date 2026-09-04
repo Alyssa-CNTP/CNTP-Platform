@@ -30,7 +30,7 @@ test file across 144 component files, and both E2E specs skipping in CI.
 | `lint:hooks` gated | **Done, by another route** — the PAT has no `workflow` scope, so `ci.yml` still cannot be edited from here. Instead `package.json` runs it as a `posttest` hook, so `npm run test` exits non-zero on a hooks violation and the existing Unit tests step fails. Verified both ways by planting a hook below an early return. Adding the four named `ci.yml` lines is now cosmetic — it reads better in the Actions log, nothing more. |
 | `<FeatureBoundary>` mounted | **Done** — it had **zero usages** since Phase 3. The five sections rendered bare in a ternary, so one throwing blanked the whole route. Now wrapping the section mount and `CaptureOverview`. |
 | E2E skip made honest | **Done** — `requireAuthState()` throws when `CI` is set, so wiring the suite in before a session artefact exists gives a red build instead of a false pass. |
-| Row builders characterised | **Done** — 42 tests over `buildDebagRows`/`buildBagRows`, all five sections. The extraction has already paid for itself: a blank-serial collision that fails the whole save was reproduced by *calling the builders*, where before it would have needed a live save on the floor. |
+| Row builders characterised | **Done** — 42 tests over `buildDebagRows`/`buildBagRows`, all five sections. They now also guarantee no output path emits `''` for a serial, locally, rather than depending on a cleanup pass in `persist()` 300 lines away. (An earlier version of this row called that a live bug the extraction had caught. It was not — see the correction below.) |
 | Render smoke tests | **Done** — 22 tests. Every section rendered empty, populated and locked, plus `CaptureOverview` against all five section shapes and both shifts. |
 
 **The "no runtime cover" gap is now partly closed.** `renderToStaticMarkup` runs the
@@ -171,13 +171,35 @@ which is to say for exactly the people the page is for. Same class as HOTFIX #90
 why). This is the whole argument for the guardrails-first order in one example: the gate
 found a live production bug in under a minute, and the fix already exists.
 
-#### Production also has the blank-serial collision
+#### CORRECTION — the blank-serial collision was never live, on either branch
 
-`main`'s inline `buildBag` writes `bag_serial_no: b.serial` raw on **six of its seven**
-output paths — only one carries `|| null`. That is the same fault PR #912 fixed on
-staging: two blank serials in one session are not distinct under
-`prod_bagging_session_serial_uniq`, so the whole insert is rejected. Latent until two
-blanks coincide.
+An earlier version of this section said `main` carried the blank-serial collision PR #912
+fixed on staging, because its inline `buildBag` writes `bag_serial_no: b.serial` raw on six
+of seven paths. **That was wrong, and so was the #912 claim it rested on.**
+
+`persist()` normalises blanks before it inserts anything, on both branches:
+
+```ts
+const blankSerialToNull = (r: any) => {
+  if (!r.bag_serial_no || !String(r.bag_serial_no).trim()) r.bag_serial_no = null
+}
+debag.forEach(blankSerialToNull)
+bag.forEach(blankSerialToNull)
+```
+
+Staging line 1193, `prod_bagging` insert at 1345 — **before**, not after. It predates #912
+(present at `a8b5337`). And `buildBag` has exactly **one** call site on each branch, inside
+`persist()`, so nothing reaches the database around it. `''` never got to Postgres.
+
+**The lesson worth keeping**, since this is the second time a comment has been misread as a
+live symptom: the comment above that guard describes the bug it was *written to fix*. Scar
+tissue reads like an open wound (ARCHITECTURE.md §1B says as much about the defensive
+comments around the save path). Proving a function returns a bad value is not proving the
+system is broken — trace the value to the write before writing it up.
+
+The `serialOrNull()` change stays: the builders are pure and independently callable now, so
+the guarantee belongs in them, not in a caller three hundred lines away. But it is defence
+in depth, not a fix.
 
 **Order of work.** Steps 1 and 2 are decided and probed; the risk rises sharply at step 5.
 
@@ -185,14 +207,14 @@ blanks coincide.
    staging, and it is live on production now. Nothing to weigh.
 2. **The guardrails** — `vitest.config.mts`, `eslint.boundaries.mjs`, `eslint.hooks.mjs`,
    `ci.yml`, `CODEOWNERS`, `ARCHITECTURE.md`, the npm scripts, the two devDependencies
-   (`vitest`, `@playwright/test`), and `lib/core/**`. Probed inert: nothing on `main`
+   (`vitest` only — Playwright is excluded), and `lib/core/**`. Probed inert: nothing on `main`
    imports core, 413 tests pass, 0 type errors, baseline already 36. Land this **before**
    any feature, so every later cherry-pick arrives with the net under it.
-3. **The blank-serial fix** — but as a patch to `main`'s own inline `buildBag`, *not* by
-   switching the page to `lib/core/capture-rows`. Same one-line coercion, none of the
-   rewiring.
+3. ~~**The blank-serial fix**~~ — **withdrawn.** There is nothing to fix; `main` has the
+   same `blankSerialToNull` guard in the same place. See the correction above.
 4. **The changeover** — extract the dialog to `features/changeover/` on staging first
-   (the rules are already core), then cherry-pick the whole feature.
+   (the rules are already core), then cherry-pick the whole feature. **This is now the
+   next piece of work.**
 5. **The capture module itself** — the 1,187 differing lines, all five section
    components, the reconcile deletion and the top-up accounting. **This is where the care
    goes.** Not one PR: one concern at a time, each with the E2E capture spec run against
