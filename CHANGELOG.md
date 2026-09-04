@@ -2,6 +2,67 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-04 — Alyssa (prod_bagging verified; a blank serial no longer fails the save)
+
+**Files changed:** `lib/core/capture-rows/index.ts`,
+`lib/core/capture-rows/capture-rows.test.ts`
+
+### `20260901_001` verified — and it was already applied
+
+`pg_indexes` on **both** databases reports
+
+    CREATE UNIQUE INDEX prod_bagging_session_bag_uidx
+      ON production.prod_bagging USING btree (session_id, bag_no)
+
+exactly as the migration declares — same name, columns, order, unique, not
+partial. The duplicate pre-flight returned zero rows on both. Phase 0 item 7 is
+therefore a confirmed no-op whose only job is closing the repo/live gap.
+
+### The check turned up a live latent bug
+
+The same query showed a sixth index on `prod_bagging`:
+
+    CREATE UNIQUE INDEX prod_bagging_session_serial_uniq
+      ON production.prod_bagging USING btree (session_id, bag_serial_no)
+
+That one is **not** drift — it is declared in `20260813_006` and the capture
+page already serializes `persist()` because of a duplicate-key failure on it
+observed live. What had not been noticed is how a *blank* serial behaves against
+it.
+
+Postgres treats NULLs in a unique index as distinct from one another. **Two
+empty strings are not distinct.** Five of the six output paths in
+`buildBagRows` wrote `b.serial` straight through, so two output bags with a
+blank serial in one session violated the constraint and the WHOLE insert was
+rejected — "it won't save", with nothing naming the serial as the cause. The
+same shape as the September `prod_debagging` 409, from the other direction.
+
+Only Pasteuriser's by-products coerced with `|| null`, which is a fair sign
+someone met this once and patched the spot in front of them.
+
+Demonstrated on the extracted row builders before fixing — a direct benefit of
+them now being pure and callable:
+
+    pasteuriser pallet lines   -> "", ""      <<< COLLIDES
+    pasteuriser by-products    -> null, null  ok
+    sieving outputs            -> "", ""      <<< COLLIDES
+    granule dust outputs       -> "", ""      <<< COLLIDES
+    blender outputs            -> "", ""      <<< COLLIDES
+    refining outputs           -> "", ""      <<< COLLIDES
+
+`serialOrNull()` now applies to every output path. A blank or whitespace-only
+serial is stored as NULL; a real serial is untouched. Safe in both directions:
+nothing in the app compares `bag_serial_no` to `''`, `prod_bagging.bag_serial_no`
+has no foreign key (unlike the debagging column), and the two partial indexes on
+it read `WHERE bag_serial_no IS NOT NULL` — which an empty string was quietly
+defeating. The change can only turn a failing insert into a succeeding one.
+
+9 new tests, including an invariant that no output path may emit `''`. The 33
+existing characterisation tests pass **unchanged**, which is the point: real
+serials behave exactly as before.
+
+526 tests. Lint at the 3021 baseline exactly; type errors at the 36 baseline.
+
 ## 2026-09-04 — Alyssa (prod_debagging index drift verified against both databases)
 
 **Files changed:** `supabase/migrations/20260903_003_prod_debagging_unique_index_drift.sql`

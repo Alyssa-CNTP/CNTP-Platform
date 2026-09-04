@@ -72,6 +72,34 @@ export interface RowBuildContext {
   dustProductType: (key: string) => string
 }
 
+/**
+ * A blank serial is stored as NULL, never as an empty string.
+ *
+ * `production.prod_bagging` carries
+ *
+ *     UNIQUE (session_id, bag_serial_no)      -- prod_bagging_session_serial_uniq
+ *
+ * added by 20260813_006 so upserts are safe. Postgres treats NULLs in a unique
+ * index as distinct from one another, but two empty strings are NOT distinct —
+ * so two output bags with a blank serial in the same session violate it and the
+ * WHOLE insert is rejected. On a tablet that reads as "it won't save", with
+ * nothing naming the serial as the cause. It is the same failure that hit
+ * prod_debagging in September, from the opposite direction.
+ *
+ * Five of the six output paths wrote `b.serial` straight through; only
+ * Pasteuriser's by-products coerced with `|| null`, which is a fair hint that
+ * someone met this once and patched the spot in front of them.
+ *
+ * The two partial indexes on this column are `WHERE bag_serial_no IS NOT NULL`,
+ * so an empty string also quietly gets itself indexed as if it were a serial.
+ * Nothing in the app compares this column to '', so NULL is strictly better on
+ * both counts.
+ */
+function serialOrNull(serial: unknown): string | null {
+  const s = typeof serial === 'string' ? serial.trim() : serial
+  return s ? String(s) : null
+}
+
 /** Input rows for `production.prod_debagging`. */
 export function buildDebagRows(
   prods: CaptureProduction[],
@@ -196,7 +224,7 @@ export function buildBagRows(
           if (n(b.weight) === 0) return
           rows.push({
             session_id: sid, bag_no: bagNo++, output_group: grp,
-            bag_serial_no: b.serial, lot_number: prod.lot || null,
+            bag_serial_no: serialOrNull(b.serial), lot_number: prod.lot || null,
             product_type: b.productType, acumatica_id: b.code || null,
             variant: variantForDb(prod.variant),
             kg: n(b.weight),
@@ -216,7 +244,7 @@ export function buildBagRows(
         if (n(b.weight) === 0) return
         rows.push({
           session_id: sid, bag_no: bagNo++, output_group: null,
-          bag_serial_no: b.serial, lot_number: b.lot || prod.lot || null,
+          bag_serial_no: serialOrNull(b.serial), lot_number: b.lot || prod.lot || null,
           product_type: b.item, acumatica_id: b.code || null, variant: variantForDb(prod.variant),
           kg: n(b.weight), bagging_time: b.logged_at || null,
         })
@@ -225,7 +253,7 @@ export function buildBagRows(
         if (n(r.weight) === 0) return
         rows.push({
           session_id: sid, bag_no: bagNo++, output_group: null,
-          bag_serial_no: r.serial, lot_number: prod.lot || null,
+          bag_serial_no: serialOrNull(r.serial), lot_number: prod.lot || null,
           product_type: r.dustType, acumatica_id: r.code || null, variant: variantForDb(prod.variant),
           kg: n(r.weight),
         })
@@ -237,7 +265,7 @@ export function buildBagRows(
         if (n(b.weight) === 0) return
         rows.push({
           session_id: sid, bag_no: bagNo++, output_group: null,
-          bag_serial_no: b.serial, lot_number: prod.lot || null,
+          bag_serial_no: serialOrNull(b.serial), lot_number: prod.lot || null,
           product_type: bomId ? `Blend ${bomId}` : null, acumatica_id: bomId || null, variant: variantForDb(prod.variant),
           kg: n(b.weight), bagging_time: b.logged_at || null,
         })
@@ -251,7 +279,7 @@ export function buildBagRows(
         if (kg === 0) return
         rows.push({
           session_id: sid, bag_no: bagNo++, output_group: null,
-          bag_serial_no: l.serial, lot_number: l.lot || pd.batchNo || prod.lot || null,
+          bag_serial_no: serialOrNull(l.serial), lot_number: l.lot || pd.batchNo || prod.lot || null,
           product_type: l.item || l.kind || null, acumatica_id: l.itemCode || null, variant: variantForDb(prod.variant),
           kg, bagging_time: l.logged_at || null,
         })
@@ -261,7 +289,7 @@ export function buildBagRows(
         if (n(r.weight) === 0) return
         rows.push({
           session_id: sid, bag_no: bagNo++, output_group: null,
-          bag_serial_no: r.serial || null, lot_number: pd.batchNo || prod.lot || null,
+          bag_serial_no: serialOrNull(r.serial), lot_number: pd.batchNo || prod.lot || null,
           product_type: r.type || null, variant: variantForDb(prod.variant), kg: n(r.weight),
         })
       })
@@ -271,7 +299,7 @@ export function buildBagRows(
         if (n(b.weight) === 0) return
         rows.push({
           session_id: sid, bag_no: bagNo++, output_group: 'B',
-          bag_serial_no: b.serial, lot_number: b.batch || prod.lot || null, product_type: b.productType,
+          bag_serial_no: serialOrNull(b.serial), lot_number: b.batch || prod.lot || null, product_type: b.productType,
           acumatica_id: b.code || null, variant: variantForDb(prod.variant),
           kg: n(b.weight),
           bagging_time: b.logged_at || null,   // see bagging_time note above

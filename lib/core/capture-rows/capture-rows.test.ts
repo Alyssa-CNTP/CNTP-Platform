@@ -295,3 +295,71 @@ describe('every section, same guarantees', () => {
     expect(rows.map(r => r.bag_no)).toEqual([1, 2])
   })
 })
+
+describe('a blank serial is NULL, never an empty string', () => {
+  /**
+   * production.prod_bagging carries UNIQUE (session_id, bag_serial_no)
+   * (prod_bagging_session_serial_uniq, from 20260813_006). Postgres treats
+   * NULLs in a unique index as distinct from each other; two empty strings are
+   * NOT distinct. So two output bags with a blank serial in one session used to
+   * violate the constraint and the WHOLE insert was rejected — "it won't save",
+   * with nothing naming the serial.
+   *
+   * Five of the six output paths wrote the raw value through. Only Pasteuriser's
+   * by-products coerced with `|| null`. These tests pin the fix everywhere.
+   *
+   * NOT a characterisation test — this is a deliberate behaviour change, and it
+   * can only turn a failing insert into a succeeding one.
+   */
+  const blank: Array<[string, RowBuildContext['kind'], unknown]> = [
+    ['sieving outputs', 'sieving', { spillage: [], debag: [], outputs: [
+      { id: 'a', serial: '', productType: 'Fine Leaf', weight: '25' },
+      { id: 'b', serial: '', productType: 'Coarse Leaf', weight: '25' } ] }],
+    ['refining outputs', 'refining', { inputs: [],
+      outputA: { bags: [ { id: 'a', serial: '', productType: 'WD', weight: '10' },
+                         { id: 'b', serial: '', productType: 'WD', weight: '10' } ] },
+      outputB: { bags: [] }, outputC: { bags: [] }, outputD: { bags: [] } }],
+    ['granule dust outputs', 'granule', { blends: [], outputs: [], dustOutputs: [
+      { id: 'a', serial: '', dustType: 'SG Dust', weight: '10' },
+      { id: 'b', serial: '', dustType: 'SF Dust', weight: '10' } ] }],
+    ['blender outputs', 'blender', { bomId: 'B1', inputs: [], outputs: [
+      { id: 'a', serial: '', weight: '100' },
+      { id: 'b', serial: '', weight: '100' } ] }],
+    ['pasteuriser pallet lines', 'pasteuriser', {
+      batchNo: 'PB', weightPerBag: '10', debag: [], byProducts: [], outputs: [
+      { id: 'a', serial: '', bagCount: '2', bagWeight: '10', item: 'FP' },
+      { id: 'b', serial: '', bagCount: '3', bagWeight: '10', item: 'FP' } ] }],
+    ['pasteuriser by-products', 'pasteuriser', {
+      batchNo: 'PB', weightPerBag: '10', debag: [], outputs: [], byProducts: [
+      { id: 'a', serial: '', weight: '4', type: 'Dust' },
+      { id: 'b', serial: '', weight: '5', type: 'Dust' } ] }],
+  ]
+
+  it.each(blank)('%s: two blank serials do not collide', (_n, kind, data) => {
+    const rows = buildBagRows([prod(data)], 'sess-1', ctx(kind))
+    expect(rows).toHaveLength(2)
+    for (const r of rows) expect(r.bag_serial_no).toBeNull()
+  })
+
+  it('treats whitespace as blank too', () => {
+    const data = { spillage: [], debag: [], outputs: [
+      { id: 'a', serial: '   ', productType: 'Fine Leaf', weight: '25' } ] }
+    expect(buildBagRows([prod(data)], 's', ctx('sieving'))[0].bag_serial_no).toBeNull()
+  })
+
+  it('leaves a real serial exactly as it is — no trimming surprises', () => {
+    const data = { spillage: [], debag: [], outputs: [
+      { id: 'a', serial: 'STFL-04092026-001', productType: 'Fine Leaf', weight: '25' } ] }
+    expect(buildBagRows([prod(data)], 's', ctx('sieving'))[0].bag_serial_no)
+      .toBe('STFL-04092026-001')
+  })
+
+  it('never emits an empty string from ANY output path', () => {
+    // The invariant, stated once so a new section cannot reintroduce it.
+    for (const [, kind, data] of blank) {
+      for (const r of buildBagRows([prod(data)], 's', ctx(kind))) {
+        expect(r.bag_serial_no).not.toBe('')
+      }
+    }
+  })
+})
