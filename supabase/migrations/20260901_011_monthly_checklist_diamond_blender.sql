@@ -1,0 +1,9 @@
+-- Diamond Blender monthly checklist, imported verbatim from
+-- QMFM039 Maintenance Checklist - Diamond Blender Rev.1. Each task is prefixed
+-- with the EQUIPMENT column from the sheet so it stays linked to that item.
+-- Completes the monthly set apart from Generator 440 kVA (QM-FM-028), whose
+-- supplied sheet is a WEEKLY readings grid — on hold pending a decision.
+-- APPLIED TO STAGING.
+update maintenance.checklist_templates
+  set tasks = '["Mixing Tank — Check motor fan cover", "Mixing Tank — Check safety grids on top of tank", "Mixing Tank — Check mixing arms", "Mixing Tank — Check integrity of tank frame", "Mixing Tank — Check condition of bearings", "Mixing Tank — Check if the limit switch is working", "Mixing Tank — Check pneumatic connections", "Electrical control panel — Visual inspection for any worn wires", "Electrical control panel — Clean out DB", "Electrical control panel — Ensure that all connection are fastened", "Electrical control panel — Ensure that all glands are in tact", "Electrical control panel — Test E-Stop Button", "Electrical control panel — Visual inspection for any loose wires", "Electrical control panel — Check functionality of all contactors", "Electrical control panel — Check functionality of all circuit breakers", "Electrical control panel — Check that all isolators are functioning", "Gearboxes and Motors — Ensure that all gearboxes have sufficient oil", "Gearboxes and Motors — Ensure that driptrays are in place", "Gearboxes and Motors — Ensure that guards are in place", "Gearboxes and Motors — Check condition of power cable", "Gearboxes and Motors — Check condition and functionality of 3ph plug", "Gearboxes and Motors — Check condition and functionality of motor isolator"]'::jsonb, doc_ref = 'QM-FM-039/1'
+  where frequency='monthly' and area='Diamond Blender';
