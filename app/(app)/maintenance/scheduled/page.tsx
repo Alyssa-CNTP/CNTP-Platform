@@ -304,14 +304,17 @@ export default function ScheduledPage() {
                 const isReading = isJojo || cl.doc_ref === 'Database'
                 return (
                   <div key={cl.id} className={`rounded-xl border bg-surface-card transition ${assignedToMe ? 'border-brand/40 ring-1 ring-brand/20' : isOpen ? 'border-text/20 shadow-sm' : 'border-surface-rule hover:border-text/20'}`}>
-                    {/* Mobile: the meta text takes the full width and the controls
-                        drop to their own row underneath. Desktop: side by side. */}
-                    <div className="p-3 cursor-pointer flex flex-col sm:flex-row sm:justify-between sm:items-center gap-2" onClick={() => setOpenCL(isOpen ? null : cl.id)}>
-                      <div className="flex items-start gap-2 min-w-0 flex-1">
+                    {/* The cards sit in a 2/3-column grid, so each one is narrow even on a
+                        wide screen — and `sm:` breakpoints only see the VIEWPORT, not the
+                        card. So the header always stacks: the name / doc-ref / last-completed
+                        text gets the full card width, and the controls sit on their own row
+                        underneath. Nothing gets squeezed into a one-word-per-line column. */}
+                    <div className="p-3 cursor-pointer flex flex-col gap-2" onClick={() => setOpenCL(isOpen ? null : cl.id)}>
+                      <div className="flex items-start gap-2 min-w-0">
                         <span className={`w-2 h-2 rounded-full shrink-0 mt-1.5 ${dot}`} />
-                        <div className="min-w-0">
-                          <div className="text-[13px] font-semibold text-text leading-tight">{cl.area}</div>
-                          <div className="text-[11px] text-text-faint whitespace-nowrap overflow-hidden text-ellipsis">{cl.doc_ref} · {cl.tasks.length} tasks</div>
+                        <div className="min-w-0 flex-1">
+                          <div className="text-[13px] font-semibold text-text leading-tight break-words">{cl.area}</div>
+                          <div className="text-[11px] text-text-faint break-words">{cl.doc_ref} · {cl.tasks.length} tasks</div>
                           <div className={`text-[10px] mt-0.5 ${prev || done ? 'text-text-muted' : 'text-err'}`}>
                             {done && comp ? <>✓ Completed by <strong className="text-ok">{comp.completed_by || '—'}</strong> ({fmtD(comp.updated_at ?? null)})</>
                               : prev ? <>Last: {prev.period_key} by <strong className="text-text">{prev.completed_by || '—'}</strong></>
@@ -320,10 +323,10 @@ export default function ScheduledPage() {
                           {assigned && <div className="text-[10px] mt-0.5"><span className={`badge ${assignedToMe ? 'badge-info' : 'badge-gray'}`}>→ {assigned}{assignedToMe ? ' (you)' : ''}</span></div>}
                         </div>
                       </div>
-                      <div className="flex items-center gap-1.5 sm:shrink-0" onClick={e => e.stopPropagation()}>
+                      <div className="flex items-center gap-1.5" onClick={e => e.stopPropagation()}>
                         {/* Manager allocates the checklist to a technician (on-duty suggested first). */}
                         {canManage && (
-                          <select className={`${INP} flex-1 min-w-0 sm:flex-none sm:w-44 text-[11px] py-1 min-h-0`} title="Allocate this checklist to a technician"
+                          <select className={`${INP} min-w-0 flex-1 text-[11px] py-1 min-h-0`} title="Allocate this checklist to a technician"
                             value={assigned} onChange={e => allocateChecklist(cl, e.target.value)}>
                             <option value="">Allocate…</option>
                             {dutyNow.length > 0 && <optgroup label="On duty now">{dutyNow.map(t => <option key={t} value={t}>{t}</option>)}</optgroup>}
@@ -351,13 +354,20 @@ export default function ScheduledPage() {
                               {cl.tasks.map((task, ti) => {
                                 const prevVal = prevComp?.task_states?.[ti]?.notes
                                 return (
-                                  <div key={ti} className="flex items-center gap-2">
-                                    <span className="text-[12px] flex-1 min-w-0 text-text-muted">{task}</span>
-                                    <input className={`${INP} w-28 text-[12px] py-1 min-h-0 text-right`} type="number" inputMode="decimal"
-                                      placeholder={prevVal ? 'prev: ' + prevVal : 'value'}
-                                      value={valOf(ti)}
-                                      onChange={e => setDrafts(p => ({ ...p, ['t' + cl.id + '-' + ti]: e.target.value }))}
-                                      onBlur={e => setTaskField(cl, ti, 'notes', e.target.value)} />
+                                  // The reading label must stay fully readable — it wraps
+                                  // onto as many lines as it needs. The input sits in a
+                                  // FIXED-WIDTH wrapper because INP already carries
+                                  // `w-full`, which otherwise beats a `w-28` on the input
+                                  // itself and squeezes the label down to one word a line.
+                                  <div key={ti} className="flex items-start gap-2">
+                                    <span className="text-[12px] flex-1 min-w-0 text-text-muted break-words leading-snug pt-1.5">{task}</span>
+                                    <div className="w-24 sm:w-28 shrink-0">
+                                      <input className={`${INP} text-[12px] py-1 min-h-0 text-right`} type="number" inputMode="decimal"
+                                        placeholder={prevVal ? 'prev: ' + prevVal : 'value'}
+                                        value={valOf(ti)}
+                                        onChange={e => setDrafts(p => ({ ...p, ['t' + cl.id + '-' + ti]: e.target.value }))}
+                                        onBlur={e => setTaskField(cl, ti, 'notes', e.target.value)} />
+                                    </div>
                                   </div>
                                 )
                               })}
@@ -386,13 +396,17 @@ export default function ScheduledPage() {
                                 {s.done && s.by && <span className="text-[10px] text-text-faint whitespace-nowrap shrink-0">{s.by} {fmtT(s.at ?? null)}</span>}
                               </div>
                               <div className="flex gap-1.5 mt-1 flex-wrap" style={{ marginLeft: 28 }}>
-                                <select className={`${INP} w-28 shrink-0 text-[11px] py-1 min-h-0 ${!s.done ? 'border-warn text-warn' : s.fault ? 'border-err text-err' : ''}`}
-                                  value={!s.done ? '' : s.fault ? 'YES' : 'NO'}
-                                  onChange={e => { if (e.target.value) answerTask(cl, ti, e.target.value === 'YES') }}>
-                                  <option value="" disabled>Select…</option>
-                                  <option value="NO">No fault ✓</option>
-                                  <option value="YES">Fault</option>
-                                </select>
+                                {/* Fixed-width wrapper for the same reason as the readings
+                                    input above — INP's `w-full` would otherwise win. */}
+                                <div className="w-28 shrink-0">
+                                  <select className={`${INP} text-[11px] py-1 min-h-0 ${!s.done ? 'border-warn text-warn' : s.fault ? 'border-err text-err' : ''}`}
+                                    value={!s.done ? '' : s.fault ? 'YES' : 'NO'}
+                                    onChange={e => { if (e.target.value) answerTask(cl, ti, e.target.value === 'YES') }}>
+                                    <option value="" disabled>Select…</option>
+                                    <option value="NO">No fault ✓</option>
+                                    <option value="YES">Fault</option>
+                                  </select>
+                                </div>
                                 <input className={`${INP} flex-1 min-w-[140px] text-[11px] py-1 min-h-0`} placeholder={s.fault ? 'Describe the issue…' : 'Notes…'}
                                   value={drafts['t' + cl.id + '-' + ti] ?? s.notes ?? ''}
                                   onChange={e => setDrafts(p => ({ ...p, ['t' + cl.id + '-' + ti]: e.target.value }))}
