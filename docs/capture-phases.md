@@ -6,7 +6,7 @@ status table in the same commit as the work.
 
 ---
 
-## Status — 2026-09-03
+## Status — 2026-09-04
 
 | Phase | State | Outstanding |
 |---|---|---|
@@ -14,13 +14,63 @@ status table in the same commit as the work.
 | **1** Populate core | **Done** | `n()`, `metrics`, `serials`, mass-balance, variant identity, `lookupSerial` all extracted — see the `n()` note below |
 | **1B** Serialization | **Built, not shipped** | `NEXT_PUBLIC_FF_DB_SERIAL_ALLOCATION` unset — no section is on it, so the duplicate-serial race is still live |
 | **2** Typed contracts | **Done, regressed** | Duck-typing gone, `assertNever` in place. But `as any` in the capture page went **57 → 61** |
-| **3** Feature boundary | **Done** | Guardrails in place and proven by tests |
+| **3** Feature boundary | **Done** | Guardrails in place, proven by tests, **and now actually mounted** — see below |
 | **4** Ledger foundation | Not started | `lib/core/ledger/` absent; `scan_events` unextended; `live/capture/page.tsx` still bulk-deletes the ledger |
 | **5** Reconciliation | Not started | |
 | **6** Adjustment page | Not started | flag `supervisorAdjustments` exists, page does not |
 | **7** Flip reads | Not started | `e2e/concurrent-save.spec.ts` still `test.fixme` |
 
+### The safety net — 2026-09-04
+
+Added before any further extraction, because the module had almost no cover: one
+test file across 144 component files, and both E2E specs skipping in CI.
+
+| | State |
+|---|---|
+| `lint:hooks` in CI | **Outstanding** — written and passing, but the PAT has no `workflow` scope so `ci.yml` must be edited by hand. Four lines, above the Unit tests step. |
+| `<FeatureBoundary>` mounted | **Done** — it had **zero usages** since Phase 3. The five sections rendered bare in a ternary, so one throwing blanked the whole route. Now wrapping the section mount and `CaptureOverview`. |
+| E2E skip made honest | **Done** — `requireAuthState()` throws when `CI` is set, so wiring the suite in before a session artefact exists gives a red build instead of a false pass. |
+| Row builders characterised | **Done** — 33 tests over `buildDebagRows`/`buildBagRows`, all five sections. |
+
+**Still no runtime cover over the capture components themselves.** vitest is node-only
+by design and there is no jsdom or Testing Library in the repo; the Playwright suite
+cannot run in CI because the app signs in through SSO. Until one of those changes, the
+boundary is containment, not detection.
+
+### The changeover — decided 2026-09-04
+
+`main` removed the mid-shift changeover button and `staging` kept it, which read like a
+product disagreement. It was not. **It was removed from production because it was
+broken, not because the feature is unwanted** — Alyssa did not want operators using it
+in that state.
+
+So the fork resolves in staging's direction, with one condition: the changeover is a
+**core function**, not something living inside each capture page. Supervisor-gated,
+single-fire, clean slate by default, and the organic rule a property of the ledger it
+writes to (§5). What exists on staging today is the right behaviour in the wrong place —
+it is still ~150 lines of state machine inside `[section]/page.tsx`. Extracting it to
+`features/changeover/` is the next feature-shaped piece of work, and it must happen
+before the promotion, not after.
+
+
 ### Deviations from the plan, and why
+
+- **Splitting the capture page by SECTION was considered and rejected.** Five routes,
+  one per work centre, is the intuitive read of "split the page" and it is the wrong
+  axis. Measured on 2026-09-03: only 2 `sectionId.startsWith()` branches remain (from
+  41), the section-specific UI is already five separate components, and what is left in
+  the page is almost entirely section-agnostic — session lifecycle, PIN and signature
+  gates, production-order linking, changeover, row building, persistence, the tab
+  shell. Five routes would fork all of that five ways and make every future fix a
+  five-place edit. **Split by concern; the directory follows from that.**
+- **No runtime plug-in / slot registry, restated.** It keeps being proposed as the way
+  to add features safely. It resolves features after the compiler has stopped looking,
+  which is the same class of defect as the `as any` casts — see "Architecture
+  decisions" above. Plain conditional rendering behind a flag stays.
+- **No client state store (Zustand or similar) for now.** The state problem here is not
+  re-renders, it is two operators overwriting each other in the database. A shared
+  mutable store on top of a delete-then-insert save path makes that harder to reason
+  about, not easier. Revisit after Phase 7, if at all.
 
 - **`n()` is finished; the two remaining numeric helpers are NOT copies of it, and must
   not be merged into it.** The status line used to say "down from 11 files to 7", which
