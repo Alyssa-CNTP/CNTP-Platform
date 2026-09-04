@@ -2,6 +2,16 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-03 — Alyssa (Audit log: fix production rejecting all app-level audit writes)
+
+**Files changed:** `supabase/migrations/20260903_001_audit_log_action_freeform.sql` (new)
+
+Investigating the **production** PM2 error log turned up a recurring DB error on every user sign-out: `code 23514 — new row for relation "audit_log" violates check constraint "audit_log_action_check"`. Root cause: `axis.audit_log`'s `action` CHECK constraint only permitted the three uppercase Postgres `TG_OP` values it was originally built for — `CHECK (action = ANY (ARRAY['INSERT','UPDATE','DELETE']))`, i.e. written for a row-level DB **trigger**. But the application writes lowercase, semantic verbs via `lib/audit/write.ts` (`writeAudit`) and `app/api/admin/audit/auth-event` — `create`, `update`, `delete`, `sign_in`, `sign_out`, `reveal_pin`, `competency_update`, `training_competency_update`, `offboard`, `reactivate`, `reopen_request_approved`, `save`, … — **none** of which the constraint allowed. So **every application-level audit write had been silently rejected on production** (`writeAudit` swallows errors by design, so it was invisible until the auth route happened to `console.error` it). Confirmed by the data: production `audit_log` held only 45 rows, all uppercase trigger rows (`INSERT` 29 / `UPDATE` 15 / `DELETE` 1) — zero app rows ever written. This is a traceability/FSSC gap (sign-ins/outs, user create/delete, offboarding, PIN reveals — none recorded).
+
+Fix: drop the constraint. `action` is free-form by design (`write.ts` types it `action: string`, open-ended); enumerating it in a CHECK is the wrong tool and is exactly what caused this — it would keep silently dropping audit rows as new verbs are added. The column stays free text, matching both the app's verbs and the trigger's `TG_OP`. Reversible. **`axis.audit_log` was never in tracked migrations** (created directly in Supabase — schema drift), so this migration also brings the change under version control. Migration to be run in Supabase SQL Editor — **staging first, then production** — `ALTER TABLE axis.audit_log DROP CONSTRAINT IF EXISTS audit_log_action_check;`
+
+---
+
 ## 2026-09-01 — Gustav (Maintenance: Diamond Blender monthly checklist imported)
 
 **Files changed:** `supabase/migrations/20260901_011_monthly_checklist_diamond_blender.sql` (new, applied to staging)

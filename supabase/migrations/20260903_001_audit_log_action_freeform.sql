@@ -1,0 +1,38 @@
+-- ============================================================
+-- CNTP — axis.audit_log: drop the legacy action CHECK constraint
+-- Run in: Supabase SQL Editor — STAGING first, then PRODUCTION.
+-- Depends on: axis.audit_log (pre-dates tracked migrations; created
+--             directly in Supabase, never captured in this folder).
+-- ============================================================
+--
+-- INCIDENT (2026-09-03): production error log filling with, on every
+-- user sign-out:
+--   code 23514 — new row for relation "audit_log" violates check
+--   constraint "audit_log_action_check"
+--
+-- Root cause: the constraint on axis.audit_log only permitted the three
+-- uppercase Postgres TG_OP values it was originally built for —
+--   CHECK (action = ANY (ARRAY['INSERT','UPDATE','DELETE']))
+-- — i.e. it was written for a row-level DB audit TRIGGER. But the
+-- APPLICATION writes lowercase, semantic action verbs via
+-- lib/audit/write.ts (writeAudit) and app/api/admin/audit/auth-event:
+--   create, update, delete, sign_in, sign_out, reveal_pin,
+--   competency_update, training_competency_update, offboard,
+--   reactivate, reopen_request_approved, save, …
+-- None of those match the constraint, so EVERY application-level audit
+-- write was silently rejected on production (writeAudit swallows the
+-- error by design — "audit is best-effort, never block the action it
+-- records" — so the failures were invisible until the auth-event route
+-- happened to console.error them). Sign-in/out, user create/delete,
+-- offboarding, PIN reveals — none were being recorded. Traceability gap.
+--
+-- Fix: the `action` column is free-form by design (write.ts types it as
+-- `action: string` with an explicit open-ended list). Enumerating it in a
+-- CHECK constraint is the wrong tool — it is exactly what caused this, and
+-- it would keep silently dropping audit rows every time a feature adds a
+-- new verb. Drop the constraint; the column stays free text, matching both
+-- the app's semantic verbs and the trigger's TG_OP values. Reversible:
+-- re-add the constraint if a validation policy is ever wanted.
+-- ============================================================
+
+ALTER TABLE axis.audit_log DROP CONSTRAINT IF EXISTS audit_log_action_check;
