@@ -10,11 +10,17 @@ import { getDb } from '@/lib/supabase/db'
 import { useDraftAutosave, readDraft, clearDraft } from '@/lib/hooks/useDraftAutosave'
 import DraftRecoveryBanner from '@/components/shared/DraftRecoveryBanner'
 import CoaSpecsTab from '@/components/quality/CoaSpecsTab'
+import { cleanCustomerName, findDuplicateSpec, customerOptions, normCustomerKey, docVersionOf } from '@/lib/quality/customer-spec-match'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface Spec {
   id: number; product_family: string; grade: string; variant: string; customer: string | null
+  // The controlled document a row's values come from. Part of the identity: one
+  // customer may hold several specs for one product (Entyce has IPS-ENT-001..007)
+  // and only this separates them. doc_version is its trailing number, shown as
+  // the spec version — the highest is the one that applies.
+  doc_no: string | null; doc_version: number | null; product_description: string | null
   sieve_type: string
   gt6_min: number|null;  gt6_max: number|null
   gt10_min: number|null; gt10_max: number|null
@@ -53,6 +59,7 @@ const GRADES: Record<string,string[]> = {
 const VARIANTS = ['Conventional','Organic','RA-Conventional','RA-Organic']
 const EMPTY = () => ({
   product_family:'Rooibos',grade:'Super Grade',variant:'Conventional',customer:'',sieve_type:'standard',
+  doc_no:'',product_description:'',
   gt6_min:'',gt6_max:'',gt10_min:'',gt10_max:'',gt12_min:'',gt12_max:'',
   gt16_min:'',gt16_max:'',gt20_min:'',gt20_max:'',gt40_min:'',gt40_max:'',gt60_min:'',gt60_max:'',
   dust_min:'',dust_max:'',moisture_max:'',bulk_density_min:'',bulk_density_max:'',bd_target:'',notes:'',
@@ -97,7 +104,8 @@ function EC({id,col,value,width=50,onSave,savedKey}:{id:number;col:string;value:
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 export default function CustomerSpecsPage() {
-  const {p}=useAuth(); const canWrite=p('can_edit_customer_specs')
+  const {p,session}=useAuth(); const canWrite=p('can_edit_customer_specs')
+  const whoAmI=session?.user?.email?.split('@')[0]||'unknown'
   const db=getDb()
   const [tab,setTab]=useState<'sieve'|'coa'>('coa')
   const [specs,setSpecs]=useState<Spec[]>([])
@@ -105,7 +113,36 @@ export default function CustomerSpecsPage() {
   const [err,setErr]=useState('')
   const [filterFam,setFilterFam]=useState('')
   const [filterCust,setFilterCust]=useState('')
+
+  // Deep-link support (?tab=sieve&family=…&customer=…) so a Pasteuriser run can
+  // send you straight to the spec it is measured against, already filtered,
+  // instead of "go to Customer Specs and find it yourself".
+  //
+  // Applied in an effect rather than as useState initialisers on purpose: this
+  // is a client component, but Next still server-renders it, and the server has
+  // no URL query to read — seeding state from window.location during render
+  // would make the first client render differ from the server's HTML and
+  // trip a hydration mismatch. After mount these are ordinary filters.
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search)
+    if (q.get('tab') === 'sieve') setTab('sieve')
+    const fam = q.get('family'); if (fam) setFilterFam(fam)
+    const cust = q.get('customer'); if (cust) setFilterCust(cust)
+  }, [])
   const [showAdd,setShowAdd]=useState(false)
+  const [addNewCust,setAddNewCust]=useState(false)
+  // ── Customer name aliases (qms.customer_aliases) ──────────────────────────
+  // One customer, many spellings. A run typed as 'EWTC' has to reach the spec
+  // filed under 'East West Tea Company (EWTC)', and renaming the spec row
+  // cannot achieve that because BOTH spellings are already in the run data.
+  const [aliases,setAliases]=useState<{id:number;alias:string;canonical_name:string;note:string|null;created_by:string|null}[]>([])
+  const [showAliases,setShowAliases]=useState(false)
+  const [aliasForm,setAliasForm]=useState({alias:'',canonical_name:'',note:''})
+  const [aliasErr,setAliasErr]=useState('')
+  const [aliasSaving,setAliasSaving]=useState(false)
+  // Typed patch helper — addForm is a loose bag of fields, but a setter that
+  // merges a partial does not need `any` to say so.
+  const patchAdd=(patch:Record<string,unknown>)=>setAddForm((p:Record<string,unknown>)=>({...p,...patch}))
   const [addForm,setAddForm]=useState<any>(EMPTY())
   const [addSaving,setAddSaving]=useState(false)
   const [addErr,setAddErr]=useState('')
@@ -139,10 +176,71 @@ export default function CustomerSpecsPage() {
       .then(({data}:{data:any[]|null})=>{setHistSpecs(data??[]);setHistLoading(false)})
   },[showHistory,db])
 
+  // The four columns that together identify a spec. Editing any of them can
+  // collide with another row, and a trailing space in one of them is how
+  // production ended up with three Entyce rows carrying different limits — so
+  // they are cleaned on the way in and checked against the rest of the table.
+  const IDENTITY_COLS = ['customer','product_family','grade','variant','doc_no']
+
   async function saveField(id:number,col:string,val:any){
-    const {data:updated,error}=await db.schema('qms').from('customer_specs').update({[col]:val}).eq('id',id).select().single()
+    let value = val
+    if (IDENTITY_COLS.includes(col)) {
+      value = cleanCustomerName(val)                     // trim + collapse, case kept
+      // Document numbers are stored uppercase to match the unique index.
+      if (col === 'doc_no') value = value.toUpperCase()
+      if (col !== 'customer' && col !== 'doc_no' && !value) { alert('Product family, grade and variant cannot be blank.'); return }
+      const row = specs.find(r=>r.id===id)
+      if (row) {
+        const dup = findDuplicateSpec(specs, {...row, [col]: value}, id)
+        if (dup && !confirm(
+          `That makes this a second spec for the same customer and product.\n\n`+
+          `${dup.customer||'Generic'} — ${dup.product_family} ${dup.grade} · ${dup.variant} already exists (id ${dup.id}).\n\n`+
+          `The pasteuriser and the COA will then pick one of the two by database row order. Continue?`)) return
+      }
+    }
+    // doc_version is derived, never typed — it is the trailing number of the
+    // document, so it has to move with it or the "latest wins" rule reads a
+    // stale version.
+    const patch:Record<string,unknown>={[col]:value}
+    if (col==='doc_no') patch.doc_version=docVersionOf(String(value))
+    const {data:updated,error}=await db.schema('qms').from('customer_specs').update(patch).eq('id',id).select().single()
     if(error){alert('Save failed: '+error.message);return}
     setSpecs(p=>p.map(r=>r.id===id?(updated as Spec):r))
+  }
+
+  const loadAliases=useCallback(async()=>{
+    const {data}=await db.schema('qms').from('customer_aliases').select('*').order('canonical_name').order('alias')
+    setAliases(data??[])
+  },[db])
+
+  async function saveAlias(){
+    const alias=cleanCustomerName(aliasForm.alias)
+    const canonical=cleanCustomerName(aliasForm.canonical_name)
+    if(!alias||!canonical){setAliasErr('Both the alias and the customer it maps to are required.');return}
+    // Same guard as the DB constraint, stated in words the lab can act on.
+    if(normCustomerKey(alias)===normCustomerKey(canonical)){
+      setAliasErr('The alias and the customer name are the same — nothing to map.');return
+    }
+    const clash=aliases.find(a=>normCustomerKey(a.alias)===normCustomerKey(alias))
+    if(clash){setAliasErr(`"${clash.alias}" already maps to "${clash.canonical_name}". Delete that row first if it should point somewhere else.`);return}
+    // An alias pointing at a name that is itself an alias would need chaining,
+    // which resolveCustomerName() deliberately does not do — so refuse it here
+    // rather than create a mapping that silently has no effect.
+    const targetIsAlias=aliases.find(a=>normCustomerKey(a.alias)===normCustomerKey(canonical))
+    if(targetIsAlias){setAliasErr(`"${canonical}" is itself an alias for "${targetIsAlias.canonical_name}". Point this at "${targetIsAlias.canonical_name}" instead — aliases are not chained.`);return}
+    setAliasSaving(true);setAliasErr('')
+    const {error}=await db.schema('qms').from('customer_aliases')
+      .insert({alias,canonical_name:canonical,note:aliasForm.note.trim()||null,created_by:whoAmI})
+    setAliasSaving(false)
+    if(error){setAliasErr(error.message);return}
+    setAliasForm({alias:'',canonical_name:'',note:''});loadAliases()
+  }
+
+  async function deleteAlias(a:{id:number;alias:string;canonical_name:string}){
+    if(!confirm(`Remove the alias "${a.alias}" → "${a.canonical_name}"?\n\nRuns recorded under "${a.alias}" will go back to resolving against the generic spec.`))return
+    const {error}=await db.schema('qms').from('customer_aliases').delete().eq('id',a.id)
+    if(error){alert('Delete failed: '+error.message);return}
+    loadAliases()
   }
 
   async function deleteSpec(id:number){
@@ -154,11 +252,37 @@ export default function CustomerSpecsPage() {
 
   async function saveNew(){
     if(!addForm.product_family||!addForm.grade||!addForm.variant){setAddErr('Product family, grade and variant are required');return}
+    // Clean before checking AND before saving: a spec whose customer or product
+    // carries stray whitespace is unreachable by the lookups that read it.
+    const ident = {
+      customer:       cleanCustomerName(addForm.customer),
+      product_family: cleanCustomerName(addForm.product_family),
+      grade:          cleanCustomerName(addForm.grade),
+      variant:        cleanCustomerName(addForm.variant),
+      // Uppercased: document numbers are printed uppercase and the unique index
+      // keys on upper(btrim(doc_no)), so storing 'ips-ent-007' would look
+      // distinct here while colliding in the database.
+      doc_no:         cleanCustomerName(addForm.doc_no).toUpperCase() || null,
+    }
+    // Warn, don't refuse. The client spec sheet has SEVEN Entyce documents, six
+    // of them under the same family/grade/variant with different sieve limits,
+    // separated only by doc number and product description — neither of which
+    // this table has a column for. So a second row for one customer+product is
+    // sometimes legitimate. What must not happen silently is the ACCIDENTAL
+    // one, so it takes an explicit confirmation and names the row it clashes
+    // with. (The dropdown above is what stops the whitespace/case variants.)
+    const dup = findDuplicateSpec(specs, ident)
+    if (dup && !confirm(
+      `${dup.customer||'Generic'} — ${dup.product_family} ${dup.grade} · ${dup.variant} already has a spec (id ${dup.id}).\n\n`+
+      `Nothing in this table separates two specs for the same customer and product, so the pasteuriser and the COA will pick one of them by database row order — not necessarily this one.\n\n`+
+      `Add it anyway?`)) { setAddErr('Not saved — edit the existing spec instead, or change the product family / grade / variant.'); return }
     setAddSaving(true);setAddErr('')
-    const body:any={...addForm}
+    const body:any={...addForm,...ident}
     ;['gt6_min','gt6_max','gt10_min','gt10_max','gt12_min','gt12_max','gt16_min','gt16_max','gt20_min','gt20_max','gt40_min','gt40_max','gt60_min','gt60_max','dust_min','dust_max','moisture_max','bulk_density_min','bulk_density_max','bd_target']
       .forEach(k=>{body[k]=numOrNull(body[k])})
-    body.customer=addForm.customer||'';body.notes=addForm.notes||null
+    body.customer=ident.customer;body.notes=addForm.notes||null
+    body.doc_version=docVersionOf(ident.doc_no)
+    body.product_description=cleanCustomerName(addForm.product_description)||null
     const {data:saved,error}=await db.schema('qms').from('customer_specs').insert(body).select().single()
     if(error){setAddErr(error.message);setAddSaving(false);return}
     clearDraft(draftKey)
@@ -166,10 +290,29 @@ export default function CustomerSpecsPage() {
   }
 
   const families=[...new Set(specs.map(r=>r.product_family))].sort()
-  const customers=[...new Set(specs.map(r=>r.customer||'').filter(Boolean))].sort()
+  // Deduped on a normalised key, so 'Entyce', 'Entyce ' and 'ENTYCE ' offer
+  // ONE option and picking it writes the spelling the lookups will match.
+  const specCustomers=customerOptions(specs)
+  // Existing duplicates: one spec per (customer, family, grade, variant) is
+  // the rule, and until today nothing enforced it. Whichever row Postgres
+  // returns first is the one the pasteuriser and the COA are judged against,
+  // so these have to be visible here to be fixable — the guards below only
+  // stop NEW ones.
+  const dupGroups=(()=>{
+    const by=new Map<string,Spec[]>()
+    specs.forEach(r=>{
+      const k=[r.customer,r.product_family,r.grade,r.variant,r.doc_no].map(v=>normCustomerKey(v)).join('|')
+      by.set(k,[...(by.get(k)??[]),r])
+    })
+    return [...by.values()].filter(g=>g.length>1)
+  })()
+  const customers=specCustomers
   let filtered=specs
   if(filterFam)filtered=filtered.filter(r=>r.product_family===filterFam)
-  if(filterCust)filtered=filtered.filter(r=>(r.customer||'')===filterCust)
+  // Matched on the normalised key, not the raw string: the dropdown now offers
+  // one deduped spelling per customer, so an exact compare would hide the rows
+  // stored under a variant spelling — the opposite of what this filter is for.
+  if(filterCust)filtered=filtered.filter(r=>normCustomerKey(r.customer)===normCustomerKey(filterCust))
   const grouped:Record<string,Spec[]>={}
   filtered.forEach(r=>{if(!grouped[r.product_family])grouped[r.product_family]=[];grouped[r.product_family].push(r)})
   const fld:React.CSSProperties={width:'100%',padding:'5px 7px',border:'1px solid #d1d5db',borderRadius:6,fontSize:11,boxSizing:'border-box',fontFamily:'monospace'}
@@ -191,6 +334,99 @@ export default function CustomerSpecsPage() {
 
       {tab==='sieve' && (<>
       {/* Toolbar */}
+      {showAliases&&(
+        <div style={{marginBottom:12,padding:'12px 14px',borderRadius:10,border:'1px solid #bfdbfe',background:'#f0f7ff'}}>
+          <div style={{fontSize:12,fontWeight:700,color:'#1e3a8a',marginBottom:4}}>↪ Customer name aliases</div>
+          <div style={{fontSize:11,color:'#1e40af',marginBottom:8,lineHeight:1.5}}>
+            A spec is found by matching the customer name on a run against the name the spec is filed under.
+            Normalising already handles case and spacing, so <code>ENTYCE</code> and <code>Entyce&nbsp;</code> resolve on their own.
+            What it cannot do is match two genuinely different names — a run typed <strong>EWTC</strong> against a spec filed as
+            <strong> East West Tea Company (EWTC)</strong>. Without an alias that run silently uses the <strong>generic</strong> spec.
+            <br/>Renaming the spec row cannot fix it: both spellings are already in the run data and both keep being typed.
+          </div>
+
+          {canWrite&&(
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr auto',gap:6,alignItems:'end',marginBottom:8}}>
+              <div>
+                <label style={{fontSize:9,fontWeight:700,color:'#374151',display:'block',marginBottom:2,textTransform:'uppercase'}}>Name typed on runs</label>
+                <input value={aliasForm.alias} placeholder="e.g. EWTC" style={fld}
+                  onChange={e=>setAliasForm(f=>({...f,alias:e.target.value}))}/>
+              </div>
+              <div>
+                <label style={{fontSize:9,fontWeight:700,color:'#374151',display:'block',marginBottom:2,textTransform:'uppercase'}}>Maps to (spec customer)</label>
+                {/* A list, not free text: the target must be a name a spec is
+                    actually filed under, or the alias resolves to nothing. */}
+                <input value={aliasForm.canonical_name} placeholder="pick or type" style={fld} list="alias-canon-dl"
+                  onChange={e=>setAliasForm(f=>({...f,canonical_name:e.target.value}))}/>
+                <datalist id="alias-canon-dl">{specCustomers.map(c=><option key={c} value={c}/>)}</datalist>
+              </div>
+              <div>
+                <label style={{fontSize:9,fontWeight:700,color:'#374151',display:'block',marginBottom:2,textTransform:'uppercase'}}>Note (optional)</label>
+                <input value={aliasForm.note} placeholder="why this exists" style={fld}
+                  onChange={e=>setAliasForm(f=>({...f,note:e.target.value}))}/>
+              </div>
+              <button onClick={saveAlias} disabled={aliasSaving}
+                style={{padding:'6px 14px',borderRadius:7,border:'none',background:'#1f4e79',color:'#fff',fontSize:11,fontWeight:700,cursor:'pointer',opacity:aliasSaving?0.5:1}}>
+                {aliasSaving?'Saving…':'+ Add alias'}
+              </button>
+            </div>
+          )}
+          {aliasErr&&<div style={{fontSize:11,color:'#991b1b',background:'#fef2f2',border:'1px solid #fca5a5',borderRadius:6,padding:'6px 8px',marginBottom:8}}>⚠ {aliasErr}</div>}
+
+          {aliases.length===0
+            ? <div style={{fontSize:11,color:'#6b7280',fontStyle:'italic'}}>No aliases yet.</div>
+            : <table style={{width:'100%',borderCollapse:'collapse',fontSize:11,background:'#fff',borderRadius:7,overflow:'hidden'}}>
+                <thead><tr style={{background:'#1f4e79',color:'#fff'}}>
+                  {['Name typed on runs','→','Maps to (spec customer)','Note','Added by',canWrite?'':''].filter((h,i)=>i<5||canWrite).map((h,i)=>(
+                    <th key={i} style={{padding:'5px 8px',textAlign:'left',fontSize:9,textTransform:'uppercase'}}>{h}</th>
+                  ))}
+                </tr></thead>
+                <tbody>
+                  {aliases.map((a,i)=>{
+                    // An alias whose target has no spec row is worth flagging:
+                    // it resolves, but to a customer with nothing on file, so the
+                    // run still ends up on the generic spec.
+                    const targetHasSpec=specs.some(r=>normCustomerKey(r.customer)===normCustomerKey(a.canonical_name))
+                    return (
+                      <tr key={a.id} style={{background:i%2?'#fafafa':'#fff',borderBottom:'1px solid #f3f4f6'}}>
+                        <td style={{padding:'5px 8px',fontFamily:'monospace'}}>{a.alias}</td>
+                        <td style={{padding:'5px 4px',color:'#9ca3af'}}>→</td>
+                        <td style={{padding:'5px 8px',fontFamily:'monospace',fontWeight:700}}>
+                          {a.canonical_name}
+                          {!targetHasSpec&&<span title="No spec row is filed under this name, so runs using this alias still fall back to the generic spec."
+                            style={{marginLeft:6,fontSize:9,color:'#b45309',fontWeight:700}}>⚠ no spec on file</span>}
+                        </td>
+                        <td style={{padding:'5px 8px',color:'#6b7280'}}>{a.note||'—'}</td>
+                        <td style={{padding:'5px 8px',color:'#9ca3af',fontSize:10}}>{a.created_by||'—'}</td>
+                        {canWrite&&<td style={{padding:'5px 8px',textAlign:'right'}}>
+                          <button onClick={()=>deleteAlias(a)} title="Remove this alias"
+                            style={{padding:'2px 8px',borderRadius:5,border:'1px solid #fca5a5',background:'#fff',color:'#b91c1c',fontSize:10,fontWeight:700,cursor:'pointer'}}>🗑</button>
+                        </td>}
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>}
+        </div>
+      )}
+
+      {dupGroups.length>0&&(
+        <div style={{marginBottom:12,padding:'10px 14px',borderRadius:10,border:'1px solid #fca5a5',background:'#fef2f2'}}>
+          <div style={{fontSize:12,fontWeight:700,color:'#991b1b',marginBottom:4}}>
+            ⚠ {dupGroups.length} customer{dupGroups.length===1?'':'s'} {dupGroups.length===1?'has':'have'} more than one spec for the same product
+          </div>
+          <div style={{fontSize:11,color:'#7f1d1d',marginBottom:6}}>
+            Only one of each is used, and which one comes down to database row order — so a pasteuriser run or a COA may be checked
+            against limits nobody chose. Keep the correct row, delete the rest.
+          </div>
+          {dupGroups.map((g,i)=>(
+            <div key={i} style={{fontSize:11,color:'#7f1d1d',fontFamily:'monospace',marginTop:2}}>
+              {(g[0].customer||'Generic')} — {g[0].product_family} {g[0].grade} · {g[0].variant}:{' '}
+              {g.map(r=>`id ${r.id} (${JSON.stringify(r.customer)})`).join('  vs  ')}
+            </div>
+          ))}
+        </div>
+      )}
       <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:12,flexWrap:'wrap'}}>
         <span style={{fontWeight:700,fontSize:13}}>📋 Product Specifications</span>
         <span style={{fontSize:10,color:'#9ca3af'}}>{specs.length} specs · {families.length} families</span>
@@ -203,6 +439,11 @@ export default function CustomerSpecsPage() {
           {customers.map(c=><option key={c}>{c}</option>)}
         </select>
         <button onClick={load} style={{padding:'4px 12px',borderRadius:6,border:'1px solid #e5e7eb',background:'#fff',fontSize:11,cursor:'pointer'}}>↻</button>
+        <button onClick={()=>{const next=!showAliases;setShowAliases(next);if(next)loadAliases()}}
+          title="One customer, many spellings — map the names that get typed on runs onto the name the spec is filed under"
+          style={{padding:'4px 12px',borderRadius:6,border:'1px solid #1f4e79',fontSize:11,cursor:'pointer',background:showAliases?'#dbeafe':'#fff',color:showAliases?'#1e3a8a':'#374151',fontWeight:600}}>
+          ↪ {showAliases?'Hide aliases':'Customer aliases'}
+        </button>
         <button onClick={()=>setShowHistory(h=>!h)}
           style={{padding:'4px 12px',borderRadius:6,border:'1px solid #d97706',fontSize:11,cursor:'pointer',background:showHistory?'#fef3c7':'#fff',color:showHistory?'#92400e':'#374151',fontWeight:600}}>
           📜 {showHistory?'Hide Historical':'Historical'}
@@ -256,8 +497,48 @@ export default function CustomerSpecsPage() {
                   </select>
                 </div>
                 <div>
-                  <label style={{fontSize:10,fontWeight:700,color:'#374151',display:'block',marginBottom:3,textTransform:'uppercase'}}>Customer (optional)</label>
-                  <input value={addForm.customer} onChange={e=>setAddForm((p:any)=>({...p,customer:e.target.value}))} placeholder="Leave blank for generic" style={fld}/>
+                  <label style={{fontSize:10,fontWeight:700,color:'#374151',display:'block',marginBottom:3,textTransform:'uppercase'}}>Customer</label>
+                  {/* A list rather than a free-text box: typing the name is how
+                      one customer ends up with several spec rows differing only
+                      by a space or a capital, and the pasteuriser/COA lookups
+                      then resolve to whichever row Postgres returns first. */}
+                  <select value={addNewCust?'__new__':addForm.customer} style={fld}
+                    onChange={e=>{
+                      const v=e.target.value
+                      if(v==='__new__'){setAddNewCust(true);patchAdd({customer:''})}
+                      else{setAddNewCust(false);patchAdd({customer:v})}
+                    }}>
+                    <option value="">Generic — applies to every customer</option>
+                    {specCustomers.map(c=><option key={c} value={c}>{c}</option>)}
+                    <option value="__new__">+ New customer…</option>
+                  </select>
+                  {addNewCust&&(
+                    <input autoFocus value={addForm.customer} placeholder="New customer name"
+                      onChange={e=>patchAdd({customer:e.target.value})}
+                      onBlur={e=>patchAdd({customer:cleanCustomerName(e.target.value)})}
+                      style={{...fld,marginTop:4}}/>
+                  )}
+                </div>
+                <div>
+                  <label style={{fontSize:10,fontWeight:700,color:'#374151',display:'block',marginBottom:3,textTransform:'uppercase'}}>Spec Doc No</label>
+                  <input value={addForm.doc_no} placeholder="e.g. IPS-ENT-007"
+                    onChange={e=>patchAdd({doc_no:e.target.value})}
+                    onBlur={e=>patchAdd({doc_no:cleanCustomerName(e.target.value).toUpperCase()})}
+                    style={fld}/>
+                  {/* The trailing number is the version, and the highest one is
+                      the spec that applies — so it is worth showing what was
+                      understood before the row is saved. */}
+                  <div style={{fontSize:9,color:docVersionOf(addForm.doc_no)!=null?'#047857':'#9ca3af',marginTop:2}}>
+                    {docVersionOf(addForm.doc_no)!=null
+                      ? `Version ${docVersionOf(addForm.doc_no)} — supersedes lower numbers for this customer and product`
+                      : 'No version — leave blank for an in-house spec with no controlled document'}
+                  </div>
+                </div>
+                <div>
+                  <label style={{fontSize:10,fontWeight:700,color:'#374151',display:'block',marginBottom:3,textTransform:'uppercase'}}>Product Description</label>
+                  <input value={addForm.product_description} placeholder="as named on the spec doc"
+                    onChange={e=>patchAdd({product_description:e.target.value})}
+                    style={fld}/>
                 </div>
               </div>
               <div style={{fontWeight:700,fontSize:11,color:'#374151',marginBottom:2}}>Sieve Specifications (%)</div>
@@ -328,6 +609,7 @@ export default function CustomerSpecsPage() {
                     <th style={{padding:'6px 8px',textAlign:'left',color:'#fff',fontSize:9,textTransform:'uppercase',whiteSpace:'nowrap'}}>Grade</th>
                     <th style={{padding:'6px 6px',color:'#fff',fontSize:9,textTransform:'uppercase'}}>Variant</th>
                     <th style={{padding:'6px 8px',color:'#fde68a',fontSize:9,fontWeight:800,borderLeft:'1px solid #2d5f8f',whiteSpace:'nowrap',background:'#1a3f60'}}>CUSTOMER</th>
+                    <th style={{padding:'6px 8px',color:'#fde68a',fontSize:9,fontWeight:800,borderLeft:'1px solid #2d5f8f',whiteSpace:'nowrap',background:'#1a3f60'}}>DOC NO</th>
                     {sieveColsFor(family).map(c=>(
                       <th key={c.key} colSpan={2} style={{padding:'4px 4px',textAlign:'center',color:'#bfdbfe',fontSize:9,borderLeft:'1px solid #2d5f8f'}}>{c.label}%</th>
                     ))}
@@ -337,6 +619,7 @@ export default function CustomerSpecsPage() {
                   </tr>
                   <tr style={{background:'#f0f4f8',borderBottom:'1px solid #dbeafe'}}>
                     <th/><th/><th style={{fontSize:9,color:'#6b7280',borderLeft:'1px solid #e5e7eb'}}>name</th>
+                    <th style={{fontSize:9,color:'#6b7280',borderLeft:'1px solid #e5e7eb'}}>version</th>
                     {sieveColsFor(family).map(c=>(
                       <>{/* Fragment needs key on outer element */}
                         <th key={c.key+'min'} style={{fontSize:8,color:'#9ca3af',textAlign:'center',borderLeft:'1px solid #e5e7eb'}}>min</th>
@@ -358,6 +641,15 @@ export default function CustomerSpecsPage() {
                         {canWrite
                           ?<EC id={row.id} col="customer" value={row.customer??null} width={90} onSave={saveField} savedKey={`${row.id}_customer`}/>
                           :<span style={{fontFamily:'monospace',fontSize:10}}>{row.customer||'—'}</span>}
+                      </td>
+                      <td style={{padding:'5px 6px',fontSize:10,borderLeft:'1px solid #f3f4f6',whiteSpace:'nowrap'}}
+                          title={row.product_description||undefined}>
+                        {canWrite
+                          ?<EC id={row.id} col="doc_no" value={row.doc_no??null} width={100} onSave={saveField} savedKey={`${row.id}_doc_no`}/>
+                          :<span style={{fontFamily:'monospace',fontSize:10}}>{row.doc_no||'—'}</span>}
+                        {row.doc_no&&docVersionOf(row.doc_no)!=null&&(
+                          <span style={{marginLeft:4,fontSize:9,color:'#047857',fontWeight:700}}>v{docVersionOf(row.doc_no)}</span>
+                        )}
                       </td>
                       {sieveColsFor(family).map(c=>(
                         <>
@@ -416,7 +708,7 @@ export default function CustomerSpecsPage() {
             <div style={{overflowX:'auto',background:'#fff',borderRadius:8,border:'1px solid #fcd34d'}}>
               <table style={{width:'100%',borderCollapse:'collapse',fontSize:10}}>
                 <thead><tr style={{background:'#92400e',color:'#fff'}}>
-                  {['Family','Grade','Variant','Customer','Moist Max','BD Min','BD Max','Notes'].map(h=>(
+                  {['Family','Grade','Variant','Customer','Doc No','Moist Max','BD Min','BD Max','Notes'].map(h=>(
                     <th key={h} style={{padding:'6px 8px',textAlign:'left',fontWeight:600,whiteSpace:'nowrap',fontSize:9}}>{h}</th>
                   ))}
                 </tr></thead>
@@ -427,6 +719,7 @@ export default function CustomerSpecsPage() {
                       <td style={{padding:'4px 8px'}}>{r.grade}</td>
                       <td style={{padding:'4px 8px'}}><VariantBadge v={r.variant}/></td>
                       <td style={{padding:'4px 8px',color:r.customer?'#1f4e79':'#9ca3af',fontStyle:r.customer?'normal':'italic'}}>{r.customer||'generic'}</td>
+                      <td style={{padding:'4px 8px',fontFamily:'monospace',fontSize:10}} title={r.product_description||undefined}>{r.doc_no||'—'}</td>
                       <td style={{padding:'4px 8px',fontFamily:'monospace'}}>{r.moisture_max??'—'}</td>
                       <td style={{padding:'4px 8px',fontFamily:'monospace'}}>{r.bulk_density_min??'—'}</td>
                       <td style={{padding:'4px 8px',fontFamily:'monospace'}}>{r.bulk_density_max??'—'}</td>

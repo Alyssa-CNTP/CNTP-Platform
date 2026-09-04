@@ -33,6 +33,8 @@ import { jsPDF } from 'jspdf'
 import { loadImage } from '@/lib/pdf/load-image'
 import { useDraftAutosave, readDraft, clearDraft } from '@/lib/hooks/useDraftAutosave'
 import DraftRecoveryBanner from '@/components/shared/DraftRecoveryBanner'
+import { wantsHeavyMetals, heavyMetalSpecParts } from '@/lib/quality/heavy-metals'
+import { coaGaps, coaHeaderFieldLocked, coaContentLocked, canDeleteGeneratedCoa } from '@/lib/quality/coa-gating'
 
 // ─── Standard wording (identical across every COA) ────────────────────────────
 
@@ -190,7 +192,7 @@ const inp = 'px-2 py-1 border border-gray-300 rounded text-[12px] outline-none f
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function CoaGeneratorPage() {
-  const { p, session, isFullAdmin } = useAuth()
+  const { p, session } = useAuth()
   const canUse = p('can_save_lab_results') || p('can_approve_runs')
   const db = getDb()
 
@@ -220,6 +222,11 @@ export default function CoaGeneratorPage() {
   // Queue of COAs the lab manager has signed that still need the QA sign-off.
   const [showQueue, setShowQueue]   = useState(false)
   const [queue, setQueue]           = useState<any[]>([])
+  // Queue of fully-signed COAs (both lab + QA) that haven't been printed or
+  // exported yet since the QA sign-off — what the lab manager gets notified
+  // about (notifyLabManager() in coa-signoff/route.ts) and comes here to act on.
+  const [showPrintQueue, setShowPrintQueue] = useState(false)
+  const [printQueue, setPrintQueue]         = useState<any[]>([])
   // Persisted sign-off row for the current batch (loaded from the server) — this
   // is what makes the lab → QA hand-off work across separate logins/sessions.
   const [signoff, setSignoff] = useState<any>(null)
@@ -247,6 +254,10 @@ export default function CoaGeneratorPage() {
   const sentToQa  = signoff?.status === 'sent_to_qa' || qaSigned
   const iAmLab = sigInfo.me.isLab
   const iAmQa  = sigInfo.me.isQa
+  // Deleting a generated COA is restricted to the two managers who sign it —
+  // deliberately NOT extended to full admins: this removes a quality record,
+  // and the two people accountable for the document are the two who signed it.
+  const canDeleteCoa = canDeleteGeneratedCoa(sigInfo.me)
   const hasSig = sigInfo.me.hasSignature
   const canSignLab = iAmLab && hasSig
   const canSignQa  = iAmQa  && hasSig
@@ -318,6 +329,9 @@ export default function CoaGeneratorPage() {
   // popup below. Removes the qms.coa_generated row, then refreshes the list.
   const deleteCoa = async () => {
     if (!deleteTarget) return
+    // Re-checked here, not only on the button: hiding a control is not an
+    // authorisation check, and this one destroys a quality record.
+    if (!canDeleteCoa) { alert('Only the Lab Manager and the Quality Manager may delete a generated COA.'); return }
     setDeleting(true)
     const { error } = await db.schema('qms').from('coa_generated').delete().eq('id', deleteTarget.id)
     setDeleting(false)
@@ -335,6 +349,32 @@ export default function CoaGeneratorPage() {
   }, [db])
   // Keep the pending count fresh on load and after each sign-off action.
   useEffect(() => { loadQueue() }, [loadQueue, signoff])
+
+  // Fully-signed COAs still waiting to be printed/exported. "Not yet printed"
+  // isn't a column on coa_signoffs — it's derived by checking whether
+  // coa_generated (written by logGeneration(), see Print/Export buttons below)
+  // has an entry for that batch created AFTER the QA sign-off. No new schema
+  // needed: printing/exporting already logs there for History, this just also
+  // reads that log to know what still needs doing.
+  const loadPrintQueue = useCallback(async () => {
+    const { data: signed } = await db.schema('qms').from('coa_signoffs').select('*')
+      .not('qa_signed_at', 'is', null)
+      .order('qa_signed_at', { ascending: false }).limit(200)
+    const rows = signed ?? []
+    if (!rows.length) { setPrintQueue([]); return }
+    const { data: generated } = await db.schema('qms').from('coa_generated')
+      .select('batch_no, generated_at').in('batch_no', rows.map((r: any) => r.batch_no))
+    const lastPrintedAt = new Map<string, string>()
+    for (const g of (generated ?? [])) {
+      const prev = lastPrintedAt.get(g.batch_no)
+      if (!prev || g.generated_at > prev) lastPrintedAt.set(g.batch_no, g.generated_at)
+    }
+    setPrintQueue(rows.filter((r: any) => {
+      const printedAt = lastPrintedAt.get(r.batch_no)
+      return !printedAt || printedAt < r.qa_signed_at
+    }))
+  }, [db])
+  useEffect(() => { loadPrintQueue() }, [loadPrintQueue, signoff])
 
   const lookup = useCallback(async (batchRaw: string) => {
     const batch = batchRaw.trim()
@@ -472,7 +512,35 @@ export default function CoaGeneratorPage() {
         snapshot: { header: m.header, micro: m.micro, cutLength: m.cutLength, other: m.other, sections: m.sections, isOrganic: m.isOrganic },
       })
       clearDraft(draftKey)
+      loadPrintQueue()   // this batch just got printed/exported — drop it off "Ready to print" now, not on next reload
     } catch { /* non-blocking */ }
+  }
+
+  // ── Cancel (requirement: undo wrong information typed into a COA) ────────
+  // Two different mistakes, two different answers:
+  //   • wrong values typed into the right COA -> reload it from source, which
+  //     discards every local edit and restores what the data actually says;
+  //   • wrong COA open altogether -> clear it and start from the batch box.
+  // Both clear the autosaved draft, or the discarded text would come straight
+  // back through the draft-recovery banner on the next visit.
+  const cancelEdits = async () => {
+    if (!model) return
+    const batch = model.batch
+    if (!confirm(`Discard your unsaved changes to this COA and reload batch ${batch} from the source data?\n\nSaved order details and sign-offs are not affected.`)) return
+    clearDraft(draftKey)
+    setSigAdjust({})
+    await lookup(batch)
+  }
+
+  const discardCoa = () => {
+    if (!model) return
+    if (!confirm('Close this COA and start over?\n\nNothing is deleted — the batch, its results and any sign-off stay exactly as they are. This only clears what is on screen.')) return
+    clearDraft(draftKey)
+    setModel(null)
+    setSources(null)
+    setSigAdjust({})
+    setBatchInput('')
+    setSignoff(null)
   }
 
   // Save the logistics order fields (invoice, order no, quantities, destination)
@@ -492,28 +560,38 @@ export default function CoaGeneratorPage() {
     alert('Order details saved for ' + (model.header.batch_number || model.batch))
   }
 
+  // ── Post-sign-off lock ───────────────────────────────────────────────────
+  // Once BOTH managers have signed, the quality content of the COA is what they
+  // approved and must not change under their signatures. The commercial fields
+  // below are a deliberate exception: they are not quality results, they are
+  // routinely filled in by logistics after the analyses are signed, and editing
+  // them does NOT send the COA back for approval — saveOrderDetails() writes
+  // qms.coa_orders only and never touches qms.coa_signoffs.
+  const contentLocked = coaContentLocked(labSigned, qaSigned)
+  const headerFieldLocked = (k: string) => coaHeaderFieldLocked(k, labSigned, qaSigned)
+  const lockedNote = 'Both managers have signed this COA. Results and included sections are fixed under their signatures; the date, invoice, order number and quantities stay editable and do not need re-approval.'
+
   // ── Field mutators ──
-  const setHeader = (k: string, v: string) => setModel(m => m ? { ...m, header: { ...m.header, [k]: v } } : m)
-  const setLine = (section: 'micro' | 'cutLength' | 'other', i: number, field: 'spec' | 'result', v: string) =>
+  const setHeader = (k: string, v: string) => {
+    if (headerFieldLocked(k)) return
+    setModel(m => m ? { ...m, header: { ...m.header, [k]: v } } : m)
+  }
+  const setLine = (section: 'micro' | 'cutLength' | 'other', i: number, field: 'spec' | 'result', v: string) => {
+    if (contentLocked) return
     setModel(m => m ? { ...m, [section]: (m as any)[section].map((l: CoaLine, idx: number) => idx === i ? { ...l, [field]: v } : l) } : m)
-  const toggleSection = (s: keyof CoaModel['sections']) =>
-    setModel(m => m ? { ...m, sections: { ...m.sections, [s]: !m.sections[s] } } : m)
+  }
+  const toggleSection = (sec: keyof CoaModel['sections']) => {
+    if (contentLocked) return
+    setModel(m => m ? { ...m, sections: { ...m.sections, [sec]: !m.sections[sec] } } : m)
+  }
 
   const description = model?.isOrganic ? COA_WORDING.descriptionOrganic : COA_WORDING.descriptionConventional
 
   // ── Outstanding data (sections that are on but have no source) ──
-  const outstanding: string[] = []
-  if (model) {
-    if (!model.found.pasteuriser) outstanding.push('Pasteuriser batch (grade, moisture, bulk density)')
-    if (model.sections.micro && !model.found.micro) outstanding.push('Microbiology results')
-    if (model.sections.cutLength && !model.found.sieving) outstanding.push('Sieving / cut-length (pasteuriser sieve samples)')
-    if (model.sections.residue && !model.found.residue) outstanding.push('Pesticide residue')
-    if (model.sections.pa && !model.found.pa) outstanding.push('Pyrrolizidine Alkaloids')
-    if (model.sections.heavyMetals && !model.found.heavyMetals) outstanding.push('Heavy metals')
-    if (model.sections.moshMoah && !model.found.moshMoah) outstanding.push('MOSH/MOAH')
-    if (model.sections.chloratePerchlorate && !model.found.chloratePerchlorate) outstanding.push('Chlorate/Perchlorate')
-    if (model.sections.glyphosate && !model.found.glyphosate) outstanding.push('Glyphosate')
-  }
+  // Analyses this COA includes but has no result for. Empty means it may be
+  // generated. The rule and the capture routes live in lib/quality/coa-gating
+  // with tests — see that file for why each section maps where it does.
+  const outstanding = model ? coaGaps(model.sections, model.found) : []
 
   if (!canUse) return <div className="p-5 text-[13px] text-gray-500">You don't have permission to generate COAs.</div>
 
@@ -553,11 +631,52 @@ export default function CoaGeneratorPage() {
           className="px-4 py-2 rounded-lg border text-[13px] font-semibold whitespace-nowrap" style={{ borderColor: showQueue ? '#7c3aed' : '#e5e7eb', background: showQueue ? '#f3e8ff' : '#fff', color: showQueue ? '#6b21a8' : '#374151' }}>
           🖊️ Awaiting QA sign-off{queue.length ? ` (${queue.length})` : ''}
         </button>
+        <button onClick={() => setShowPrintQueue(q => !q)}
+          className="px-4 py-2 rounded-lg border text-[13px] font-semibold whitespace-nowrap" style={{ borderColor: showPrintQueue ? '#166534' : '#e5e7eb', background: showPrintQueue ? '#dcfce7' : '#fff', color: showPrintQueue ? '#166534' : '#374151' }}>
+          🖨 Ready to print{printQueue.length ? ` (${printQueue.length})` : ''}
+        </button>
         <button onClick={() => setShowHistory(h => !h)}
           className="px-4 py-2 rounded-lg border text-[13px] font-semibold" style={{ borderColor: showHistory ? '#d97706' : '#e5e7eb', background: showHistory ? '#fef3c7' : '#fff', color: showHistory ? '#92400e' : '#374151' }}>
           🕘 History
         </button>
       </div>
+
+      {/* Ready to print — both managers have signed, nobody has printed/exported
+          it since. The lab manager gets an in-app notification the moment the
+          QA manager signs (notifyLabManager(), coa-signoff/route.ts); this is
+          where they come to act on it. */}
+      {showPrintQueue && (
+        <div className="mb-4 no-print border border-green-200 rounded-lg overflow-hidden">
+          <div className="px-3 py-2 bg-green-50 text-[11px] font-bold uppercase text-green-800 flex items-center justify-between">
+            <span>🖨 Fully signed — ready to print or export</span>
+            <button onClick={loadPrintQueue} className="text-[10px] font-semibold text-green-700 hover:underline">↻ Refresh</button>
+          </div>
+          {printQueue.length === 0 ? (
+            <div className="p-4 text-center text-[12px] text-gray-400">Nothing waiting. Once the Quality Manager signs a COA, it appears here until it's printed or exported.</div>
+          ) : (
+            <div style={{ overflowX: 'auto' }}>
+              <table className="w-full text-[11px]" style={{ borderCollapse: 'collapse' }}>
+                <thead><tr className="bg-gray-100">{['Batch','Customer','Grade','Signed by (QA)','Signed on',''].map(h => <th key={h} className="px-2 py-1 text-left">{h}</th>)}</tr></thead>
+                <tbody>
+                  {printQueue.map((q, i) => (
+                    <tr key={q.batch_no} className="border-b border-gray-100" style={{ background: i % 2 ? '#fafafa' : '#fff' }}>
+                      <td className="px-2 py-1 font-mono font-bold whitespace-nowrap">{q.batch_no}</td>
+                      <td className="px-2 py-1 whitespace-nowrap">{q.customer || '—'}</td>
+                      <td className="px-2 py-1 whitespace-nowrap">{q.grade || '—'}</td>
+                      <td className="px-2 py-1 whitespace-nowrap">{q.qa_name || '—'}</td>
+                      <td className="px-2 py-1 whitespace-nowrap text-gray-500">{String(q.qa_signed_at || '').slice(0, 10)}</td>
+                      <td className="px-2 py-1 whitespace-nowrap">
+                        <button onClick={() => { setBatchInput(q.batch_no); setShowPrintQueue(false); lookup(q.batch_no) }}
+                          className="px-3 py-1 rounded-lg text-white text-[11px] font-bold" style={{ background: '#166534' }}>Open to print</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Awaiting QA sign-off — COAs the lab manager has signed, ready for the Quality manager */}
       {showQueue && (
@@ -617,7 +736,7 @@ export default function CoaGeneratorPage() {
                         <div className="flex items-center gap-2">
                           <button onClick={() => openFromHistory(h)} title="Open this COA to correct a mistake and re-print/export"
                             className="px-3 py-1 rounded-lg text-white text-[11px] font-bold" style={{ background: '#1f4e79' }}>✏️ Edit</button>
-                          {(sigInfo.me.isLab || sigInfo.me.isQa || isFullAdmin) && (
+                          {canDeleteCoa && (
                             <button onClick={() => setDeleteTarget(h)} title="Delete this generated COA"
                               className="px-3 py-1 rounded-lg text-white text-[11px] font-bold" style={{ background: '#b91c1c' }}>🗑 Delete</button>
                           )}
@@ -697,17 +816,53 @@ export default function CoaGeneratorPage() {
             <div className="border border-gray-200 rounded-lg p-3">
               <div className="text-[11px] font-bold uppercase text-gray-500 mb-2">Include sections</div>
               {([['micro','Microbiology'],['cutLength','Cut length / sieving'],['residue','Pesticide residue'],['pa','Pyrrolizidine Alkaloids'],['heavyMetals','Heavy metals'],['moshMoah','MOSH/MOAH'],['chloratePerchlorate','Chlorate/Perchlorate'],['glyphosate','Glyphosate']] as const).map(([k,l]) => (
-                <label key={k} className="flex items-center gap-2 text-[12px] py-0.5 cursor-pointer">
-                  <input type="checkbox" checked={model.sections[k]} onChange={() => toggleSection(k)} />
+                <label key={k} className={`flex items-center gap-2 text-[12px] py-0.5 ${contentLocked ? 'cursor-not-allowed text-gray-400' : 'cursor-pointer'}`}
+                  title={contentLocked ? lockedNote : ''}>
+                  <input type="checkbox" checked={model.sections[k]} disabled={contentLocked} onChange={() => toggleSection(k)} />
                   {l}
                 </label>
               ))}
             </div>
           </div>
 
+          {/* Blocks generation. Previously this was advisory only, so a COA could
+              be printed with an included analysis that had no result behind it. */}
           {outstanding.length > 0 && (
-            <div className="mb-4 text-[12px] text-amber-800 bg-amber-50 border border-amber-300 rounded-lg px-3 py-2 no-print">
-              ⚠ Outstanding — included but no data yet: {outstanding.join(' · ')}
+            <div className="mb-4 text-[12px] text-red-800 bg-red-50 border border-red-300 rounded-lg px-3 py-2 no-print">
+              <div className="font-bold mb-1">
+                🚫 Cannot generate — {outstanding.length} included {outstanding.length === 1 ? 'analysis has' : 'analyses have'} no result
+              </div>
+              <div className="text-[11px] mb-2">
+                Capture the result in the tab that owns it, or drop it from this COA. A COA must not state an analysis it has no result for.
+              </div>
+              <ul className="space-y-1">
+                {outstanding.map(o => (
+                  <li key={o.label} className="flex items-center gap-2 flex-wrap">
+                    <span className="font-semibold">{o.label}</span>
+                    <a href={o.href} target="_blank" rel="noopener noreferrer"
+                      className="px-2 py-0.5 rounded border border-red-300 bg-white text-[10px] font-semibold text-red-800">
+                      Capture in {o.where} ↗
+                    </a>
+                    {o.section
+                      ? <button onClick={() => toggleSection(o.section!)} disabled={contentLocked}
+                          title={contentLocked ? lockedNote : 'Remove this analysis from the COA — it will not be printed or claimed'}
+                          className="px-2 py-0.5 rounded border border-red-300 bg-white text-[10px] font-semibold text-red-800 disabled:opacity-50 disabled:cursor-not-allowed">
+                          Drop from COA
+                        </button>
+                      : <span className="text-[10px] italic">this is the COA&apos;s own batch — it cannot be dropped</span>}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* Requirement 3: the quality content is fixed once both have signed;
+              the commercial fields stay open and need no re-approval. */}
+          {contentLocked && (
+            <div className="mb-4 text-[12px] text-blue-900 bg-blue-50 border border-blue-300 rounded-lg px-3 py-2 no-print">
+              🔒 <span className="font-bold">Signed by both managers.</span> Results, specifications and the included sections are
+              locked. <span className="font-semibold">Date, invoice number, order number and both quantities stay editable</span> — saving those
+              does not send the COA back to the Quality Manager for approval.
             </div>
           )}
 
@@ -723,13 +878,24 @@ export default function CoaGeneratorPage() {
             <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
               {([['invoice_no','Invoice No.'],['order_number','Order Number'],['quantity_kg',"Quantity (Kg's)"],['quantity_bags','Quantity of Bags'],['destination','Destination']] as const).map(([k,l]) => (
                 <div key={k}>
-                  <label className="block text-[9px] font-bold uppercase text-gray-500 mb-0.5">{l}</label>
+                  <label className="block text-[9px] font-bold uppercase text-gray-500 mb-0.5">
+                    {l}{headerFieldLocked(k) ? ' 🔒' : ''}
+                  </label>
                   <input value={model.header[k] || ''} onChange={e => setHeader(k, e.target.value)}
-                    placeholder="—" className="w-full px-2 py-1 border border-gray-300 rounded text-[12px] outline-none focus:border-blue-500" />
+                    readOnly={headerFieldLocked(k)}
+                    title={headerFieldLocked(k) ? 'Locked — the destination decides which customer spec applies, so it cannot change after the COA is signed. Reopen a new COA for a different customer.' : ''}
+                    placeholder="—"
+                    className={`w-full px-2 py-1 border rounded text-[12px] outline-none ${headerFieldLocked(k) ? 'border-gray-200 bg-gray-50 text-gray-500 cursor-not-allowed' : 'border-gray-300 focus:border-blue-500'}`} />
                 </div>
               ))}
             </div>
-            <div className="text-[10px] text-gray-400 mt-1">These fill in the header and persist against the batch — logistics can enter them later; they'll pull through next time.</div>
+            <div className="text-[10px] text-gray-400 mt-1">These fill in the header and persist against the batch — logistics can enter them later; they&apos;ll pull through next time.</div>
+            {contentLocked && (
+              <div className="text-[10px] text-blue-700 mt-1">
+                Editable after sign-off and saved without re-approval. <span className="font-semibold">Destination is the exception</span> —
+                it decides which customer spec applies, so changing it would change what the signed analyses were checked against.
+              </div>
+            )}
           </div>
 
           {/* COA sign-off — Lab Manager then Quality Manager, identities read from
@@ -779,13 +945,42 @@ export default function CoaGeneratorPage() {
             <div className="text-[10px] text-gray-400 mt-2">The Lab Manager and Quality Manager are read from the Staff Directory. Each signs with their own Staff Directory signature, from their own login — a signature can never be applied by anyone else. Sign-offs are saved to the COA, so the two managers can sign at different times.</div>
           </div>
 
-          <div className="flex gap-2 mb-4 no-print">
-            <button onClick={() => { logGeneration(model); window.print() }} className="px-4 py-2 rounded-lg border border-gray-300 text-[12px] font-semibold">🖨 Print</button>
-            <button onClick={() => { logGeneration(model); exportPdf(model, description, outputSigs, sigAdjust) }} className="px-4 py-2 rounded-lg text-white text-[12px] font-bold" style={{ background: '#166534' }}>⬇ Export PDF</button>
+          <div className="flex gap-2 mb-4 no-print flex-wrap">
+            <button onClick={() => { logGeneration(model); window.print() }}
+              disabled={outstanding.length > 0}
+              title={outstanding.length > 0 ? `Blocked — no result for: ${outstanding.map(o => o.label).join(', ')}` : ''}
+              className="px-4 py-2 rounded-lg border border-gray-300 text-[12px] font-semibold disabled:opacity-40 disabled:cursor-not-allowed">🖨 Print</button>
+            <button onClick={() => { logGeneration(model); exportPdf(model, description, outputSigs, sigAdjust) }}
+              disabled={outstanding.length > 0}
+              title={outstanding.length > 0 ? `Blocked — no result for: ${outstanding.map(o => o.label).join(', ')}` : ''}
+              className="px-4 py-2 rounded-lg text-white text-[12px] font-bold disabled:opacity-40 disabled:cursor-not-allowed" style={{ background: '#166534' }}>⬇ Export PDF</button>
+            {/* Requirement 2 — two kinds of mistake, two ways back. */}
+            <button onClick={cancelEdits}
+              title="Discard your unsaved edits and reload this batch from the source data"
+              className="px-4 py-2 rounded-lg border border-amber-300 bg-amber-50 text-amber-800 text-[12px] font-semibold">↩ Cancel changes</button>
+            <button onClick={discardCoa}
+              title="Close this COA and start over — nothing is deleted"
+              className="px-4 py-2 rounded-lg border border-gray-300 text-gray-600 text-[12px] font-semibold">✕ Close COA</button>
           </div>
 
-          {/* ── COA preview (editable) ── */}
-          <div ref={printRef} className="coa-print bg-white border border-gray-300 rounded-lg p-6 text-[12px]" style={{ color: '#111' }}>
+          {/* ── COA preview (editable) ──
+              The app shell's <main> is overflow-x-hidden (app/(app)/layout.tsx,
+              deliberate everywhere else so no page can put a stray horizontal
+              scrollbar on the whole app), so anything here wider than the
+              sidebar-shrunk viewport used to be silently clipped with no way
+              to see the rest — invisible, not just squeezed, since it never
+              got its own scrollbar either. Print looked fine regardless,
+              because the print stylesheet below takes .coa-print out of flow
+              (position: absolute) so the shell's clipping never applied to
+              it. This wrapper gives the preview its OWN scroll container —
+              overflow-x:hidden on an ancestor never overrides a descendant
+              managing its own overflow — and coa-print gets a real minimum
+              width matching the actual PDF content box (A4 minus margins,
+              515pt ≈ 687px, rounded up for breathing room) so the on-screen
+              layout can no longer differ from print/PDF by being squeezed
+              into less width than the export ever uses. */}
+          <div style={{ overflowX: 'auto' }}>
+            <div ref={printRef} className="coa-print bg-white border border-gray-300 rounded-lg p-6 text-[12px]" style={{ color: '#111', minWidth: 720 }}>
             {/* Logo + title */}
             <div className="flex items-center mb-4 border-b-2 border-gray-800 pb-2">
               {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -806,7 +1001,9 @@ export default function CoaGeneratorPage() {
                 <div key={k} className="flex items-center gap-2">
                   <span className="font-bold text-[10px] uppercase text-gray-600 w-[130px] shrink-0">{l}</span>
                   <input value={model.header[k] || ''} onChange={e => setHeader(k, e.target.value)}
-                    className="flex-1 px-1.5 py-0.5 border-b border-dashed border-gray-300 text-[12px] outline-none focus:border-blue-500 bg-transparent" />
+                    readOnly={headerFieldLocked(k)}
+                    title={headerFieldLocked(k) ? lockedNote : ''}
+                    className={`flex-1 px-1.5 py-0.5 border-b border-dashed text-[12px] outline-none bg-transparent ${headerFieldLocked(k) ? 'border-gray-200 text-gray-500 cursor-not-allowed' : 'border-gray-300 focus:border-blue-500'}`} />
                 </div>
               ))}
             </div>
@@ -820,13 +1017,15 @@ export default function CoaGeneratorPage() {
             {/* Microbiology */}
             {model.sections.micro && (
               <CoaTable title="Microbiological Analyses" cols={['Organism', "Specification (cfu's/g)", "Result (cfu's/g)"]}
-                lines={model.micro} onEdit={(i, f, v) => setLine('micro', i, f, v)} />
+                lines={model.micro} onEdit={(i, f, v) => setLine('micro', i, f, v)}
+                readOnly={contentLocked} lockNote={lockedNote} />
             )}
 
             {/* Cut length */}
             {model.sections.cutLength && (
               <CoaTable title="Cut Length Guidelines" cols={['Sieve Size', 'Specification', 'Result']}
-                lines={model.cutLength} onEdit={(i, f, v) => setLine('cutLength', i, f, v)} />
+                lines={model.cutLength} onEdit={(i, f, v) => setLine('cutLength', i, f, v)}
+                readOnly={contentLocked} lockNote={lockedNote} />
             )}
 
             {/* Other analysis — the row list and the edit-index mapping must use
@@ -840,7 +1039,8 @@ export default function CoaGeneratorPage() {
                 const target = shown[i]
                 const realIdx = model.other.indexOf(target)
                 if (realIdx >= 0) setLine('other', realIdx, f, v)
-              }} />
+              }}
+              readOnly={contentLocked} lockNote={lockedNote} />
 
             {/* Signatures — Staff-Directory names, signed with each person's own signature */}
             <div className="flex justify-between gap-8 mt-10">
@@ -862,6 +1062,7 @@ export default function CoaGeneratorPage() {
                 <div key={i} className="text-[9px] font-bold" style={{ color: i === 0 ? '#166534' : '#4b5563', lineHeight: 1.35 }}>{line}</div>
               ))}
             </div>
+          </div>
           </div>
         </>
       )}
@@ -907,7 +1108,7 @@ function buildModel(src: any, spec: any): CoaModel {
   other.push({ label: 'Foreign Material', spec: (spec && req(sp.other?.foreign_material)) ? String(sp.other.foreign_material) : '<1%', result: '0.0%' })
   const wantResidue = spec ? req(sp.other?.residue_reg) : src.found.residue
   const wantPa      = spec ? req(sp.contaminants?.pyrrolizidine_alkaloids) : src.found.pa
-  const wantHm      = spec ? ['lead','cadmium','mercury','arsenic','copper'].some(k => req(sp.contaminants?.[k])) : src.found.heavyMetals
+  const wantHm      = spec ? wantsHeavyMetals(sp.contaminants) : src.found.heavyMetals
   const wantMosh    = spec ? req(sp.contaminants?.mosh_moah) : src.found.moshMoah
   // coa_specs already carried a chlorate_perchlorate contaminant field — this
   // is the row that finally renders it, now that a lab result can supply one.
@@ -920,7 +1121,7 @@ function buildModel(src: any, spec: any): CoaModel {
   const wantGlyphosate = src.isOrganic || (spec ? req(sp.contaminants?.glyphosate) : src.found.glyphosate)
   if (wantResidue) other.push({ label: 'Pesticide residue', spec: (spec && req(sp.other?.residue_reg)) ? String(sp.other.residue_reg) : COA_WORDING.residueRegulation, result: src.results.residue })
   if (wantPa)      other.push({ label: 'Pyrrolizidine Alkaloids', spec: (spec && req(sp.contaminants?.pyrrolizidine_alkaloids)) ? String(sp.contaminants.pyrrolizidine_alkaloids) : '<50 μg', result: src.results.pa })
-  if (wantHm)      other.push({ label: 'Heavy Metals', spec: spec ? ['lead','cadmium','mercury','arsenic','copper'].filter(k => req(sp.contaminants?.[k])).map(k => `${k[0].toUpperCase()+k.slice(1)} ${sp.contaminants[k]}`).join('; ') : '', result: src.results.hm })
+  if (wantHm)      other.push({ label: 'Heavy Metals', spec: spec ? heavyMetalSpecParts(sp.contaminants).join('; ') : '', result: src.results.hm })
   if (wantMosh)    other.push({ label: 'MOSH/MOAH', spec: (spec && req(sp.contaminants?.mosh_moah)) ? String(sp.contaminants.mosh_moah) : '', result: src.results.mosh })
   if (wantChlor)   other.push({ label: 'Chlorate/Perchlorate', spec: (spec && req(sp.contaminants?.chlorate_perchlorate)) ? String(sp.contaminants.chlorate_perchlorate) : '', result: src.results.chlorate })
   if (wantGlyphosate) other.push({ label: 'Glyphosate', spec: (spec && req(sp.contaminants?.glyphosate)) ? String(sp.contaminants.glyphosate) : (src.isOrganic ? 'None Detected' : ''), result: src.results.glyphosate })
@@ -951,6 +1152,15 @@ function DraggableSignature({ src, adjust, onChange }: {
   const drag = useRef<{ x: number; y: number; dx: number; dy: number } | null>(null)
   const rez  = useRef<{ x: number; scale: number } | null>(null)
   const baseH = 56
+  // The image's real width:height ratio, measured once it loads. Sizing with
+  // height + width:'auto' + a fixed maxWidth looked right only up to the
+  // scale where the computed width hit that cap — past it, the browser kept
+  // growing the explicit height while clamping width, so the signature got
+  // taller without ever getting wider (a squash, not a stop). Deriving width
+  // from the measured ratio and scaling both by the same factor removes that
+  // hidden ceiling — there is no separate width constraint left to hit.
+  const [ratio, setRatio] = useState(3) // plausible default before onLoad fires
+  useEffect(() => { setRatio(3) }, [src])
 
   const onImgDown = (e: React.PointerEvent) => {
     e.preventDefault(); (e.target as HTMLElement).setPointerCapture?.(e.pointerId)
@@ -978,8 +1188,12 @@ function DraggableSignature({ src, adjust, onChange }: {
       <div style={{ position: 'absolute', left: adjust.dx, bottom: adjust.dy }}>
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img src={src} alt="signature" draggable={false}
+          onLoad={e => {
+            const el = e.currentTarget
+            if (el.naturalWidth && el.naturalHeight) setRatio(el.naturalWidth / el.naturalHeight)
+          }}
           onPointerDown={onImgDown} onPointerMove={onImgMove} onPointerUp={endImg} onPointerCancel={endImg}
-          style={{ display: 'block', height: baseH * adjust.scale, width: 'auto', maxWidth: 260, cursor: 'move', touchAction: 'none', userSelect: 'none' }} />
+          style={{ display: 'block', height: baseH * adjust.scale, width: baseH * adjust.scale * ratio, cursor: 'move', touchAction: 'none', userSelect: 'none' }} />
         <div className="no-print" title="Drag to resize"
           onPointerDown={onHandleDown} onPointerMove={onHandleMove} onPointerUp={endHandle} onPointerCancel={endHandle}
           style={{ position: 'absolute', right: -6, top: -6, width: 12, height: 12, background: '#1f4e79', border: '2px solid #fff', borderRadius: 3, cursor: 'nesw-resize', touchAction: 'none' }} />
@@ -1028,8 +1242,12 @@ function coaComplies(rec: any): string {
 
 // ─── Editable COA table ───────────────────────────────────────────────────────
 
-function CoaTable({ title, cols, lines, onEdit }: {
+function CoaTable({ title, cols, lines, onEdit, readOnly, lockNote }: {
   title: string; cols: string[]; lines: CoaLine[]; onEdit: (i: number, field: 'spec' | 'result', v: string) => void
+  // Set once both managers have signed. Without it the inputs still accept
+  // focus and typing while setLine() drops every keystroke, which reads as the
+  // screen being broken rather than as the COA being final.
+  readOnly?: boolean; lockNote?: string
 }) {
   return (
     <div className="mb-3">
@@ -1048,11 +1266,13 @@ function CoaTable({ title, cols, lines, onEdit }: {
               <td className="border border-gray-300 px-2 py-1">{l.label}</td>
               <td className="border border-gray-300 px-1 py-0.5 text-center">
                 <input value={l.spec} onChange={e => onEdit(i, 'spec', e.target.value)}
-                  className="w-full text-center text-[11px] outline-none bg-transparent focus:bg-blue-50" />
+                  readOnly={readOnly} title={readOnly ? lockNote : ''}
+                  className={`w-full text-center text-[11px] outline-none bg-transparent ${readOnly ? 'cursor-not-allowed' : 'focus:bg-blue-50'}`} />
               </td>
               <td className="border border-gray-300 px-1 py-0.5 text-center">
                 <input value={l.result} onChange={e => onEdit(i, 'result', e.target.value)}
-                  className="w-full text-center text-[11px] outline-none bg-transparent focus:bg-blue-50 font-semibold" />
+                  readOnly={readOnly} title={readOnly ? lockNote : ''}
+                  className={`w-full text-center text-[11px] outline-none bg-transparent font-semibold ${readOnly ? 'cursor-not-allowed' : 'focus:bg-blue-50'}`} />
               </td>
             </tr>
           ))}

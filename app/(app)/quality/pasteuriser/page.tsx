@@ -28,8 +28,11 @@ import { getDb } from '@/lib/supabase/db'
 import { format } from 'date-fns'
 import { isoDate, isoDateTime } from '@/lib/utils/formatDate'
 import { checkOutlier } from '@/lib/utils/outliers'
+import { checkAllPlausibility, bdMeasurementFor } from '@/lib/quality/plausibility'
 import { isNegative } from '@/lib/utils/validation'
 import { useQcNames } from '@/lib/hooks/useQcNames'
+import { cleanCustomerName, pickSpecForCustomerWithAliases, customerOptions, docVersionOf, resolveCustomerName } from '@/lib/quality/customer-spec-match'
+import type { CustomerAlias } from '@/lib/quality/customer-spec-match'
 import { useDraftAutosave, readDraft, clearDraft } from '@/lib/hooks/useDraftAutosave'
 import QCNameField from '@/components/shared/QCNameField'
 import DraftRecoveryBanner from '@/components/shared/DraftRecoveryBanner'
@@ -68,6 +71,89 @@ function pastSieveCols(family?: string) {
 // rather than cc/100g like the other families.
 function pastBdUnit(family?: string) {
   return (family || '').toLowerCase() === 'rosehips' ? 'ml/5g' : 'cc/100g'
+}
+
+// ─── Spec reload diff ─────────────────────────────────────────────────────────
+// "Reload Spec" replaces a batch's limits wholesale and, on a finalised batch,
+// clears its approval. Neither the QC pressing the button nor the Lab Manager
+// who gets the batch back can act on that without knowing WHICH limits moved,
+// so every reload is diffed field by field: shown before it is applied, again
+// after, and kept on the audit entry.
+type PastSpecChange = { key: string; label: string; from: string; to: string }
+type PastSpecReload = {
+  at?: string
+  by?: string
+  doc_no?: string | null
+  spec_id?: string | number | null
+  was_final?: boolean
+  cleared_result?: string | null
+  // Optional because entries logged before the diff was tracked have no
+  // `changes` key at all — which is a different fact from an empty array, and
+  // the renderers below keep them apart.
+  changes?: PastSpecChange[]
+}
+type PastSpecLimits = Record<string, unknown> | null | undefined
+
+// '' / null / undefined all mean "no limit set" and must compare equal —
+// otherwise the first reload of a batch created before a field existed reads as
+// changing every one of them. Numbers compare numerically so '20' and '20.0'
+// are the same limit, not a change.
+function pastSpecBlank(v: unknown) { return v === null || v === undefined || String(v).trim() === '' }
+function pastSpecValsEqual(a: unknown, b: unknown) {
+  if (pastSpecBlank(a) && pastSpecBlank(b)) return true
+  if (pastSpecBlank(a) !== pastSpecBlank(b)) return false
+  const na = parseFloat(String(a)), nb = parseFloat(String(b))
+  if (!isNaN(na) && !isNaN(nb)) return na === nb
+  return String(a).trim() === String(b).trim()
+}
+function pastSpecShow(v: unknown) { return pastSpecBlank(v) ? '—' : String(v).trim() }
+
+// Only the fractions this family actually reports — listing >40 for a
+// non-Rosehips batch would show a permanent "— → —" row.
+function pastSpecFields(family?: string): { key: string; label: string }[] {
+  const bd = pastBdUnit(family)
+  const out = [
+    { key: 'moisture_max', label: 'Moisture max (%)' },
+    { key: 'bd_min', label: `BD min (${bd})` },
+    { key: 'bd_max', label: `BD max (${bd})` },
+  ]
+  pastSieveCols(family).forEach(c => {
+    out.push({ key: `${c.key}_min`, label: `${c.label} min (${c.unit})` })
+    out.push({ key: `${c.key}_max`, label: `${c.label} max (${c.unit})` })
+  })
+  return out
+}
+
+function diffPastSpecs(oldBS: PastSpecLimits, newBS: PastSpecLimits, family?: string): PastSpecChange[] {
+  const o: Record<string, unknown> = oldBS || {}, n: Record<string, unknown> = newBS || {}
+  return pastSpecFields(family)
+    .filter(f => !pastSpecValsEqual(o[f.key], n[f.key]))
+    .map(f => ({ key: f.key, label: f.label, from: pastSpecShow(o[f.key]), to: pastSpecShow(n[f.key]) }))
+}
+
+function pastSpecChangeLines(changes: PastSpecChange[]) {
+  return changes.map(c => `  • ${c.label}:  ${c.from}  →  ${c.to}`).join('\n')
+}
+
+// The alert on reload is transient — anyone opening the batch afterwards (the
+// Lab Manager re-reviewing it, most of all) still needs to see that the spec
+// moved and what moved. spec_reloads is the record; this renders the latest.
+function lastPastSpecReload(b: Batch | null | undefined): PastSpecReload | null {
+  const rs = b?.spec_reloads
+  return Array.isArray(rs) && rs.length ? rs[rs.length - 1] : null
+}
+function pastSpecReloadTooltip(r: PastSpecReload): string {
+  const when = r?.at ? new Date(r.at).toLocaleString('en-ZA', { timeZone: 'Africa/Johannesburg' }) : 'unknown time'
+  const head = `Spec reloaded ${when}${r?.by ? ` by ${r.by}` : ''}${r?.doc_no ? ` — ${r.doc_no}` : ''}`
+  // undefined and [] mean different things: the first is a reload logged before
+  // the diff was tracked, the second is one that genuinely moved no limit.
+  const body = !Array.isArray(r?.changes)
+    ? 'Change detail was not recorded for this reload.'
+    : r.changes.length
+      ? r.changes.map(c => `• ${c.label}: ${c.from} → ${c.to}`).join('\n')
+      : 'No limit changed.'
+  const cleared = r?.was_final ? `\n\nCleared previous result: ${r.cleared_result ?? '(unknown)'} — sent back for review.` : ''
+  return `${head}\n\n${body}${cleared}`
 }
 
 const PACKAGING_OPTIONS = ['Bulk Bags (500 kg)', '18 kg Bags', 'Vacuum Sealed Boxes']
@@ -171,6 +257,10 @@ interface Batch {
   allocated_by?:   string
   approved_by?:    string
   oos_flags?:      any[]
+  // Append-only record of every "Reload Spec" against this batch — see
+  // reloadSpecFor(). Declared here rather than reached through `as any` so the
+  // diff rendering is type-checked.
+  spec_reloads?:   PastSpecReload[]
   created_at:      string
 }
 
@@ -488,6 +578,24 @@ function NewBatchModal({ onSave, onClose }: { onSave:(b:any)=>void; onClose:()=>
   const [specPreview, setSpec] = useState<any>(null)
   const [specLoading, setSpecL] = useState(false)
   const [err, setErr]           = useState('')
+  // How the spec was resolved, so "loaded" never hides "loaded, but the GENERIC
+  // one, not this customer's" — and so a customer with more than one spec row
+  // for this product is called out instead of resolved by row order.
+  const [specVia, setSpecVia] = useState<'customer'|'generic'|'fallback'|'none'>('none')
+  const [specAmbiguous, setSpecAmbiguous] = useState(0)
+  // Older documents for this customer+product that the latest one supersedes —
+  // not a problem, unlike specAmbiguous, but worth showing so "why this spec?"
+  // has a visible answer.
+  const [specSuperseded, setSpecSuperseded] = useState(0)
+  // Non-empty when the typed customer reached its spec through an alias. Shown,
+  // because "this is not the name you typed" is exactly the sort of silent
+  // substitution that needs to be visible.
+  const [specAliasedTo, setSpecAliasedTo] = useState('')
+  // 'Generic' has to be a deliberate choice rather than an empty box, or
+  // "customer is required" just gets satisfied with whatever is first in the
+  // list. See save().
+  const GENERIC = '__generic__'
+  const [custMode, setCustMode] = useState<'list'|'other'>('list')
 
   // Local-storage safety net — see lib/hooks/useDraftAutosave.ts. Only one
   // "New Batch" modal can ever be open at a time, so a single fixed key is
@@ -502,11 +610,23 @@ function NewBatchModal({ onSave, onClose }: { onSave:(b:any)=>void; onClose:()=>
   // Data-driven dropdowns: load the families / grades / variants that actually
   // exist in the customer specs so any new product the lab adds (e.g. Pure Leaf)
   // is immediately selectable here — no hardcoded list to maintain.
-  const [specIndex, setSpecIndex] = useState<{ product_family: string; grade: string; variant: string }[]>([])
+  const [specIndex, setSpecIndex] = useState<{ product_family: string; grade: string; variant: string; customer: string | null }[]>([])
   useEffect(() => {
-    db.schema('qms').from('customer_specs').select('product_family, grade, variant')
+    db.schema('qms').from('customer_specs').select('product_family, grade, variant, customer')
       .then(({ data }: { data: any[] | null }) => setSpecIndex((data ?? []) as any))
   }, [])
+  // One customer, many spellings — see qms.customer_aliases. Without this a run
+  // typed as 'EWTC' resolves to the GENERIC spec even though that customer has
+  // its own.
+  const [aliases, setAliases] = useState<CustomerAlias[]>([])
+  useEffect(() => {
+    db.schema('qms').from('customer_aliases').select('alias, canonical_name')
+      .then(({ data }: { data: CustomerAlias[] | null }) => setAliases(data ?? []))
+  }, [])
+  // The customer list comes from the specs themselves, deduped on a normalised
+  // key — so 'Entyce', 'Entyce ' and 'ENTYCE ' offer ONE option, and picking it
+  // writes the one spelling the spec lookup will actually match.
+  const custOptions = customerOptions(specIndex)
   const uniqMerge = (base: string[], extra: (string | null | undefined)[]) => {
     const seen = new Set(base.map(x => x.toLowerCase())); const out = [...base]
     for (const e of extra) { const v = (e || '').trim(); if (v && !seen.has(v.toLowerCase())) { seen.add(v.toLowerCase()); out.push(v) } }
@@ -530,15 +650,17 @@ function NewBatchModal({ onSave, onClose }: { onSave:(b:any)=>void; onClose:()=>
       .ilike('grade', form.grade)
       .ilike('variant', form.variant)
       .then(({ data }: { data: any[] | null }) => {
-        let spec = null
-        if (data && data.length > 0) {
-          // Exact match: same customer name (case-insensitive) → first priority
-          // Generic (no customer) → second priority
-          // Any remaining → last resort
-          spec = data.find((s: any) =>
-            (s.customer || '').toLowerCase() === (form.customer || '').toLowerCase()
-          ) ?? data.find((s: any) => !s.customer || s.customer === '') ?? data[0]
-        }
+        // Resolution order (customer's own row → generic → anything) lives in
+        // pickSpecForCustomer, which compares on a normalised key so a spec row
+        // saved as 'Entyce ' still matches a run for 'Entyce'. The old inline
+        // toLowerCase() compare did not, and such a run silently fell through
+        // to the generic spec.
+        const picked = pickSpecForCustomerWithAliases<any>(data, form.customer, aliases)
+        setSpecAliasedTo(picked.aliased ? picked.resolvedCustomer : '')
+        setSpecVia(data && data.length ? picked.via : 'none')
+        setSpecAmbiguous(picked.ambiguous.length)
+        setSpecSuperseded(picked.superseded.length)
+        const spec = picked.spec
         setSpec(spec)
         if (spec) {
           // Support both JSONB sieve_specs and flat columns (migrated data)
@@ -559,15 +681,37 @@ function NewBatchModal({ onSave, onClose }: { onSave:(b:any)=>void; onClose:()=>
         }
       })
       .finally(() => setSpecL(false))
-  }, [form.product_family, form.grade, form.variant, form.customer])
+  }, [form.product_family, form.grade, form.variant, form.customer, aliases])
 
   function save() {
     if (!form.batch_number.trim()) { setErr('Batch number is required'); return }
+    // Customer and QC are required because the whole spec chain hangs off them:
+    // the customer decides WHICH sieve spec this run (and its COA) is judged
+    // against, and the QC name is who signed for the readings. A blank customer
+    // used to resolve quietly to the generic spec, which is a different set of
+    // limits with nothing on screen to say so.
+    if (custMode === 'list' && !form.customer.trim()) {
+      setErr('Choose a customer — it decides which sieve spec this run is checked against. Pick "Generic" only if this run genuinely has no customer-specific spec.')
+      return
+    }
+    if (custMode === 'other' && !cleanCustomerName(form.customer)) {
+      setErr('Enter the customer name, or switch back and choose one from the list.')
+      return
+    }
+    if (!form.qc_name.trim()) { setErr('QC Controller is required'); return }
     const hasSpecs = batchSpecs.moisture_max !== '' || batchSpecs.bd_min !== '' || batchSpecs.bd_max !== '' ||
       ['gt6','gt10','gt12','gt16','gt20','gt40','gt60','dust'].some(k => (batchSpecs as any)[`${k}_min`] !== '' || (batchSpecs as any)[`${k}_max`] !== '')
     if (!hasSpecs) { setErr('Enter at least one spec value (moisture, BD, or sieve) before saving.'); return }
     if (Object.values(batchSpecs).some(v => isNegative(v))) { setErr('Spec values cannot be negative.'); return }
-    onSave({ ...form, type_grade:`${form.product_family} ${form.grade}`, _spec: specPreview, batch_specs: batchSpecs })
+    // Stored cleaned (trimmed, internal whitespace collapsed) so the batch's
+    // customer can never be the reason a spec lookup misses later.
+    onSave({
+      ...form,
+      customer: cleanCustomerName(form.customer),
+      qc_name: form.qc_name.trim(),
+      type_grade:`${form.product_family} ${form.grade}`,
+      _spec: specPreview, batch_specs: batchSpecs,
+    })
   }
 
   const setSp = (k: string, v: string) => setBatchSpecs(p => ({ ...p, [k]: v }))
@@ -618,15 +762,70 @@ function NewBatchModal({ onSave, onClose }: { onSave:(b:any)=>void; onClose:()=>
               ))}
             </div>
             <div className="mb-3">
-              <label className={`${lbl} text-info`}>👤 Customer Name <span className="text-text-muted font-normal normal-case">(optional — loads customer-specific spec)</span></label>
-              <input value={form.customer} onChange={e => setForm(p => ({ ...p, customer: e.target.value }))}
-                placeholder="e.g. Kunitaro — leave blank for generic spec" className={`${inp} w-full`} />
+              <label className={`${lbl} text-info`}>👤 Customer Name <span className="text-err">*</span> <span className="text-text-muted font-normal normal-case">(decides which sieve spec this run is checked against)</span></label>
+              {/* A list, not a free-text box: a typed name that differs from the
+                  spec row by a space or a capital resolves to the GENERIC spec
+                  instead of the customer's, and typing it into Customer Specs
+                  is how one customer ended up with three spec rows. */}
+              <select
+                value={custMode === 'other' ? '__other__' : (form.customer.trim() === '' ? '' : (custOptions.some(c => c === form.customer) ? form.customer : GENERIC))}
+                onChange={e => {
+                  const v = e.target.value
+                  if (v === '__other__') { setCustMode('other'); setForm(p => ({ ...p, customer: '' })) }
+                  else if (v === GENERIC) { setCustMode('list'); setForm(p => ({ ...p, customer: '' })) }
+                  else { setCustMode('list'); setForm(p => ({ ...p, customer: v })) }
+                }}
+                className={`${inp} w-full`}>
+                <option value="">— Select a customer —</option>
+                {custOptions.map(c => <option key={c} value={c}>{c}</option>)}
+                <option value={GENERIC}>Generic — no customer-specific spec</option>
+                <option value="__other__">Other — customer not in the spec list…</option>
+              </select>
+              {custMode === 'other' && (
+                <div className="mt-2">
+                  <input autoFocus value={form.customer} onChange={e => setForm(p => ({ ...p, customer: e.target.value }))}
+                    onBlur={e => setForm(p => ({ ...p, customer: cleanCustomerName(e.target.value) }))}
+                    placeholder="Customer name" className={`${inp} w-full`} />
+                  <div className="text-[10px] text-warn mt-1">
+                    ⚠ No spec exists for a customer that is not in the list, so this run falls back to the generic spec.
+                    Add the customer&apos;s spec in Customer Specs first if it should be checked against its own limits.
+                  </div>
+                </div>
+              )}
             </div>
-            <div className="flex items-center gap-2 mb-3">
+            <div className="flex items-center gap-2 mb-3 flex-wrap">
               <span className={`badge ${isOrganic ? 'badge-ok' : 'badge-info'}`}>{isOrganic ? '🌱 Organic' : '⚗️ Conventional'}{form.variant.startsWith('RA') ? ' · RA' : ''}</span>
               {specLoading && <span className="text-[11px] text-text-muted animate-pulse">Loading spec…</span>}
-              {!specLoading && specPreview && <span className="text-[11px] text-ok font-semibold">✓ Spec loaded</span>}
+              {/* "Spec loaded" alone was ambiguous: it said nothing about WHOSE
+                  spec loaded, so a run against the generic limits looked
+                  identical to one against the customer's own. */}
+              {!specLoading && specPreview && specVia === 'customer' && (
+                <span className="text-[11px] text-ok font-semibold">
+                  ✓ Spec loaded for {form.customer}
+                  {specPreview.doc_no ? ` · ${specPreview.doc_no}${docVersionOf(specPreview.doc_no) != null ? ` (v${docVersionOf(specPreview.doc_no)})` : ''}` : ''}
+                </span>
+              )}
+              {!specLoading && specPreview && specVia === 'generic' && <span className="text-[11px] text-warn font-semibold">⚠ Using the GENERIC spec — no spec on file for {form.customer || 'this customer'}</span>}
+              {!specLoading && specPreview && specVia === 'fallback' && <span className="text-[11px] text-warn font-semibold">⚠ No customer or generic spec — showing another row for this product; check the values below</span>}
               {!specLoading && !specPreview && <span className="text-[11px] text-warn">No spec found — enter manually below</span>}
+              {!specLoading && specAliasedTo && (
+                <span className="text-[11px] text-info font-semibold"
+                  title="This customer name is registered as another spelling of the name the spec is filed under. Manage these in Customer Specs → Customer name aliases.">
+                  ↪ matched to &ldquo;{specAliasedTo}&rdquo;
+                </span>
+              )}
+              {!specLoading && specSuperseded > 0 && (
+                <span className="text-[11px] text-text-muted"
+                  title="This customer has more than one spec document for this product. The highest document number applies; the older ones are kept for reference.">
+                  · latest of {specSuperseded + 1} documents
+                </span>
+              )}
+              {!specLoading && specAmbiguous > 1 && (
+                <span className="text-[11px] text-err font-semibold"
+                  title="Two or more spec rows match this product and customer. Which one wins comes down to row order, so the limits below may not be the ones you expect. Fix the duplicates in Customer Specs.">
+                  ⚠ {specAmbiguous} duplicate spec rows match — fix in Customer Specs
+                </span>
+              )}
             </div>
 
             {/* Editable batch specs */}
@@ -682,7 +881,7 @@ function NewBatchModal({ onSave, onClose }: { onSave:(b:any)=>void; onClose:()=>
               </select>
             </div>
             <div>
-              <label className={lbl}>QC Controller</label>
+              <label className={lbl}>QC Controller <span className="text-err">*</span></label>
               <QCNameField value={form.qc_name} onChange={v => setForm(p => ({ ...p, qc_name: v }))} names={qcNames} className={`${inp} w-full`} />
             </div>
             <div>
@@ -792,6 +991,28 @@ function AddSampleModal({ batch, sampleIndex, initialRow, onSave, onClose }: {
     checkField('hourly_temp', 'Temp', row.hourly_temp, 1.0, '°C')
     return warns
   })()
+  // Declared before use below, then folded into anomalyWarnings via
+  // allAnomalyWarnings so one tick covers statistical and absolute alike.
+
+  // ── Absolute plausibility — see lib/quality/plausibility.ts ───────────────
+  // The statistical check above needs history AND spread, so it cannot catch
+  // the first sample of a batch or a batch where the same wrong number is typed
+  // every time. Production holds a pasteuriser moisture of 95% and two of 0%.
+  //
+  // Bulk density uses the family's OWN bounds: Rosehips is reported in ml/5g
+  // (normally under 10), so the cc/100g range would refuse every valid
+  // Rosehips reading.
+  const plaus = checkAllPlausibility([
+    ...(row.has_mb ? [
+      { key: 'moisture' as const,                              value: row.moisture },
+      { key: bdMeasurementFor(batch.product_family),           value: row.untapped_bd, label: 'Untapped BD' },
+      { key: bdMeasurementFor(batch.product_family),           value: row.customer_bd, label: 'Customer BD' },
+    ] : []),
+    ...(row.has_sieve ? sieveCols.map(c => ({ key: 'sieve_pct' as const, value: row[c.key], label: `Sieve ${c.label}` })) : []),
+  ])
+  // One list, one tick: a QC should not have to confirm twice because the
+  // reason came from two different checks.
+  const allAnomalyWarnings = [...anomalyWarnings, ...plaus.confirms]
   const [confirmAnomaly, setConfirmAnomaly] = useState(false)
 
   function submit() {
@@ -819,7 +1040,13 @@ function AddSampleModal({ batch, sampleIndex, initialRow, onSave, onClose }: {
     const negFields = ['needle_count', 'hourly_temp', 'moisture', 'untapped_bd', 'customer_bd', 'flow_mass', 'flow_time', 'final_weight_1', 'final_weight_2', 'final_weight_3',
       ...sieveCols.flatMap(c => [c.key, c.key + '_g'])]
     if (negFields.some(k => isNegative(row[k]))) { alert('Values cannot be negative.'); return }
-    if (anomalyWarnings.length > 0 && !confirmAnomaly) { alert('Please tick "Yes, these values are correct" before saving.'); return }
+    // Refused rather than confirmable: these readings cannot be real, so there
+    // is nothing for the QC to confirm.
+    if (plaus.blocks.length > 0) {
+      alert(`This cannot be saved:\n\n${plaus.blocks.map(b => `• ${b}`).join('\n')}\n\nCorrect the reading and try again.`)
+      return
+    }
+    if (allAnomalyWarnings.length > 0 && !confirmAnomaly) { alert('Please tick "Yes, these values are correct" before saving.'); return }
     const hr = parseInt((row.time||'').split(':')[0])
     if (hr >= 16 && !row.afternoon_qc?.trim()) { alert('Afternoon QC Controller name is required for samples taken after 16:00'); return }
     onSave(row)
@@ -1036,14 +1263,26 @@ function AddSampleModal({ batch, sampleIndex, initialRow, onSave, onClose }: {
             )
           })()}
 
+          {/* Impossible readings — refused, not confirmable. */}
+          {plaus.blocks.length > 0 && (
+            <div className="px-4 py-3 bg-err/8 border border-err/40 rounded-xl">
+              <div className="flex items-center gap-2 font-bold text-[12px] text-err mb-1">
+                <AlertTriangle size={14} /> Cannot save — these readings are not possible
+              </div>
+              <ul className="list-disc pl-5 space-y-0.5">
+                {plaus.blocks.map((b,i) => <li key={i} className="text-[11px] text-err">{b}</li>)}
+              </ul>
+            </div>
+          )}
+
           {/* Variation / outlier warnings — require explicit confirmation before saving */}
-          {anomalyWarnings.length > 0 && (
+          {allAnomalyWarnings.length > 0 && (
             <div className="px-4 py-3 bg-warn/8 border border-warn/40 rounded-xl">
               <div className="flex items-center gap-2 font-bold text-[12px] text-warn mb-1">
                 <AlertTriangle size={14} /> Unusual variation — please double-check before saving
               </div>
               <ul className="list-disc pl-5 space-y-0.5 mb-2">
-                {anomalyWarnings.map((w,i) => (
+                {allAnomalyWarnings.map((w,i) => (
                   <li key={i} className="text-[11px] text-warn">{w}</li>
                 ))}
               </ul>
@@ -1056,7 +1295,7 @@ function AddSampleModal({ batch, sampleIndex, initialRow, onSave, onClose }: {
 
           <div className="flex justify-end gap-3 pt-2 border-t border-surface-rule">
             <button onClick={onClose} className="px-5 py-2 rounded-xl border border-surface-rule text-text-muted text-[12px]">Cancel</button>
-            <button onClick={submit} disabled={anomalyWarnings.length > 0 && !confirmAnomaly}
+            <button onClick={submit} disabled={plaus.blocks.length > 0 || (allAnomalyWarnings.length > 0 && !confirmAnomaly)}
               className="px-6 py-2 rounded-xl bg-ok text-white text-[12px] font-semibold disabled:opacity-40 disabled:cursor-not-allowed">
               {isEdit ? '✏️ Update Sample' : `💾 Save Sample #${sampleIndex+1}`}
             </button>
@@ -1497,21 +1736,69 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
   // creation, so editing the master spec afterwards never touches a batch
   // already in progress until this is run — this is the deliberate "pull the
   // latest numbers in and re-check my recorded values against them" action.
-  async function reloadSpec() {
-    const b = activeBatch
+  // Takes a batch id rather than reading activeBatch, so the same action works
+  // from the Active Runs header AND from an expanded row in History &
+  // Performance — a spec can change long after a run is finished, which is
+  // exactly when you need to re-check a historical batch against it.
+  // Deep link into Customer Specs → Sieve Specs, pre-filtered to this batch's
+  // product family, so "what is this run actually being judged against?" (and
+  // "change that limit") is one click from the run instead of a hunt.
+  // Only the family is passed: Customer Specs filters on an exact string match
+  // against the values that exist in customer_specs, so sending a batch's
+  // customer through would silently filter the list to nothing whenever the
+  // spec row is the generic (blank-customer) one, which is the common case.
+  function specHref(b: Batch) {
+    const q = new URLSearchParams({ tab: 'sieve' })
+    if (b.product_family) q.set('family', b.product_family)
+    return `/quality/customer-specs?${q.toString()}`
+  }
+
+  async function reloadSpecFor(batchId: string) {
+    const b = batches.find(x => x.id === batchId)
     if (!b) return
+    // Aliases are read here rather than held in state: this runs on a click, not
+    // on every render, and a stale list would silently change which spec a
+    // reload resolves to.
+    const { data: aliasRows } = await db.schema('qms').from('customer_aliases').select('alias, canonical_name')
     const { data } = await db.schema('qms').from('customer_specs').select('*')
       .ilike('product_family', b.product_family)
       .ilike('grade', b.grade)
       .ilike('variant', b.variant)
-    const rows = data ?? []
-    const spec = rows.length
-      ? (rows.find((s: any) => (s.customer || '').toLowerCase() === (b.customer || '').toLowerCase())
-          ?? rows.find((s: any) => !s.customer || s.customer === '')
-          ?? rows[0])
-      : null
+    // Same resolution as the New Run modal — one shared implementation, so a
+    // reload can never pick a different row than the run was created against.
+    const picked = pickSpecForCustomerWithAliases<any>(data, b.customer, (aliasRows ?? []) as CustomerAlias[])
+    const spec = picked.spec
     if (!spec) { alert(`No spec found for ${b.product_family} ${b.grade} · ${b.variant} — nothing changed.`); return }
-    if (!confirm(`Reload the current ${b.product_family} ${b.grade} · ${b.variant} spec into this batch?\n\nThis overwrites this batch's spec values with what's saved in Specifications now, and every sample's in-spec check updates immediately.`)) return
+    if (picked.ambiguous.length > 1) {
+      // Refusing is the safe answer: with duplicates the row that wins comes
+      // down to Postgres row order, so reloading could clear an approval and
+      // then re-check the batch against limits picked essentially at random.
+      alert(`⚠ ${picked.ambiguous.length} duplicate spec rows match ${b.product_family} ${b.grade} · ${b.variant}${b.customer ? ` for ${b.customer}` : ''} (ids ${picked.ambiguous.map((s: any) => s.id).join(', ')}).\n\nWhich one applies is ambiguous, so nothing was changed. Please remove the duplicates in Customer Specs first.`)
+      return
+    }
+    if (picked.via !== 'customer' && (b.customer || '').trim()) {
+      const looked = picked.aliased ? `"${b.customer}" (matched to "${picked.resolvedCustomer}")` : `"${b.customer}"`
+      if (!confirm(`No spec on file for ${looked} — the ${picked.via === 'generic' ? 'GENERIC' : 'next available'} spec for ${b.product_family} ${b.grade} · ${b.variant} will be used instead.\n\nContinue?`)) return
+    }
+
+    // A batch number can be split across more than one record (History merges
+    // them back into a single row and keeps only the first record's id — see
+    // completedBatches). Re-specing just that one would leave the other halves
+    // of the same batch judged against the old limits, so target them all.
+    const key = (s?: string) => (s || '').trim().toLowerCase()
+    const targets = batches.filter(x => x.id === batchId || (!!key(b.batch_number) && key(x.batch_number) === key(b.batch_number)))
+    const targetIds = new Set(targets.map(x => x.id))
+
+    // Re-specing an APPROVED batch invalidates the approval: the Pass/Fail on
+    // it was a judgement against the old numbers, and silently keeping that
+    // verdict while swapping the spec underneath it would leave a batch marked
+    // "Pass · approved by X" that nobody ever passed against these limits.
+    // So a finalised batch goes back to the Lab Manager for a fresh decision.
+    const finalised = targets.filter(x => !!x.final_result)
+    const wasFinal = finalised.length > 0
+    const warning = wasFinal
+      ? `\n\n⚠ This batch is already finalised as "${finalised[0].final_result}"${finalised[0].approved_by ? ` (approved by ${finalised[0].approved_by})` : ''}.\n\nThat approval was made against the OLD spec, so reloading will clear it and send the batch back to the Lab Manager for a new review.`
+      : ''
     const ss = spec.sieve_specs ?? {}
     const newBatchSpecs = {
       moisture_max: spec.moisture_max ?? '',
@@ -1525,12 +1812,71 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
       gt60_min: ss.gt60?.min ?? spec.gt60_min ?? '', gt60_max: ss.gt60?.max ?? spec.gt60_max ?? '',
       dust_min: ss.dust?.min ?? spec.dust_min ?? '', dust_max: ss.dust?.max ?? spec.dust_max ?? '',
     }
+
+    // Diff BEFORE asking, so the confirm shows what is actually about to move
+    // rather than a generic "this overwrites your spec values".
+    const changes = diffPastSpecs(b.batch_specs, newBatchSpecs, b.product_family)
+    const anyChanged = targets.some(x => diffPastSpecs(x.batch_specs, newBatchSpecs, x.product_family).length > 0)
+
+    // Nothing moved: say so and stop. Carrying on would clear a perfectly good
+    // approval and put the batch back in the Lab Manager's queue over a reload
+    // that changed no limit at all — the one outcome nobody wants from a button
+    // pressed to check whether the spec had changed.
+    if (!anyChanged) {
+      alert(`This batch is already on the current ${b.product_family} ${b.grade} · ${b.variant} spec${spec.doc_no ? ` (${spec.doc_no})` : ''}.\n\nNo limit differs, so nothing was changed${wasFinal ? ' and the approval is untouched' : ''}.`)
+      return
+    }
+
+    const changeText = changes.length
+      ? `\n\nWhat changes (old → new):\n${pastSpecChangeLines(changes)}`
+      : `\n\nNo limit differs on this record, but another record under batch ${b.batch_number} does — reloading keeps the whole batch on one spec.`
+    if (!confirm(`Reload the current ${b.product_family} ${b.grade} · ${b.variant} spec${spec.doc_no ? ` (${spec.doc_no})` : ''} into this batch?${changeText}\n\nEvery sample's in-spec check updates immediately.${warning}`)) return
+
+    const nowIso = new Date().toISOString()
     setBatches(p => {
-      const updated = p.map(x => x.id !== activeBatchId ? x : { ...x, _spec: spec, batch_specs: newBatchSpecs })
-      const batch = updated.find(x => x.id === activeBatchId)
-      if (batch) saveBatchToDB(batch)
+      const updated = p.map(x => {
+        if (!targetIds.has(x.id)) return x
+        const wasFinal = !!x.final_result
+        // Diffed per record, not reused from the clicked row — two records of
+        // one batch can have been created at different times and so start from
+        // different limits.
+        const rowChanges = diffPastSpecs(x.batch_specs, newBatchSpecs, x.product_family)
+        const next: any = {
+          ...x,
+          _spec: spec,
+          batch_specs: newBatchSpecs,
+          // Audit trail — a quality record has to be able to answer "which
+          // spec was this judged against, and when did that change?" long
+          // after the fact. Appended, never overwritten.
+          spec_reloads: [
+            ...(x.spec_reloads || []),
+            { at: nowIso, by: whoAmI(), doc_no: spec.doc_no ?? null, spec_id: spec.id ?? null, was_final: wasFinal, cleared_result: wasFinal ? x.final_result : null, changes: rowChanges },
+          ],
+        }
+        if (wasFinal) {
+          // Straight back into the Lab Manager's queue, not to draft — the
+          // capture work is done and unchanged; it's only the verdict that
+          // has to be made again against the new numbers.
+          next.final_result   = undefined
+          next.finalised_at   = undefined
+          next.approved_by    = undefined
+          next.final_reason   = undefined
+          next.batch_status   = 'awaiting_approval'
+          next.allocated_at   = nowIso
+          next.allocated_by   = whoAmI()
+          next.oos_flags      = computePastOosFlags({ ...x, batch_specs: newBatchSpecs, _spec: spec } as Batch)
+        }
+        return next
+      })
+      updated.filter(x => targetIds.has(x.id)).forEach(x => saveBatchToDB(x))
       return updated
     })
+    const summary = changes.length
+      ? `${changes.length} limit${changes.length === 1 ? '' : 's'} changed:\n${pastSpecChangeLines(changes)}`
+      : 'No limit changed on this record.'
+    alert(wasFinal
+      ? `Spec reloaded.\n\n${summary}\n\nThe previous approval has been cleared and this batch is back with the Lab Manager for review against the new spec.`
+      : `Spec reloaded.\n\n${summary}`)
   }
 
   const activeBatch    = batches.find(b => b.id === activeBatchId) || null
@@ -1689,15 +2035,38 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                       )}
                       {activeBatch.reference_batch && <><span>·</span><span>Ref: {activeBatch.reference_batch}</span></>}
                       {activeBatch._spec
-                        ? <span className="badge badge-ok text-[9px]">✓ Spec: {activeBatch.product_family} {activeBatch.grade} · {activeBatch.variant}</span>
+                        ? <span className="badge badge-ok text-[9px]" title={(activeBatch._spec as { product_description?: string } | null)?.product_description || undefined}>
+                            ✓ Spec: {activeBatch.product_family} {activeBatch.grade} · {activeBatch.variant}
+                            {(activeBatch._spec as { doc_no?: string } | null)?.doc_no
+                              ? ` · ${(activeBatch._spec as { doc_no?: string }).doc_no}` : ''}
+                          </span>
                         : <span className="badge badge-warn text-[9px]">⚠ Default spec</span>
                       }
-                      {!activeBatch.final_result && (
-                        <button onClick={reloadSpec} title="Re-fetch the current Specifications values for this product/grade/variant and re-check this batch's samples against them"
-                          className="text-[9px] font-semibold text-info border-b border-dashed border-info/50">
-                          🔄 Reload Spec
-                        </button>
-                      )}
+                      {/* Available on a FINALISED batch too — a spec can change
+                          after a run is approved, and that's exactly when you
+                          need to re-check it. reloadSpecFor() clears the old
+                          approval and sends it back for review in that case. */}
+                      <button onClick={() => reloadSpecFor(activeBatch.id)}
+                        title="Re-fetch the current Specifications values for this product/grade/variant and re-check this batch's samples against them"
+                        className="text-[9px] font-semibold text-info border-b border-dashed border-info/50">
+                        🔄 Reload Spec
+                      </button>
+                      <a href={specHref(activeBatch)} target="_blank" rel="noopener noreferrer"
+                        title="Open this product's spec in Customer Specs — to read the limits, or change them and then reload the spec here"
+                        className="text-[9px] font-semibold text-info border-b border-dashed border-info/50">
+                        📋 View spec
+                      </a>
+                      {(() => {
+                        const r = lastPastSpecReload(activeBatch)
+                        if (!r) return null
+                        const n = Array.isArray(r.changes) ? r.changes.length : null
+                        return (
+                          <span className="badge badge-warn text-[9px] cursor-help" title={pastSpecReloadTooltip(r)}>
+                            🔄 Spec reloaded {r.at ? new Date(r.at).toLocaleDateString('en-ZA', { timeZone:'Africa/Johannesburg' }) : ''}
+                            {n !== null && ` · ${n} limit${n === 1 ? '' : 's'} changed`}
+                          </span>
+                        )
+                      })()}
                     </div>
                   </div>
 
@@ -2126,7 +2495,52 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                                       className="px-3 py-1.5 rounded-lg border border-surface-rule text-[11px] font-semibold">✏️ Edit Run</button>
                                     <button onClick={e => { e.stopPropagation(); exportPasteuriserBatch(b) }}
                                       className="px-3 py-1.5 rounded-lg border border-ok/30 bg-ok/8 text-ok text-[11px] font-semibold">⬇ Export Excel</button>
+                                    {/* A spec can be changed long after a run is
+                                        finished — this is where you re-check a
+                                        historical batch against the new limits.
+                                        reloadSpecFor() clears the old approval
+                                        and sends the batch back for review. */}
+                                    <button onClick={e => { e.stopPropagation(); reloadSpecFor(b.id) }}
+                                      title="Re-fetch the current Specifications values for this product/grade/variant and re-check this batch against them. Clears the existing approval and sends the batch back to the Lab Manager."
+                                      className="px-3 py-1.5 rounded-lg border border-info/30 bg-info/8 text-info text-[11px] font-semibold">🔄 Reload Spec</button>
+                                    <a href={specHref(b)} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()}
+                                      title="Open this product's spec in Customer Specs — to read the limits, or change them and then reload the spec here"
+                                      className="px-3 py-1.5 rounded-lg border border-info/30 bg-info/8 text-info text-[11px] font-semibold">📋 View spec</a>
                                   </div>
+                                  {(() => {
+                                    // Full history, not just the latest: a batch
+                                    // re-specced twice needs to show both, or the
+                                    // record cannot answer which limits it was
+                                    // judged against at any given point.
+                                    const rs: PastSpecReload[] = b.spec_reloads ?? []
+                                    if (!rs.length) return null
+                                    return (
+                                      <div className="rounded-lg border border-warn/30 bg-warn/5 p-3 space-y-2" onClick={e => e.stopPropagation()}>
+                                        <div className="text-[11px] font-bold text-warn">🔄 Spec reloaded after this run</div>
+                                        {rs.map((r, i) => {
+                                          const ch = Array.isArray(r.changes) ? r.changes : null
+                                          return (
+                                            <div key={i} className="text-[10px] text-text-muted">
+                                              <div>
+                                                {r.at ? new Date(r.at).toLocaleString('en-ZA', { timeZone:'Africa/Johannesburg' }) : 'unknown time'}
+                                                {r.by ? ` · by ${r.by}` : ''}{r.doc_no ? ` · ${r.doc_no}` : ''}
+                                                {r.was_final && <span className="ml-1 text-warn font-semibold">· cleared "{r.cleared_result ?? 'unknown'}" and sent back for review</span>}
+                                              </div>
+                                              {ch === null
+                                                ? <div className="italic">Change detail was not recorded for this reload.</div>
+                                                : ch.length === 0
+                                                  ? <div className="italic">No limit changed.</div>
+                                                  : <ul className="mt-0.5 ml-3 list-disc">
+                                                      {ch.map((c, j) => (
+                                                        <li key={j}><span className="font-semibold text-text">{c.label}</span>: {c.from} → {c.to}</li>
+                                                      ))}
+                                                    </ul>}
+                                            </div>
+                                          )
+                                        })}
+                                      </div>
+                                    )
+                                  })()}
                                   {(() => {
                                     // Chronological already (samples are sorted at load — see parseRec()
                                     // above). Date+time in the label so a multi-day batch doesn't collide

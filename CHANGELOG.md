@@ -2,6 +2,569 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-08-21 — Gustav (COA: fix signature resize distortion, screen/print layout mismatch, and add a "Ready to print" queue + Lab Manager notification)
+
+**Files changed:** `app/(app)/quality/coa/page.tsx`, `app/api/quality/coa-signoff/route.ts`
+
+Three separate reports on the COA generator:
+
+1. **Signature resize handle only made signatures taller, not wider.** `DraggableSignature` set an explicit `height` and `width: 'auto'` with a fixed `maxWidth: 260` on the `<img>`. Past the scale where the aspect-correct width would exceed 260px, the browser clamped width there but kept growing the explicit height — a silent squash, not a stop, so dragging the resize handle further only stretched the signature taller. Fixed by measuring the image's real width:height ratio on load and deriving both dimensions from `baseH * scale`, so there is no separate width ceiling left to hit — both directions scale together by construction.
+2. **The on-screen preview cut content off that printed/exported fine.** Root cause: `app/(app)/layout.tsx`'s `<main>` is `overflow-x-hidden` app-wide (deliberate, so no page can put a stray scrollbar on the whole shell) — anything in the COA preview wider than the sidebar-shrunk viewport was silently clipped with no scrollbar to reveal it. Printing was unaffected because the print stylesheet takes `.coa-print` out of flow (`position: absolute`), escaping the shell's clipping entirely; the on-screen version had no such escape. Fixed by wrapping the preview in its own `overflow-x: auto` container with a `minWidth: 720` matching the real PDF content box (A4 minus margins, ~687px) — a descendant's own overflow handling isn't overridden by an ancestor's `overflow-x: hidden`, so the preview now either fits or scrolls, never clips invisibly, and can't differ from the print/PDF layout by being squeezed narrower than the export ever uses.
+3. **No signal when a COA was fully signed and ready to print.** The lab → QA hand-off already notified the QA manager when the lab manager signed (`notifyQaManager`); signing the other direction had no equivalent. Added `notifyLabManager()` (mirrors the existing function) fired when the QA manager signs, and a new **"🖨 Ready to print"** tab next to the existing "Awaiting QA sign-off" one, listing every `coa_signoffs` row with a QA signature that has no `coa_generated` entry (the existing Print/Export log, unchanged) logged after that signature — i.e. genuinely not yet printed/exported since being signed. No new table: derived from what Print/Export already writes to `qms.coa_generated` for History. Printing or exporting a batch drops it off this list immediately (`logGeneration()` now also refreshes the queue), not on next reload.
+
+## 2026-09-03 — Gustav (Customer name aliases: one customer, many spellings)
+
+**Files changed:** `supabase/migrations/20260903_002_customer_aliases.sql` (new), `lib/quality/customer-spec-match.ts`, `lib/quality/customer-spec-match.test.ts`, `app/(app)/quality/pasteuriser/page.tsx`, `app/(app)/quality/customer-specs/page.tsx`
+
+### The gap normalisation could not close
+
+Normalising customer names fixed case and whitespace, so `ENTYCE`, `Entyce ` and
+`Entyce` all resolve to one another. What it cannot do is match two genuinely
+**different** strings — and production runs carry exactly that:
+
+| Run recorded as | Spec filed under | Was resolving to |
+|---|---|---|
+| `EWTC` (2 runs) | `East West Tea Company (EWTC)` | **generic spec** |
+| `Afri Tea and Coffee Blenders` (1) | `Afri Tea and Coffee's` | **generic spec** |
+| `Lipton&Infusion (Ekaterra)` (1) | `Lipton and Infusion` | **generic spec** |
+
+Four pasteuriser runs were being judged against the generic limits instead of
+their customer's own, silently, with nothing on screen to say so.
+
+**Renaming the spec row cannot fix this.** Both spellings are already in the run
+data and both keep being typed, so any single name fixes some runs and breaks
+others. An alias absorbs the variation instead of fighting it.
+
+### `qms.customer_aliases`
+
+`alias → canonical_name`, where the canonical name is whatever the spec row
+carries. Resolution order becomes: clean the typed name → look it up here →
+match against `customer_specs` exactly as before.
+
+- **Unique index on the normalised alias**, so `ewtc` and `EWTC ` cannot both be
+  added — the same duplicate class this whole exercise exists to remove.
+- **A check constraint forbids a self-referential alias** (a name mapping to
+  itself), which would be a no-op that only creates confusion.
+- **Deliberately not a foreign key** to `customer_specs.customer`: a customer can
+  be aliased before its spec exists — that is the useful case, since the alias is
+  what reveals the spec is missing — and `customer_specs` has no unique key on
+  customer alone, because one customer legitimately holds many spec rows.
+- Seeded with the three aliases above plus three spec-sheet spellings
+  (`East West Tea Company`, `East West Tea Co.`, `Alveus GmbH`).
+
+**Applied to staging and production.** The table is additive and nothing on
+`main` reads it yet, so applying it before the code lands is safe — and means
+the code works the moment it deploys rather than needing a follow-up.
+
+### Resolution
+
+`resolveCustomerName()` / `wasAliased()` / `pickSpecForCustomerWithAliases()` in
+the shared matcher, with **17 new tests** (59 in that file).
+
+**A single hop, deliberately.** Chaining (`a → b → c`) invites cycles and makes
+"which spec applies?" depend on traversal order — precisely the class of problem
+this area is being dug out of. The add form refuses an alias pointing at a name
+that is itself an alias, and says what to point at instead.
+
+A blank or self-referential row is ignored rather than trusted. The DB
+constraints forbid both, but a wrong answer here would be a real customer
+resolving to `''` and silently taking the generic spec.
+
+### UI
+
+- **Pasteuriser New Run** shows `↪ matched to "East West Tea Company (EWTC)"`
+  when the spec was reached through an alias. A silent substitution is exactly
+  the thing that needs to be visible.
+- **Reload Spec** resolves through aliases too, reading them fresh on the click
+  rather than from state — a stale list would change which spec a reload picks.
+  Its "no spec on file" confirm now names both the typed and the resolved name.
+- **Customer Specs → `↪ Customer aliases`** manages them: add, delete, and a
+  **`⚠ no spec on file`** warning against any alias whose target has no spec row,
+  since that alias resolves but still lands on the generic spec.
+
+### Verified
+
+All four affected runs now reach their customer's spec (confirmed by query
+against production). The 12 runs for customers with no spec at all are unchanged
+— they correctly use the generic spec, and the aliases panel makes that visible.
+
+Tests **348/348**. Lint 3021, at baseline. Typecheck introduces nothing.
+
+## 2026-09-03 — Gustav (QC entry: a bulk density or moisture that cannot be real is now refused)
+
+**Files changed:** `lib/quality/plausibility.ts` (new), `lib/quality/plausibility.test.ts` (new), `app/(app)/quality/granule/page.tsx`, `app/(app)/quality/pasteuriser/page.tsx`
+
+### Why the existing check missed these
+
+`lib/utils/outliers.ts` already flagged unusual readings, but it is
+**statistical**: it compares a value against the other samples in the run, and
+only fires once the run already has real spread (`std > stdFloor`). Both
+conditions failed for the values that are actually in production:
+
+- **Granule samples 754 / 755 — bulk density `2200`** (a 220 with a stray zero).
+  Every other sample in that run read exactly 220, so the standard deviation was
+  **zero**, `checkOutlier` returned null, and nothing was flagged. It then saved
+  twice.
+- **Granule sample 117 — moisture `121` and dryer temp `1215`**: one row where
+  the decimal point was dropped throughout (12.1 % and 121.5 °C).
+- Granule samples 158 / 160 / 347 (BD `0`), 464 (dryer temp `1`), 306 / 307
+  (dryer temp 230 / 220).
+- Pasteuriser samples 310 (BD `0`, moisture `0`), 734 (moisture `95`),
+  1098 (moisture `0.8`).
+
+**14 implausible values in total.** A statistical check can never catch the first
+sample of a run, or a run where everyone typed the same wrong number.
+
+### New `lib/quality/plausibility.ts` — 26 tests
+
+Absolute bounds, needing no history. Two levels, deliberately:
+
+- **`block`** — physically impossible or an obvious decimal slip. **Refused**;
+  the save button is disabled and there is nothing to confirm.
+- **`confirm`** — unusual but genuinely producible (a real dryer fault does make
+  11 % moisture). Joins the existing confirm-to-save list.
+
+| Measurement | Refused outside | Confirm outside | Observed in 650 samples |
+|---|---|---|---|
+| Moisture | 1–25 % | 4–11 % | 3.2–11.34 % (p01 6.4, p99 10.6) |
+| Bulk density (cc/100g) | 80–450 | 160–330 | 170–320 (p01 190, p99 266) |
+| Bulk density (ml/5g) | 1–50 | 2–20 | Rosehips, normally "<10" |
+| Dryer temp | 20–200 °C | 100–145 °C | p01 115, p99 133 |
+| Sieve fraction | 0–100 % | — | block only |
+
+The soft band comes from the observed p01–p99, widened outward. It is
+**deliberately not a spec**: a spec says whether the product is acceptable, this
+says whether the *number was typed correctly*.
+
+**Rosehips bulk density gets its own bounds.** It is reported volumetrically as
+`ml/5g` (normally under 10) — the cc/100g range would have refused **every valid
+Rosehips reading**. `bdMeasurementFor(family)` routes it, mirroring
+`pastBdUnit()`.
+
+**Decimal-slip suggestions.** When shifting the decimal one or two places lands
+in range, the message says so: `2200 → 220`, `1215 → 121.5`, `121 → 12.1`,
+`95 → 9.5`. Offered only — never applied automatically, because silently
+rewriting a QC's reading is worse than refusing it.
+
+### Wiring
+
+Both granule modals (add and edit) and the pasteuriser sample modal. A block
+shows a red panel and disables save; confirms are folded into the **same** list
+the existing tick already governs, so a QC never has to confirm twice because
+the reason came from two different checks.
+
+Blank or half-typed input is always `ok` — "required" is a separate question
+from "plausible", and conflating them would block a QC mid-keystroke.
+
+The granule **edit** modal checks only the three primary readings: its form
+carries no dryer-2 fields, unlike the add modal.
+
+### Not done
+
+The **14 existing bad values are untouched.** Correcting historical quality
+records is a separate decision — say which should be corrected (to the suggested
+value) and which left as-is, and I will write the migration.
+
+Tests **312/312** (26 new). Lint 3021, at baseline. Typecheck introduces nothing.
+
+## 2026-09-03 — Gustav (Granule Line: bulk Excel export for History and Active Runs; Entyce/Edelweiss promoted to production)
+
+**Files changed:** `lib/utils/exportExcel.ts`, `app/(app)/quality/granule/page.tsx`
+
+### Bulk Excel export
+
+A per-run `⬇ Excel` already existed in both Active Runs and History
+(`exportGranuleRun`). What was missing was the **across-runs** export — the view
+you need to compare batches or hand a period to a customer.
+
+New `exportGranuleRuns()` mirrors `exportPasteuriserBatches()` so the two lines'
+exports read the same way. Two sheets, in this order on purpose — the summary is
+what gets read, the raw sheet is what gets checked:
+
+1. **Run Summary** — one row per run: batch, date, type/grade, customer, QC,
+   status, sample counts, average moisture / BD / dryer temp and average per
+   sieve fraction.
+2. **All Raw Samples** — every sample across every run.
+
+Two buttons:
+
+- **History → `⬇ Export all (n)`** — exports what is **currently filtered**, not
+  everything. The batch filter is how a period or product gets scoped, and an
+  export that ignored it would answer a different question.
+- **Active Runs → `⬇ Export active runs (n)`** — every open run in one workbook.
+
+Two details that matter for anyone averaging off these sheets:
+
+- Sieve averages count **only samples that actually had a sieve analysis**
+  (`sieving_done`). Including the rest would drag every fraction toward zero —
+  which is precisely how a spec gets set from a number nobody measured.
+- A sample with no sieve analysis exports **blank, not zero**, for the same reason.
+
+### Entyce / Edelweiss consolidation applied to PRODUCTION
+
+Migration `20260903_001` is now applied to the production project
+(`sxzjjcyuzyfneesnsjna`), matching staging. Verified after: Entyce → one row on
+**IPS-ENT-007** (BD max 300, `>20 max` 25), Edelweiss → one row on
+**IPS-EDE-002**, **zero** duplicate keys, **zero** rows with edge whitespace,
+49 → 46 rows.
+
+On production the Edelweiss row that **survived** was the one holding the
+impossible `>10` range (min 5.6 above max 5) — the opposite of staging, since the
+migration keeps the most recently updated row. Because the values are set
+**explicitly** to IPS-EDE-002 rather than inherited from whichever row wins, they
+were corrected: `>10 min` is now null and `>16` is 20–40. Confirmed by query.
+Note the `spec_revisions` note reads "the discarded row held an impossible range",
+which is accurate for staging but inverted for production — the `previous` array
+records both rows' actual values either way.
+
+**One behaviour change to be aware of:** the new unique index means a duplicate
+spec insert now **fails** with a database error instead of silently creating a
+second row. That is the point, but the code that gives a friendly message for it
+is on staging, not yet on `main` — so until this is promoted, a production user
+hitting it sees a raw Postgres error rather than an explanation.
+
+Lint 3021, at baseline. Tests 275/275. Typecheck introduces nothing.
+
+## 2026-09-03 — Gustav (COA: generation blocked on missing results, cancel, post-sign-off edits, manager-only delete)
+
+**Files changed:** `lib/quality/coa-gating.ts` (new), `lib/quality/coa-gating.test.ts` (new), `app/(app)/quality/coa/page.tsx`, `.github/workflows/ci.yml`
+
+Four changes to the COA Generator. The two gating rules moved into
+`lib/quality/coa-gating.ts` with **17 tests** — both are quality decisions with
+real consequences, and neither was testable inside a 1300-line component.
+
+### 1. A COA cannot be generated with a result missing
+
+The "Outstanding" list already existed but was **advisory only**, so a COA could
+be printed stating an analysis that had no result behind it. Print and Export PDF
+are now **disabled** while any included analysis has no result.
+
+The blocker names each gap and offers **both** ways out, because a blocking
+message with no route forward just gets worked around:
+
+- **Capture in …** — a link to the tab that owns the result (Lab Results → Micro
+  / Residue / PA / Heavy Metals / MOSH-MOAH / Chlorate-Perchlorate / Glyphosate,
+  or Pasteuriser for the batch and the sieve samples).
+- **Drop from COA** — unticks the section. A COA that does not claim an analysis
+  owes no result for it, so dropping is a legitimate resolution.
+
+The pasteuriser batch is the one gap that **cannot** be dropped — it is the COA's
+own subject, and without it there is no grade, moisture or bulk density.
+
+Section → source is now a **table**, not a chain of ifs, so a new section cannot
+be added to the COA without declaring where its result is captured. That table
+also pins the one non-obvious pairing: `cutLength` is satisfied by
+`found.sieving` — the section is named for what it prints, the flag for where the
+data lives.
+
+### 2. Cancel
+
+Two kinds of mistake, two answers:
+
+- **↩ Cancel changes** — discards unsaved edits and reloads the batch from source,
+  restoring what the data actually says. Saved order details and sign-offs are
+  untouched.
+- **✕ Close COA** — clears the screen and starts over. Nothing is deleted.
+
+Both clear the autosaved draft, or the discarded text would come straight back
+through the draft-recovery banner on the next visit.
+
+### 3. Editable after sign-off, without re-approval
+
+Once **both** managers have signed, the results, specifications and the choice of
+included sections are **locked** — they are what the two signatures approved.
+
+**Date of issue, invoice number, order number, quantity (Kg's) and quantity of
+bags stay editable**, and saving them does **not** send the COA back to the
+Quality Manager: `saveOrderDetails()` writes `qms.coa_orders` only and never
+touches `qms.coa_signoffs`. These are commercial fields, routinely filled in by
+logistics after the analyses are done, and none of them changes what was tested.
+
+**`destination` is deliberately excluded.** It names the customer, and the
+customer decides which sieve spec the analyses were checked against — changing it
+after sign-off would silently re-point the certificate at a different
+specification. It shows as locked with that reason on hover.
+
+Nothing locks at the *lab* signature alone: locking there would leave the Quality
+Manager unable to correct anything before signing.
+
+The locked inputs are `readOnly` and visibly so. They previously would have kept
+accepting focus and keystrokes while the mutators dropped them, which reads as a
+broken screen rather than a final document.
+
+**All QCs can still make a COA** — the page gate is unchanged
+(`can_save_lab_results || can_approve_runs`), and the post-sign-off logistics
+fields are editable by any QC, not just the managers.
+
+### 4. Delete is the two managers only
+
+The delete control was gated on `isLab || isQa || **isFullAdmin**`. The admin
+bypass is removed: deleting a generated COA destroys a quality record, and the
+people accountable for the document are the two who signed it. The check is also
+**repeated inside `deleteCoa()`** — hiding a button is not an authorisation check.
+
+Lint 3021, one below baseline; `LINT_ERROR_BASELINE` lowered 3022 → 3021.
+Tests **275/275**. Typecheck introduces nothing.
+
+## 2026-09-03 — Gustav (Spec doc numbers: latest document wins; Chromium added to heavy metals)
+
+**Files changed:** `supabase/migrations/20260903_001_customer_specs_doc_no_and_dedupe.sql` (new), `lib/quality/heavy-metals.ts` (new), `lib/quality/heavy-metals.test.ts` (new), `lib/quality/customer-spec-match.ts`, `lib/quality/customer-spec-match.test.ts`, `app/(app)/quality/customer-specs/page.tsx`, `app/(app)/quality/pasteuriser/page.tsx`, `app/(app)/quality/coa/page.tsx`, `components/quality/CoaSpecsTab.tsx`, `app/(app)/quality/lab-results/page.tsx`, `app/api/upload/route.ts`
+
+### Doc numbers: the table could not represent the real spec sheet
+
+The client spec file has **seven Entyce documents**, IPS-ENT-001…007, **six of
+them under one family/grade/variant** with different sieve limits — separated
+only by document number and product description, and `qms.customer_specs` had a
+column for **neither**. So every attempt to enter a second legitimate spec
+produced an indistinguishable duplicate, and the lookup picked one by row order.
+
+**Migration `20260903_001`** (applied to staging; production pending):
+
+- `doc_no`, `doc_version`, `product_description`, `spec_revisions` columns.
+- Trims the identity columns on every row — including `product_family =
+  'Botanicals '` / `grade = 'Phytoblend '`, a row no `.ilike('Botanicals')`
+  lookup could reach.
+- **Consolidates Entyce onto IPS-ENT-007 and Edelweiss onto IPS-EDE-002**, per
+  the lab's rule that the latest document applies. Neither matched its document
+  exactly, so the limits are **corrected**, not just de-duplicated: Entyce
+  `>20 max` 20 → **25** and `BD max` 320 → **300**.
+- `spec_revisions` records the discarded rows' values, so the consolidation is
+  auditable rather than a silent overwrite.
+- **Unique index on the normalised identity including `doc_no`** — two specs may
+  coexist as different documents, and may not when they differ only by
+  whitespace or case.
+
+Every statement keys on **content, never on row ids**: staging carries the Entyce
+triple but not the Edelweiss pair, so the ids differ between the two databases.
+
+Staging after the migration: Entyce → one row, Edelweiss → one row, **zero**
+remaining duplicate keys, **zero** rows with edge whitespace.
+
+### "The latest document wins"
+
+`docVersionOf()` reads the trailing number (`IPS-ENT-007` → 7), **anchored to the
+end** so digits inside a customer code cannot win, and parsed as digits so `007`
+and `7` are one version. Several documents for one customer are no longer
+"ambiguous" — the highest applies and the rest are reported as **superseded**.
+Only a genuine tie on version is ambiguous. `doc_no` joins the duplicate key, so
+a legitimate second document is allowed while the same document twice is not.
+
+**UI:** Doc No is an editable column in the sieve table with the version beside
+it and the product description on hover; the add form takes both and previews the
+version it parsed; the pasteuriser names the document on a loaded spec and says
+"latest of N documents".
+
+### Chromium added to heavy metals
+
+The element list was written out by hand in **four** places, so adding one meant
+finding all four — and missing one meant a customer could enter a limit the COA
+never printed. New `lib/quality/heavy-metals.ts` is the single list, now
+including **Chromium**, used by `CoaSpecsTab`'s spec editor, its badge, and both
+COA call sites.
+
+Chromium is also added to the Gemini extraction prompt and to the **primary**
+heavy-metals classifier regex, so a chromium-only report is recognised (the broad
+fallback already matched it). **No EU limit is asserted for chromium** — there is
+no harmonised maximum level for it in tea, and the prompt now says so explicitly
+rather than letting the model invent one.
+
+`specFieldRequired()` also fixes a real inconsistency: `CoaSpecsTab`'s badge used
+plain truthiness, so a spec reading **`NOT REQUIRED`** — the spec sheet's own
+convention, in hundreds of cells — still lit the "Metals" badge. It now matches
+the COA builder's own `req()` rule. A hard `0` still counts as a real limit.
+
+### Fixed in my own earlier commit
+
+`productKey()` joined its parts with a **literal NUL byte** instead of a space,
+which made the file read as binary to `grep`. Now joined on `|`, which also stops
+`'Rooibos'` + `'Super Grade'` colliding with `'Rooibos Super'` + `'Grade'`.
+
+### Still open
+
+The **backfill of `doc_no` for the other 43 spec rows** is not done. The customer
+names in the sheet and the database do not reliably correspond — `'Afri Tea and
+Coffee\'s'` vs `'Afri Tea and Coffee Blenders'`, `'East West Tea Company
+(EWTC)'` vs `'East West Tea Company'` — and four customers in the database
+(Lipton and Infusion, Lupicia, OTG, Tanganda) are **not in the sheet at all**.
+Guessing 14 mappings would put wrong document numbers on quality records, so
+those rows keep a null `doc_no` and the UI shows them as having no controlled
+document. A confirmed mapping table would let this be finished mechanically.
+
+Tests **258/258** (59 in `customer-spec-match`, 16 in `heavy-metals`). Lint 3022,
+at baseline. Typecheck introduces nothing.
+
+## 2026-09-03 — Gustav (Specs resolve on a normalised customer name; customer + QC required on a new run)
+
+**Files changed:** `lib/quality/customer-spec-match.ts` (new), `lib/quality/customer-spec-match.test.ts` (new), `app/(app)/quality/pasteuriser/page.tsx`, `app/(app)/quality/customer-specs/page.tsx`, `.github/workflows/ci.yml`
+
+### The bug: which spec a batch was judged against came down to row order
+
+Production `qms.customer_specs` holds **three Entyce rows** for Rooibos / Super
+Grade / Conventional — `'Entyce '`, `'ENTYCE '` and `'Entyce'` — carrying
+**different bulk-density limits** (280–300 vs 280–**320**). It also holds **two
+Edelweiss rows** for Botanicals / Phytoblend / Conventional differing on three
+sieve fractions (`>10 min`, `>12 min`, `>16 min`).
+
+Both Edelweiss rows match a case-insensitive lookup for "Edelweiss", so
+`rows.find(...)` returned whichever Postgres listed first — meaning the limits a
+pasteuriser run and its COA were checked against were effectively arbitrary.
+
+The Entyce rows failed differently: the old compare was a plain `toLowerCase()`,
+so `'entyce '` ≠ `'entyce'`. A run for "Entyce" **silently fell through to the
+generic spec** — different limits again, with "✓ Spec loaded" on screen either way.
+
+Row 49 additionally carries `product_family = 'Botanicals '` and
+`grade = 'Phytoblend '` with trailing spaces, which no `.ilike('Botanicals')`
+lookup can reach at all.
+
+### New `lib/quality/customer-spec-match.ts` — 30 tests
+
+- `normCustomerKey` / `cleanCustomerName` — trim and collapse internal
+  whitespace. Comparison folds case; **storage keeps the operator's own
+  capitalisation**, so `ADM WILD` is not restyled into `Adm Wild`.
+- `pickSpecForCustomer` — customer's row → generic → any remaining, and
+  **reports ambiguity** rather than silently taking the first of three.
+- `findDuplicateSpec`, `customerOptions`.
+
+### Pasteuriser New Run
+
+- **Customer and QC Controller are required.** A blank customer resolved quietly
+  to the generic spec. "Generic — no customer-specific spec" is still available,
+  but as a deliberate choice in the list rather than an empty box.
+- **Customer is a dropdown** built from the specs themselves and deduped on the
+  normalised key, so the three Entyce spellings offer **one** option and picking
+  it writes the spelling the lookup will actually match. An "Other" escape
+  covers a customer with no spec yet, and says it will fall back to generic.
+- **"Spec loaded" now says whose** — the customer's, the GENERIC one, or a
+  fallback — and warns when duplicate rows match.
+- Customer and QC are stored cleaned.
+
+### Reload Spec
+
+Both lookups now share `pickSpecForCustomer`, so a reload can never resolve to a
+different row than the run was created against. **Reload refuses outright when
+duplicates make the choice ambiguous** — otherwise it would clear an approval and
+re-check the batch against limits chosen by row order.
+
+### Customer Specs
+
+- **Customer is a dropdown** (existing customers, deduped) plus `+ New
+  customer…`, so the name is picked rather than retyped.
+- Identity fields are cleaned on **both** the add form and inline cell edits —
+  the inline edit is the likely origin of `'Entyce '`.
+- A duplicate **warns and asks for confirmation; it does not refuse.** The client
+  spec sheet has **seven Entyce documents**, six of them under one
+  family/grade/variant with different sieve limits, separated only by doc number
+  and product description — **neither of which this table has a column for**. So
+  a second row is sometimes legitimate; only the accidental one needs stopping,
+  and the dropdown is what stops the whitespace case.
+- **A banner lists the duplicates that already exist**, because the guards only
+  stop new ones and these have to be visible to be fixable.
+- The customer filter matches on the normalised key, so a deduped dropdown entry
+  cannot hide rows stored under a variant spelling.
+
+### Still open (not fixed here)
+
+- The **five existing duplicate rows in production** (3 × Entyce, 2 × Edelweiss)
+  and the trailing spaces on row 49. Which row is authoritative is a quality
+  decision, not a mechanical one — trimming `'Entyce '` would collide with the
+  existing `'Entyce'`.
+- `customer_specs` has **no `doc_no` column**, so it cannot represent what the
+  client sheet actually holds (IPS-ENT-001 … IPS-ENT-007). Until it does, two
+  legitimate specs for one customer+product are indistinguishable from an
+  accident. (Note: `reloadSpecFor` already reads `spec.doc_no`, which is
+  therefore always undefined — harmless, but the dialogs never show a doc number.)
+
+Lint 3022, two below baseline; `LINT_ERROR_BASELINE` lowered 3024 → 3022.
+Typecheck introduces nothing. Full suite 229/229.
+
+## 2026-09-03 — Gustav (Pasteuriser: show what changed when a spec is reloaded)
+
+**Files changed:** `app/(app)/quality/pasteuriser/page.tsx`
+
+**Reload Spec** replaced a batch's limits wholesale and, on a finalised batch,
+cleared its approval — without ever saying *which* limits moved. Neither the QC
+pressing the button nor the Lab Manager who gets the batch back could act on
+that. Every reload is now diffed field by field:
+
+- The **confirm dialog lists each changed limit as `old → new` before** the
+  reload is applied, so it is a decision rather than a leap.
+- **If no limit differs it says so and stops.** Previously this cleared a
+  perfectly good approval and re-queued the batch over a reload that changed
+  nothing — the worst possible outcome for a button pressed to *check* whether
+  the spec had moved.
+- The post-reload alert repeats the diff.
+- The diff is stored on each `spec_reloads[]` audit entry, **diffed per record**
+  — two records of one batch can have been created at different times and so
+  start from different limits.
+- A **badge in the Active Runs header** shows the last reload, its date and how
+  many limits changed, with the full diff on hover.
+- The **History expanded row renders the whole reload history inline**: when, by
+  whom, which spec doc, every limit that moved, and the verdict that was cleared.
+
+Comparison details that matter, each one a way the diff could have lied:
+
+- `''`, `null` and `undefined` all mean "no limit set" and compare **equal**, or
+  the first reload of a batch created before a field existed would read as
+  changing every limit. `''` vs `'0'` is still a real change — "no limit" and "a
+  limit of zero" are not the same thing.
+- Numbers compare **numerically**, so `'20'` and `'20.0'` are one limit, not two.
+- Only the fractions a family actually reports are diffed (**>40 is Rosehips
+  only**), and BD carries the family's unit — `ml/5g` for Rosehips, `cc/100g`
+  otherwise.
+- An audit entry with no `changes` key (one logged before this shipped) renders
+  as "change detail was not recorded", which is **distinct** from one that
+  recorded an empty diff.
+
+Verified with 19 assertions run against the real source functions (blank/number
+equivalence, per-family column sets and units, diff selection, tooltip
+rendering, legacy entries).
+
+**Follow-up — CI lint ratchet.** The first cut of this used `any` for the spec
+maps and reload entries, which pushed lint errors 13 over the baseline and
+failed CI. Fixed by typing it properly rather than raising the baseline: a
+`PastSpecReload` type, `spec_reloads?: PastSpecReload[]` declared on `Batch` (so
+the diff rendering is type-checked instead of reaching through `as any`), and
+`unknown` on the value comparators. That also removed two pre-existing `as any`
+casts, so `LINT_ERROR_BASELINE` in `.github/workflows/ci.yml` is **lowered 3026
+→ 3024** per the ratchet rule in ARCHITECTURE.md §8.
+
+## 2026-09-02 — Gustav (Pasteuriser: reload spec from History and on finalised runs)
+
+**Files changed:** `app/(app)/quality/pasteuriser/page.tsx`, `app/(app)/quality/customer-specs/page.tsx`
+
+A customer spec — especially the sieve fractions — can change long after a run
+is finished. Until now **Reload Spec** only existed on an *unfinalised* Active
+Run, so there was no way to re-check a completed batch against the new limits,
+and no link from a run to the spec it is actually judged against.
+
+- `reloadSpec()` → **`reloadSpecFor(batchId)`**, so the same action works from
+  the Active Runs header *and* from an expanded row in History & Performance.
+- **Reload Spec** and **View spec** buttons added to the History expanded-row
+  toolbar, next to Edit Run / Export Excel.
+- The `!final_result` gate was removed in Active Runs — a finalised run can be
+  re-specced too, which is exactly when it is usually needed.
+- **Re-specing a finalised batch now invalidates its approval** instead of
+  silently keeping a Pass/Fail that was made against the old numbers:
+  `final_result`, `finalised_at`, `approved_by` and `final_reason` are cleared,
+  `batch_status` goes to `awaiting_approval`, `oos_flags` are recomputed against
+  the new spec, and the batch lands back in the Lab Manager's queue. The confirm
+  dialog spells this out before it happens.
+- **`spec_reloads[]` audit trail** appended (never overwritten) on every reload:
+  when, by whom, which spec doc/id, and what verdict was cleared — a quality
+  record has to be able to answer "which spec was this judged against?" later.
+- A batch number split across several records is re-specced **as a whole**, not
+  just the first record. History merges those rows into one and keeps only the
+  first record's id, so targeting that one alone would have left the other
+  halves judged against the old limits.
+- **View spec** deep-links to Customer Specs → Sieve Specs pre-filtered to the
+  product family. `customer-specs` reads `?tab=&family=&customer=` in a
+  `useEffect` rather than a `useState` initialiser — the page is server-rendered
+  and the server has no query string, so seeding state during render would trip
+  a hydration mismatch. Only the family is passed, because the filters are exact
+  string matches and a batch's customer would filter the list to nothing
+  whenever the spec row is the generic blank-customer one.
+
 ## 2026-09-02 — Alyssa (The batch list is actually this session's, and the Overview mass balance shows on the afternoon shift)
 
 **Files changed:** `lib/production/inventory.ts`, `components/production/capture/SievingCapture.tsx`, `components/production/capture/CaptureOverview.tsx`
