@@ -2,6 +2,108 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-04 — Alyssa (Guardrails on production: tests, the boundary rule, the hooks gate)
+
+**Updated 2026-09-04, before merge:** `lib/core` is now self-contained. It previously
+imported the five section data types from the capture components, which meant it would
+only compile here if `main`'s components happened to export those names with compatible
+shapes. They do — but by luck, and the luck would run out the first time either branch
+touched a component. Core now declares the shapes it reads
+(`lib/core/types/capture-data.ts`) and `components/` is in `CORE_FORBIDDEN`, `import type`
+included.
+
+`components/production/capture/core-conformance.ts` comes with it, and it was **checked
+against this branch's own components**: `main`'s `SievingData`, `RefiningData`,
+`GranuleData`, `BlenderData` and `PasteuriserData` all satisfy core's declared shapes —
+`tsc` reports 36 errors, `main`'s baseline, none from the guard. Worth recording beyond
+this PR: despite 1,187 differing lines across the capture module, the two branches agree
+on the data shapes core reads, which removes one class of risk from the eventual capture
+promotion.
+
+
+**Files changed:** `lib/core/**` (29 new), `eslint.boundaries.mjs` (new),
+`eslint.hooks.mjs` (new), `vitest.config.mts` (new), `ARCHITECTURE.md` (new),
+`CODEOWNERS` (new), `docs/capture-phases.md` (new), `package.json`
+
+Production runs today with **no unit tests, no boundary rule, no hooks gate and no CI
+workflow**. This adds the first three. Nothing here changes what the app does.
+
+### Why it is inert, established rather than assumed
+
+`lib/core` was extracted from capture pages `main` does not have — the capture page differs
+by 1,187 lines between the branches and all five section components are contested — so
+whether core could travel alone was the real question. It was tested by checking out
+`main`'s tree, dropping `lib/core` and the configs on top, and running the gates:
+
+| Probe | Result |
+|---|---|
+| `lint:boundaries` | passes |
+| `npm run test` | **413/413 pass** |
+| `tsc` over `lib/core` | **0 errors** |
+| `tsc` overall | **36** — already `main`'s number |
+
+Two structural facts make it work. **Nothing on `main` imports `@/lib/core`** — not one
+file — so the module lands as dead code with no runtime effect; `main` keeps its own
+inline `buildDebag`/`buildBag` at `[section]/page.tsx` 1052 and 1146 until the page is
+deliberately switched over, which is separate work and **not** part of this. And `main`
+already exports the five section data types with compatible shapes, so
+`lib/core/capture-rows` typechecks unmodified.
+
+### What running the tests on main reveals
+
+**16 test files, not 12.** `main` has four specs under `lib/quality` that have never been
+executed, because there has never been a runner. They pass.
+
+### Deliberately not included
+
+- **`.github/workflows/ci.yml`** — the PAT has no `workflow` scope, so it must be added by
+  hand. Until it is, the gates run locally only. `posttest` means `npm run test` also runs
+  the hooks gate, so one command covers both.
+- **Playwright** — the E2E suite cannot run in CI (SSO), and the VPS is disk-constrained,
+  so there is no reason to install it on production yet.
+- **`features/`** — nothing there is wanted on `main` yet. `lint:boundaries` takes
+  `--no-error-on-unmatched-pattern`, so its absence is fine.
+
+`CODEOWNERS` makes `lib/core`, `ARCHITECTURE.md` and `supabase/migrations` require review.
+That is a governance change on top of existing branch protection, and it is intended.
+
+**Local `next build` could not be run** — the worktree's `node_modules` is a symlink
+Turbopack rejects. No route imports these files and the build sets `ignoreBuildErrors`, so
+`tsc` is the stronger check for this change, and it is clean.
+
+## 2026-09-04 — Alyssa (Inventory Import is down for admins — a hook below the admin gate)
+
+**Files changed:** `app/(app)/admin/inventory-import/page.tsx`
+
+`app/(app)/admin/inventory-import/page.tsx` calls `useCallback` at line 129, below an
+early return at line 102:
+
+```
+const { role } = useAuth()          // line 91
+if (role !== 'admin') return <...>  // line 102
+const onDrop = useCallback(...)     // line 129
+```
+
+`role` starts unresolved and then resolves. On the first render the gate returns early and
+`useCallback` is not called; on the next it is. The hook count changes between renders,
+which is React error #310 — "Rendered more hooks than during the previous render" — and
+the page comes down.
+
+It comes down **for admins only**, which is to say for exactly the people the page exists
+for. A non-admin never passes the gate, so their hook count never changes and they see the
+access-required message correctly. That is why this went unreported.
+
+Same class as the capture page outage (HOTFIX #901 on staging). This is the fix already
+running on staging, taken across unchanged: the hook moves above the gate, with a comment
+saying why it has to stay there. `handleFile` is a hoisted function declaration, so
+referring to it from above its definition is fine.
+
+**How it was found:** running staging's `react-hooks/rules-of-hooks` gate against `main`'s
+tree, while checking whether the capture refactor's guardrails could be promoted. It was
+the **only** violation on the whole branch — with this fix the gate exits 0 over the repo.
+
+Verified: hooks gate clean, source type errors unchanged at 36, no other file touched.
+
 ## 2026-09-02 — Alyssa (The Bagging panel's total now adds up to its own rows)
 
 **Files changed:** `app/(app)/production/orders/[id]/page.tsx`, `scripts/verify-output-panel-totals.py` (new)

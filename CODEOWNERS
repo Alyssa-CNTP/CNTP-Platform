@@ -1,0 +1,10 @@
+# Core is protected. Changes under lib/core/** are the shared foundation every
+# capture section depends on — a regression there breaks all five lines at once.
+# See ARCHITECTURE.md §2.
+#
+# Features do NOT need to touch core. If a feature needs something from core,
+# add it to core in its own reviewed commit, with tests.
+
+/lib/core/                @Alyssa-CNTP
+/ARCHITECTURE.md          @Alyssa-CNTP
+/supabase/migrations/     @Alyssa-CNTP
