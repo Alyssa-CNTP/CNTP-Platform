@@ -15,6 +15,63 @@ All changes deployed to staging are logged here automatically.
 
 ---
 
+## 2026-09-04 — Alyssa (CORRECTION: the blank-serial collision was never live, on either branch)
+
+**Files changed:** `CHANGELOG.md`, `docs/capture-phases.md`
+
+Two entries below — the PR #912 entry and the promotion-probe entry — state that a blank
+bag serial failed the whole `prod_bagging` insert, and that production still has the fault.
+**Both claims are wrong.** Found while preparing the patch to `main` that the second entry
+called for.
+
+### What is actually there
+
+`persist()` normalises blanks before it inserts anything, on **both** branches:
+
+```
+// A serial column holds a real bag serial or nothing — never ''. ...
+const blankSerialToNull = (r: any) => {
+  if (!r.bag_serial_no || !String(r.bag_serial_no).trim()) r.bag_serial_no = null
+}
+debag.forEach(blankSerialToNull)
+bag.forEach(blankSerialToNull)
+```
+
+- On staging it sits at line 1193; the `prod_bagging` insert is at 1345. **Before**, not
+  after.
+- It predates PR #912 — present at `a8b5337`, the commit immediately before it.
+- `buildBag` has exactly **one** call site on each branch, inside `persist()`. There is no
+  path that reaches the database around it.
+
+So `''` never reached Postgres, the unique index was never violated by a blank, and no save
+ever failed for this reason. The comment above that guard describes the *historical* bug it
+was written to fix — I read it as a description of a live one.
+
+### What the demonstration actually showed
+
+The `<<< COLLIDES` output in the #912 entry is real: the builders *did* emit `''`. What it
+does not show, and what I did not check before writing it up, is what happens to those rows
+between the builder and the insert. Proving a function returns a bad value is not proving
+the system is broken — the next twenty lines mattered and I skipped them.
+
+### What stands
+
+- **The `serialOrNull()` change stays.** It is still the right place for the coercion: the
+  builders are pure and independently callable now, so relying on a cleanup pass in a
+  caller three hundred lines away is exactly the action-at-a-distance the extraction exists
+  to remove. But it is **defence in depth, not a fix**, and #912's framing — "it won't
+  save", "the same shape as the September 409" — was wrong.
+- **The 42 tests and the no-empty-string invariant stay**, and are now the thing that makes
+  the guarantee local instead of incidental.
+- **The migration verification is unaffected.** Both indexes confirmed on both databases;
+  that part of #912 stands.
+
+### What is withdrawn
+
+**Step 3 of the promotion order — "patch `main`'s inline `buildBag`" — is cancelled.** There
+is nothing to fix there. `main` has the same guard, in the same place, running before the
+same insert. No PR was opened against `main` for it.
+
 ## 2026-09-04 — Alyssa (Promotion: both forked concerns decided; what can move to main, probed)
 
 **Files changed:** `docs/capture-phases.md`
@@ -62,9 +119,10 @@ from staging's routes. The real figure is 36.
   `if (role !== 'admin') return`. `role` starts unresolved then resolves, so the hook count
   changes between renders: React error #310, and the page comes down **for admins only**,
   which is exactly who it is for. Same class as HOTFIX #901. **Staging already has the fix.**
-- **`main`'s inline `buildBag` writes `bag_serial_no: b.serial` raw on six of seven paths.**
-  The same fault PR #912 fixed here — two blank serials in one session are not distinct
-  under `prod_bagging_session_serial_uniq`, so the whole insert is rejected.
+- ~~**`main`'s inline `buildBag` writes `bag_serial_no: b.serial` raw on six of seven
+  paths.**~~ **WITHDRAWN — this was wrong, see the correction entry at the top of this
+  file.** `persist()` normalises blanks to NULL before the insert on both branches, so
+  neither is vulnerable.
 
 ### One hole in the boundary rule, found while probing
 
@@ -77,11 +135,12 @@ move the five types to `lib/core/types/`, then add `components/` to `CORE_FORBID
 
 ### Order of work
 
-Steps 1–3 (the hook crash, the guardrails, a one-line blank-serial patch to `main`'s own
-builder) cannot change production behaviour and stand on their own merit. Step 4 is the
-changeover. **Step 5 — the capture module itself — is where the care goes**, one concern
-at a time, with the E2E spec run against staging first, because unit tests do not cover
-the components and `renderToStaticMarkup` catches crashes, not wrong numbers.
+Steps 1–2 (the hook crash, the guardrails) cannot change production behaviour and stand on
+their own merit. **Step 3 as originally written — a blank-serial patch to `main`'s own
+builder — has been withdrawn; there was nothing to fix.** Step 4 is the changeover.
+**Step 5 — the capture module itself — is where the care goes**, one concern at a time,
+with the E2E spec run against staging first, because unit tests do not cover the
+components and `renderToStaticMarkup` catches crashes, not wrong numbers.
 
 Docs only. No code, no behaviour change.
 
@@ -156,6 +215,15 @@ Docs only. No code, no behaviour change.
 exactly as the migration declares — same name, columns, order, unique, not
 partial. The duplicate pre-flight returned zero rows on both. Phase 0 item 7 is
 therefore a confirmed no-op whose only job is closing the repo/live gap.
+
+> **CORRECTION, same day.** The section below claims this was a live latent bug
+> that failed the whole save. **It was not.** `persist()` already ran a
+> `blankSerialToNull` pass over every row — on this branch *and* on `main` —
+> between the builders and the insert, so `''` never reached the database. It
+> predates this change (present at `a8b5337`) and `buildBag` has exactly one
+> call site, inside `persist()`, on both branches. The `serialOrNull()` change is
+> still right, but as defence in depth, not a fix. See the correction entry at the
+> top of this file.
 
 ### The check turned up a live latent bug
 
