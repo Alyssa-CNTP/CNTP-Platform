@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",
+    "posttest": "npm run lint:hooks",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "lint:boundaries": "eslint --config eslint.boundaries.mjs --no-error-on-unmatched-pattern lib/core features",

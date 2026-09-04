@@ -41,9 +41,10 @@ import { sectionKindFor, assertNever, type SectionKind } from '@/lib/core/types/
 import { productionTotals, sumProductionTotals, withSessionAdjustments,
   type ProductionTotals, type AnyBalanceData } from '@/lib/core/mass-balance'
 import { logBucketElevator, outstandingBucketElevator, variantFamily } from '@/lib/production/bucket-elevator'
-import { mayPoolMaterial, isOrganicVariant, variantForDb } from '@/lib/core/variants'
+import { variantForDb } from '@/lib/core/variants'
 import FeatureBoundary from '@/components/shared/FeatureBoundary'
 import { buildDebagRows, buildBagRows } from '@/lib/core/capture-rows'
+import { planChangeover, isPastShiftChangeover, isEarlyChangeoverLikely } from '@/lib/core/changeover'
 import { upperCode } from '@/lib/production/normalize-code'
 import { dbDate } from '@/lib/production/db-date'
 import { CleaningPanel } from '@/components/production/capture/CleaningPanel'
@@ -1016,9 +1017,9 @@ function CaptureScreen() {
   // ── 16h00 shift changeover (audit) ───────────────────────────────────────
   // Only a morning session on today's date can hit the hand-over. Two shifts:
   // Morning 07h00–16h00, Afternoon/Night 16h00–01h00.
+  // Rules in lib/core/changeover.ts; `now` is injected so they are testable.
   function pastChangeover(): boolean {
-    const now = new Date()
-    return shift === 'morning' && dateParam === format(now, 'yyyy-MM-dd') && now.getHours() >= 16
+    return isPastShiftChangeover(shift, dateParam, new Date())
   }
 
   // Load the afternoon roster for this section — their PINs unlock the hand-over.
@@ -1107,6 +1108,17 @@ function CaptureScreen() {
   // persist() writes for every save the floor makes. Moved verbatim; `kind` and
   // the work-centre name were their only closure dependencies and are now
   // arguments. Pinned by capture-rows.test.ts (ARCHITECTURE.md §8).
+  // ONE changeover plan, asked once. The trigger, the dialog and the handler all
+  // read this same object, so the button cannot offer something the handler will
+  // refuse — the defect class in ARCHITECTURE.md §4. Rules in
+  // lib/core/changeover.ts; nothing about them lives on this page any more.
+  const changeoverPlan = planChangeover({
+    variant: active?.variant,
+    totalIn:  active ? prodTotals(active).totalIn  : 0,
+    totalOut: active ? prodTotals(active).totalOut : 0,
+    isSupervisor: canApprove,
+  })
+
   const rowCtx = { kind, workCentre: meta.name, dustProductType }
   const buildDebag = (prods: Production[], sid: string) => buildDebagRows(prods, sid, rowCtx)
   const buildBag   = (prods: Production[], sid: string) => buildBagRows(prods, sid, rowCtx)
@@ -1559,11 +1571,7 @@ function CaptureScreen() {
   // not a changeover, so it never nags. The afternoon operator's own login
   // records their shift start on a fresh session/timesheet.
   function earlyChangeoverLikely(): boolean {
-    if (shift !== 'morning') return false
-    const now = new Date()
-    if (dateParam !== format(now, 'yyyy-MM-dd')) return false
-    const beforeCutoff = now.getHours() < 15 || (now.getHours() === 15 && now.getMinutes() < 30)
-    return beforeCutoff && capturedProductionCount() >= 2
+    return isEarlyChangeoverLikely(shift, dateParam, capturedProductionCount(), new Date())
   }
 
   async function handleSubmit() {
@@ -1781,21 +1789,21 @@ function CaptureScreen() {
     changeoverBusyRef.current = true
     setChangeoverBusy(true)
     try {
-      const leftoverKg = active
-        ? Math.max(0, Math.round((prodTotals(active).totalIn - prodTotals(active).totalOut) * 10) / 10)
-        : 0
+      // Re-derived at the moment of the click rather than trusting the render's
+      // copy: the balance can move between opening the dialog and confirming it.
+      const plan = planChangeover({
+        variant: active?.variant,
+        totalIn:  active ? prodTotals(active).totalIn  : 0,
+        totalOut: active ? prodTotals(active).totalOut : 0,
+        isSupervisor: canApprove,
+      })
+      if (!plan.allowed) { setError(plan.blockedReason); return }
       await snapshotChangeoverBalance()
       try { await flushSave() } catch { /* the snapshot and the new record still proceed */ }
-      // mayPoolMaterial(), not !isOrganicVariant(): the negated form permits the
-      // carry-over whenever the variant is merely UNRECOGNISED, which is the one
-      // case that most deserves a stop. This asks the positive question — is this
-      // definitely conventional — so an unknown variant refuses. See
-      // lib/core/variants.ts.
-      const carryFamily = mayPoolMaterial(active?.variant) ? variantFamily(active?.variant) : null
-      if (carryMaterial && leftoverKg > 0 && carryFamily) {
+      if (carryMaterial && plan.mayCarry && plan.carryFamily) {
         try {
           await logBucketElevator('generated', {
-            sectionId, variantFamily: carryFamily, kg: leftoverKg,
+            sectionId, variantFamily: plan.carryFamily, kg: plan.leftoverKg,
             date: dateParam, shift, sessionId,
             note: 'Changeover — material continued into the next record by supervisor',
           })
@@ -1892,7 +1900,7 @@ function CaptureScreen() {
               <div className="font-semibold text-[15px] text-text">Changeover — switch grade/variant</div>
             </div>
             <div className="p-5 space-y-3">
-              {isOrganicVariant(active.variant) ? (
+              {!changeoverPlan.mayCarry && changeoverPlan.carryRefusal === 'organic' ? (
                 <p className="text-[13px] text-text-muted">
                   This batch is <strong className="text-text">{VARIANT_OPTIONS.find(v => v.value === active.variant)?.label ?? active.variant}</strong> — organic material must stay segregated, so this closes it off as its own record. The new grade/variant starts a fresh record with its own mass balance.
                 </p>
@@ -1905,8 +1913,8 @@ function CaptureScreen() {
                     Leftover raw material can still be bagged out as Blocks / Heavy Sticks / Indent Sticks under the new grade — it is just recorded against the new record rather than carried across.
                   </p>
                   {/* Only promise the second option where it is actually
-                      offered — same predicate as the button below. */}
-                  {mayPoolMaterial(active.variant) && (
+                      offered — the SAME plan the button below reads. */}
+                  {changeoverPlan.mayCarry && (
                     <p className="text-[12px] text-text-muted">
                       If the leftover has <strong className="text-text">not</strong> all been bagged out and physically continues into the next run, use the second option — it carries the balance forward as material in.
                     </p>
@@ -1927,17 +1935,23 @@ function CaptureScreen() {
                   not combine (§5). Kept visually secondary to the clean start,
                   which is what happens on almost every changeover.
 
-                  Gated on mayPoolMaterial(), the identical predicate the handler
-                  uses, so the button cannot be offered for a case the handler
-                  will then refuse (ARCHITECTURE.md §4 — gate validation on the
-                  same condition as the render). An unrecognised variant hides
-                  it, same as organic. */}
-              {mayPoolMaterial(active.variant) && (
+                  Gated on the same ChangeoverPlan the handler acts on, so the
+                  button cannot be offered for a case the handler will then
+                  refuse (ARCHITECTURE.md §4). Organic, an unrecognised variant
+                  and a record with nothing left over all hide it — and the plan
+                  says which, so the reason can be shown. */}
+              {changeoverPlan.mayCarry ? (
                 <button onClick={() => confirmGradeChangeover(true)} disabled={changeoverBusy}
                   className="w-full px-4 py-2.5 rounded-xl border border-stone-200 text-stone-600 text-[13px] font-medium hover:border-brand hover:text-brand transition-colors disabled:opacity-60 disabled:cursor-not-allowed">
                   Continue leftover material into the new record
+                  {changeoverPlan.leftoverKg > 0 ? ` (${changeoverPlan.leftoverKg.toFixed(1)} kg)` : ''}
                 </button>
-              )}
+              ) : changeoverPlan.carryRefusal && changeoverPlan.carryRefusal !== 'nothing-left' ? (
+                // Say why rather than just omitting the option — a supervisor
+                // who came to use it needs to know it was refused, not wonder
+                // whether they mis-tapped.
+                <p className="text-[11px] text-stone-400 px-1 text-center">{changeoverPlan.carryRefusalReason}</p>
+              ) : null}
 
               <button onClick={() => setGradeChangeover(false)} disabled={changeoverBusy}
                 className="w-full px-4 py-2.5 rounded-xl text-stone-500 text-[13px] font-medium hover:bg-stone-50 disabled:opacity-60">
@@ -2232,14 +2246,14 @@ function CaptureScreen() {
                     that silently does nothing gets tapped repeatedly. */}
                 {sectionId === 'sieving' && !locked && active.variant && (
                   <div className="pt-3 border-t border-stone-100">
-                    {canApprove ? (
+                    {changeoverPlan.allowed ? (
                       <button onClick={() => setGradeChangeover(true)} disabled={changeoverBusy}
                         className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl border border-stone-200 text-stone-600 font-medium text-[13px] hover:border-brand hover:text-brand transition-colors disabled:opacity-60 disabled:cursor-not-allowed">
                         <RefreshCw size={14} /> Changeover — switch grade/variant
                       </button>
                     ) : (
                       <p className="text-[11px] text-stone-400 text-center">
-                        To switch grade or variant, ask a supervisor — a changeover closes this record and opens a new one.
+                        {changeoverPlan.blockedReason} A changeover closes this record and opens a new one.
                       </p>
                     )}
                   </div>

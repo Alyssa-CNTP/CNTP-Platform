@@ -2,6 +2,94 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-04 — Alyssa (Hooks gate without workflow scope; render smoke tests; changeover becomes core)
+
+**Files changed:** `package.json`, `vitest.config.mts`,
+`components/production/capture/render-smoke.test.tsx` (new),
+`lib/core/changeover.ts` (new), `lib/core/changeover.test.ts` (new),
+`app/(app)/production/capture/[section]/page.tsx`,
+`supabase/migrations/20260903_003_prod_debagging_unique_index_drift.sql` (renamed)
+
+### The hooks gate now runs in CI, without touching `.github/workflows/`
+
+`npm run lint:hooks` was written, passing, and gating nothing, because the PAT
+cannot write workflow files. Solved with npm's own `posttest` hook:
+
+    "test":     "vitest run",
+    "posttest": "npm run lint:hooks",
+
+CI already runs `npm run test` as a hard gate, and npm runs `posttest`
+automatically after it. Verified both ways: with a hook planted below an early
+return, `npm run test` exits **1**; clean, it exits **0**. `test:watch` is
+untouched, so the 11-second repo lint does not run on every keystroke.
+
+The four `ci.yml` lines are still worth adding when a token with `workflow`
+scope is to hand — a named step reads better in the Actions log — but the gate
+no longer depends on it.
+
+### Runtime cover over the capture components — the containment gap closed
+
+Yesterday's `<FeatureBoundary>` stopped one section's crash taking the screen
+down, but nothing detected the crash. `render-smoke.test.tsx` closes that with
+**22 tests** and no new dependency.
+
+`renderToStaticMarkup` runs the render pass in plain node. No jsdom, no auth, no
+mocking — `useEffect` does not run during a server render, so nothing reaches
+the database. Each section is rendered three ways: empty, with material
+captured, and locked. `CaptureOverview` is rendered against all five section
+shapes plus a both-shifts case, because it reads every section's data and is
+where the duck-typing bug lived.
+
+Proven to work rather than assumed: planting a crash in `GranuleCapture` fails
+exactly the three Granule cases and names the section.
+
+`vitest.config.mts` said component tests belong in Playwright. That assumed
+Playwright could run in CI; it cannot, because the app signs in through SSO.
+The premise changed, so the comment did.
+
+**A false alarm worth recording:** the first draft passed `assignment={null}`
+and appeared to find a crash in `SievingCapture`. It was not one — the capture
+page guards with `if (!assignment) return` far above the render, so a null never
+reaches the component, and the compiler rejects it if you try. A fixture that is
+not a state the app can be in is worse than no test.
+
+### The changeover is now a core function
+
+The rules were four expressions scattered through the capture page — the
+supervisor gate in one, the organic rule in a second, the leftover arithmetic in
+a third, the button's `disabled` in a fourth — all of which had to agree, none
+testable. That is the defect class ARCHITECTURE.md §4 names, with three PRs
+against it.
+
+`lib/core/changeover.ts` replaces them with one question:
+
+    planChangeover({ variant, totalIn, totalOut, isSupervisor }) -> ChangeoverPlan
+
+The trigger, the dialog and the handler all read the same plan, so the button
+cannot offer something the handler will refuse. **38 tests**, including an
+invariant sweep over every combination of variant, role and balance.
+
+Two axes are kept apart deliberately: `blockedReason` explains the **actor**
+("ask a supervisor"), `carryRefusal` explains the **material** (organic,
+unrecognised variant, nothing left). A supervisor who came to carry material now
+sees *why* it was refused instead of the option silently missing.
+
+`isPastShiftChangeover()` and `isEarlyChangeoverLikely()` moved too, taking
+`now` as an argument so the 16h00 hand-over and the 15h30 submit prompt are
+testable rather than clock-dependent.
+
+The handler re-derives the plan at the moment of the click rather than trusting
+the render's copy — the balance can move between opening the dialog and
+confirming it.
+
+### Migration renumbered
+
+`20260903_002_prod_debagging_unique_index_drift.sql` collided with
+`20260903_002_customer_aliases.sql`. Renumbered to `_003`.
+
+517 tests across 26 files. Lint at the 3021 baseline exactly; type errors at the
+36 baseline. Build clean.
+
 ## 2026-09-04 — Alyssa (Row builders characterised and moved to core)
 
 **Files changed:** `lib/core/capture-rows/index.ts` (new),
