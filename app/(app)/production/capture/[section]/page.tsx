@@ -7,7 +7,7 @@ import { format, parseISO, differenceInCalendarDays } from 'date-fns'
 import {
   ChevronLeft, Loader2, CheckCircle2, AlertTriangle, Users, Lock,
   ClipboardList, PenLine, Save, Sparkles, Info, Plus, Gauge, HelpCircle,
-  FileText, Check, ArrowRight, RefreshCw, Scale,
+  FileText, Check, ArrowRight, Scale,
 } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
@@ -45,6 +45,8 @@ import { variantForDb } from '@/lib/core/variants'
 import FeatureBoundary from '@/components/shared/FeatureBoundary'
 import { buildDebagRows, buildBagRows } from '@/lib/core/capture-rows'
 import { planChangeover, isPastShiftChangeover, isEarlyChangeoverLikely } from '@/lib/core/changeover'
+import { ChangeoverTrigger, ChangeoverDialog } from '@/features/changeover'
+import { flags } from '@/lib/config/flags'
 import { upperCode } from '@/lib/production/normalize-code'
 import { dbDate } from '@/lib/production/db-date'
 import { CleaningPanel } from '@/components/production/capture/CleaningPanel'
@@ -1888,78 +1890,19 @@ function CaptureScreen() {
         />
       )}
 
-      {/* Mid-shift grade/variant changeover confirm — shows the leftover mass
-          balance before switching, since it's the operator's cue to bag it out
-          as Blocks/Sticks under the new grade (or, if organic, that it must be
-          closed off on its own). */}
-      {gradeChangeover && active && (
-        <div style={{ position: 'fixed', inset: 0, zIndex: 9997, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.45)', padding: 16 }}>
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm overflow-hidden">
-            <div className="flex items-center gap-2.5 px-5 py-4 border-b border-stone-100">
-              <RefreshCw size={18} className="text-brand shrink-0" />
-              <div className="font-semibold text-[15px] text-text">Changeover — switch grade/variant</div>
-            </div>
-            <div className="p-5 space-y-3">
-              {!changeoverPlan.mayCarry && changeoverPlan.carryRefusal === 'organic' ? (
-                <p className="text-[13px] text-text-muted">
-                  This batch is <strong className="text-text">{VARIANT_OPTIONS.find(v => v.value === active.variant)?.label ?? active.variant}</strong> — organic material must stay segregated, so this closes it off as its own record. The new grade/variant starts a fresh record with its own mass balance.
-                </p>
-              ) : (
-                <>
-                  <p className="text-[13px] text-text-muted">
-                    This closes the current record off with its own mass balance, and starts a fresh one for the new grade/variant.
-                  </p>
-                  <p className="text-[13px] text-text-muted">
-                    Leftover raw material can still be bagged out as Blocks / Heavy Sticks / Indent Sticks under the new grade — it is just recorded against the new record rather than carried across.
-                  </p>
-                  {/* Only promise the second option where it is actually
-                      offered — the SAME plan the button below reads. */}
-                  {changeoverPlan.mayCarry && (
-                    <p className="text-[12px] text-text-muted">
-                      If the leftover has <strong className="text-text">not</strong> all been bagged out and physically continues into the next run, use the second option — it carries the balance forward as material in.
-                    </p>
-                  )}
-                </>
-              )}
-            </div>
-            <div className="px-5 pb-5 space-y-2">
-              <button onClick={() => confirmGradeChangeover(false)} disabled={changeoverBusy}
-                className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-brand text-white text-[13px] font-semibold hover:bg-brand-mid transition-colors disabled:opacity-60 disabled:cursor-not-allowed">
-                {changeoverBusy ? <Loader2 size={14} className="animate-spin" /> : null}
-                {changeoverBusy ? 'Opening new record…' : 'Start a clean record'}
-              </button>
-
-              {/* The supervisor's explicit exception. Offered ONLY when the
-                  leftover has not all been bagged out, and NEVER for organic —
-                  organic and conventional are separate physical pools and must
-                  not combine (§5). Kept visually secondary to the clean start,
-                  which is what happens on almost every changeover.
-
-                  Gated on the same ChangeoverPlan the handler acts on, so the
-                  button cannot be offered for a case the handler will then
-                  refuse (ARCHITECTURE.md §4). Organic, an unrecognised variant
-                  and a record with nothing left over all hide it — and the plan
-                  says which, so the reason can be shown. */}
-              {changeoverPlan.mayCarry ? (
-                <button onClick={() => confirmGradeChangeover(true)} disabled={changeoverBusy}
-                  className="w-full px-4 py-2.5 rounded-xl border border-stone-200 text-stone-600 text-[13px] font-medium hover:border-brand hover:text-brand transition-colors disabled:opacity-60 disabled:cursor-not-allowed">
-                  Continue leftover material into the new record
-                  {changeoverPlan.leftoverKg > 0 ? ` (${changeoverPlan.leftoverKg.toFixed(1)} kg)` : ''}
-                </button>
-              ) : changeoverPlan.carryRefusal && changeoverPlan.carryRefusal !== 'nothing-left' ? (
-                // Say why rather than just omitting the option — a supervisor
-                // who came to use it needs to know it was refused, not wonder
-                // whether they mis-tapped.
-                <p className="text-[11px] text-stone-400 px-1 text-center">{changeoverPlan.carryRefusalReason}</p>
-              ) : null}
-
-              <button onClick={() => setGradeChangeover(false)} disabled={changeoverBusy}
-                className="w-full px-4 py-2.5 rounded-xl text-stone-500 text-[13px] font-medium hover:bg-stone-50 disabled:opacity-60">
-                Cancel
-              </button>
-            </div>
-          </div>
-        </div>
+      {/* Mid-shift grade/variant changeover confirm. The dialog is
+          features/changeover; the handler below stays here because it is
+          session lifecycle — flush, snapshot, ledger, new session. */}
+      {flags.changeover && gradeChangeover && active && (
+        <FeatureBoundary name="Changeover">
+          <ChangeoverDialog
+            plan={changeoverPlan}
+            variantLabel={VARIANT_OPTIONS.find(v => v.value === active.variant)?.label ?? String(active.variant)}
+            busy={changeoverBusy}
+            onConfirm={confirmGradeChangeover}
+            onCancel={() => setGradeChangeover(false)}
+          />
+        </FeatureBoundary>
       )}
 
       {/* Hourly infeed-VSD prompt — auto-pops every hour while the line runs,
@@ -2244,18 +2187,20 @@ function CaptureScreen() {
                     (canApprove = supervisor / IT / admin). An operator sees why
                     it is unavailable instead of a dead button, because a control
                     that silently does nothing gets tapped repeatedly. */}
-                {sectionId === 'sieving' && !locked && active.variant && (
+                {flags.changeover && sectionId === 'sieving' && !locked && active.variant && (
                   <div className="pt-3 border-t border-stone-100">
-                    {changeoverPlan.allowed ? (
-                      <button onClick={() => setGradeChangeover(true)} disabled={changeoverBusy}
-                        className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl border border-stone-200 text-stone-600 font-medium text-[13px] hover:border-brand hover:text-brand transition-colors disabled:opacity-60 disabled:cursor-not-allowed">
-                        <RefreshCw size={14} /> Changeover — switch grade/variant
-                      </button>
-                    ) : (
-                      <p className="text-[11px] text-stone-400 text-center">
-                        {changeoverPlan.blockedReason} A changeover closes this record and opens a new one.
-                      </p>
-                    )}
+                    {/* NOT `silent`. A changeover button that vanishes on error
+                        is reported as "the changeover is gone", which sends a
+                        supervisor looking for the wrong bug. The default notice
+                        names it, and its reassurance — capture is unaffected —
+                        is true here: this control does not touch the save path. */}
+                    <FeatureBoundary name="Changeover">
+                      <ChangeoverTrigger
+                        plan={changeoverPlan}
+                        busy={changeoverBusy}
+                        onOpen={() => setGradeChangeover(true)}
+                      />
+                    </FeatureBoundary>
                   </div>
                 )}
               </div>

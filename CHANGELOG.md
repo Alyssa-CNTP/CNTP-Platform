@@ -2,6 +2,72 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-04 — Alyssa (The changeover becomes a feature module — the first one done to the plan)
+
+**Files changed:** `features/changeover/{index.ts,ChangeoverTrigger.tsx,ChangeoverDialog.tsx,changeover-ui.test.tsx}` (new), `app/(app)/production/capture/[section]/page.tsx`, `lib/config/flags.ts`, `vitest.config.mts`, `docs/capture-phases.md`
+
+The rules moved to `lib/core/changeover.ts` two entries ago. The UI has now followed, to
+`features/changeover/`, behind `flags.changeover` and wrapped in `<FeatureBoundary>`.
+Capture page **2,783 → 2,728 lines**; type errors **36 → 32**.
+
+### The three-way split — the shape later features should copy
+
+| Layer | Owns | Lives in |
+|---|---|---|
+| core | the **rules** | `lib/core/changeover.ts` |
+| feature | the **presentation** | `features/changeover/` |
+| page | the **session lifecycle** | `capture/[section]/page.tsx` |
+
+**The handler deliberately stayed on the page.** It flushes unsaved edits, snapshots the
+closing mass balance, appends to `bucket_elevator_log` and opens a new session — session
+lifecycle the page owns. Moving it would mean threading six callbacks into the feature and
+would make the feature a second owner of the save path, which ARCHITECTURE.md §4 forbids
+until Phase 7. What moved is the ~150 lines of JSX; what stayed is what the page is for.
+
+### 14 tests, and proof they bite
+
+Built through `planChangeover()` rather than hand-written plan objects — a hand-written
+plan can express a state core would never produce, and then the test passes while the real
+screen breaks.
+
+The last one is the invariant the split exists for: for every plan, the dialog offers the
+carry option **iff** `plan.mayCarry`, and the trigger renders a button **iff**
+`plan.allowed`. Verified by planting the exact defect it guards against
+(`{plan.mayCarry ? (` → `{true ? (`): **5 tests fail, naming the organic case.**
+
+One assertion of mine was wrong first time — counting `/disabled/` in the markup returned
+8, not 3, because Tailwind's `disabled:opacity-60` is in the class string. It now matches
+`disabled=""`, the attribute.
+
+`vitest.config.mts` gained `features/**/*.test.tsx`; the include had `.ts` only, so a
+feature's component tests would have been silently skipped.
+
+### What was NOT folded in
+
+Two things in the capture page share the word "changeover" and are a different
+concern — shift **handover**, not grade/variant — and neither reads a `ChangeoverPlan`:
+`ChangeoverModal` (the 16h00 PIN gate) and `ChangeoverSubmitModal` (the early-submit
+prompt). Grouping them because the name matches is the §1A duck-typing mistake applied to
+names instead of fields.
+
+`<FeatureBoundary>` here is deliberately **not** `silent`. A changeover button that
+vanishes on error gets reported as "the changeover is gone", which sends a supervisor
+after the wrong bug; the default notice names it, and its reassurance — capture unaffected
+— is true, since this control does not touch the save path.
+
+### ⚠ Deploy note — the flag defaults to TRUE
+
+`flags.changeover` defaults **on**, unlike every other flag in that file. This is shipped,
+working behaviour on staging; a `false` default would silently remove a supervisor control
+the moment this merged, which is the silent-latch failure mode rather than a safe default.
+**Staging needs no env change.**
+
+The flag exists for the promotion. `main` removed this button because it was broken, so
+production must receive **`NEXT_PUBLIC_FF_CHANGEOVER=false`** in the *same* change that
+ships the feature — not as a follow-up.
+
+540 tests. Lint 3021, at baseline exactly. Boundary lint clean.
+
 ## 2026-09-01 — Gustav (Maintenance: monthly checklists imported from the QM-FM workbooks; reading-checklist text no longer cut off)
 
 **Files changed:** `app/(app)/maintenance/scheduled/page.tsx`, `app/(app)/layout.tsx`, `supabase/migrations/20260901_010_monthly_checklists_from_workbooks.sql` (new, applied to staging)
