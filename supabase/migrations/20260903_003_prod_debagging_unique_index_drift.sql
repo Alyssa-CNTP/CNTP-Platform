@@ -28,10 +28,17 @@
 -- migrations has the same constraint the code is now written against. It is a
 -- no-op where the index already exists.
 --
--- !! VERIFY THE LIVE DEFINITION BEFORE TRUSTING THIS FILE. The index was added
--- out of band and its exact columns are unconfirmed; if the live one is partial
--- or spans different columns, correct this file to match rather than creating a
--- second, differently-shaped index:
+-- VERIFIED 2026-09-04 against BOTH databases. pg_indexes reports, identically on
+-- staging and production:
+--
+--   CREATE UNIQUE INDEX prod_debagging_session_bag_uidx
+--     ON production.prod_debagging USING btree (session_id, bag_no)
+--
+-- Same name, same columns, same order, unique, NOT partial — exactly what the
+-- statement below declares. So this file is a confirmed no-op on both, and its
+-- only job is to make a database rebuilt from migrations match the live ones.
+--
+-- Re-check with, if it is ever in doubt again:
 --
 --   SELECT indexdef FROM pg_indexes
 --   WHERE schemaname = 'production' AND tablename = 'prod_debagging';

@@ -2,6 +2,39 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-04 — Alyssa (prod_debagging index drift verified against both databases)
+
+**Files changed:** `supabase/migrations/20260903_003_prod_debagging_unique_index_drift.sql`
+
+The migration carried a "VERIFY THE LIVE DEFINITION BEFORE TRUSTING THIS FILE"
+warning, because the index was added out of band and its exact shape was
+unconfirmed. It has now been checked on **both** databases. `pg_indexes` reports,
+identically on staging and production:
+
+    CREATE UNIQUE INDEX prod_debagging_session_bag_uidx
+      ON production.prod_debagging USING btree (session_id, bag_no)
+
+Same name, same columns, same order, unique, **not partial** — exactly what the
+migration declares. No correction needed. Applying it is a confirmed no-op whose
+only job is to make a database rebuilt from migrations match the live ones. The
+duplicate `(session_id, bag_no)` pre-flight also returned zero rows on both.
+
+Warning replaced with the verified result, so it does not outlive its purpose.
+
+### Two things the check turned up, neither urgent
+
+- **`prod_bagging` has not had the same check.** `20260901_001` states its index
+  exists live and that claim is still untested. A verification script sits
+  alongside the migrations in `Documents/Supabase Scripts/Refactor/`.
+- **`prod_debagging` carries three indexes covering `session_id`, two of them
+  redundant.** `prod_debagging_session_idx` and `prod_debagging_session_id_idx`
+  are the same index under two names, and both are already served by the
+  `(session_id, bag_no)` unique index, since a btree can be used on a prefix of
+  its columns. Every index is maintained on every write and the capture save
+  path is delete-then-insert of every row on every save, so dropping them
+  removes a third of the index maintenance on the busiest write path. Optional,
+  instantly reversible, script provided — not applied.
+
 ## 2026-09-04 — Alyssa (Hooks gate without workflow scope; render smoke tests; changeover becomes core)
 
 **Files changed:** `package.json`, `vitest.config.mts`,
