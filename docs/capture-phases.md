@@ -30,7 +30,7 @@ test file across 144 component files, and both E2E specs skipping in CI.
 | `lint:hooks` gated | **Done, by another route** — the PAT has no `workflow` scope, so `ci.yml` still cannot be edited from here. Instead `package.json` runs it as a `posttest` hook, so `npm run test` exits non-zero on a hooks violation and the existing Unit tests step fails. Verified both ways by planting a hook below an early return. Adding the four named `ci.yml` lines is now cosmetic — it reads better in the Actions log, nothing more. |
 | `<FeatureBoundary>` mounted | **Done** — it had **zero usages** since Phase 3. The five sections rendered bare in a ternary, so one throwing blanked the whole route. Now wrapping the section mount and `CaptureOverview`. |
 | E2E skip made honest | **Done** — `requireAuthState()` throws when `CI` is set, so wiring the suite in before a session artefact exists gives a red build instead of a false pass. |
-| Row builders characterised | **Done** — 42 tests over `buildDebagRows`/`buildBagRows`, all five sections. The extraction has already paid for itself: a blank-serial collision that fails the whole save was reproduced by *calling the builders*, where before it would have needed a live save on the floor. |
+| Row builders characterised | **Done** — 42 tests over `buildDebagRows`/`buildBagRows`, all five sections. They now also guarantee no output path emits `''` for a serial, locally, rather than depending on a cleanup pass in `persist()` 300 lines away. (An earlier version of this row called that a live bug the extraction had caught. It was not — see the correction below.) |
 | Render smoke tests | **Done** — 22 tests. Every section rendered empty, populated and locked, plus `CaptureOverview` against all five section shapes and both shifts. |
 
 **The "no runtime cover" gap is now partly closed.** `renderToStaticMarkup` runs the
@@ -111,28 +111,121 @@ had 325 commits of independent production hotfixes since the split.
 are not merge conflicts to resolve mechanically; each is two working implementations of
 the same idea and only one can survive:
 
-| Concern | `main` | `staging` | Decision needed |
+| Concern | `main` | `staging` | Decision |
 |---|---|---|---|
-| #867 reconcile | `lib/production/self-heal-reconcile.ts` | `lib/production/debag-reconcile.ts` (+ tests) | Which reconcile is correct on the floor. Note the 2026-08-31 incident: a session-scoped self-heal against batch-scoped writes doubled rows on every page load. |
-| Top-up accounting | `lib/production/order-detail.ts`, **845 lines**, no `transferInKg` | `order-detail.ts` **492 lines**, with `transferInKg` handled in `lib/core/mass-balance/` | Whether bag-to-bag transfers are subtracted in core (staging) or absorbed in the order detail (main). Getting this wrong double-counts material on production orders. |
+| #867 reconcile | `lib/production/self-heal-reconcile.ts` | `lib/production/debag-reconcile.ts` (+ tests) | **Staging.** Decided 2026-09-04. The 2026-08-31 incident is the evidence: a session-scoped self-heal against batch-scoped writes doubled rows on every page load. |
+| Top-up accounting | `lib/production/order-detail.ts`, **845 lines**, no `transferInKg` | `order-detail.ts` **492 lines**, with `transferInKg` in `lib/core/mass-balance/` | **Staging.** Decided 2026-09-04. Bag-to-bag transfers are subtracted in core, where the rule is tested and has one owner, rather than absorbed in the order detail. |
 
-**Until both are decided, "promote to production" has no well-defined meaning** — there is
-no single answer to what the promoted behaviour should be.
+**Both resolved in staging's direction — the healthier long-term route.** Neither is a
+merge to perform mechanically: `self-heal-reconcile.ts` must be *deleted* from `main` as
+part of the cherry-pick, not left alongside `debag-reconcile.ts`, or production runs two
+reconciles with opposite scoping assumptions. That is the row-doubling mechanism again.
 
-**Order of work, once they are decided:**
+### What can move to `main` safely — probed, not assumed, 2026-09-04
 
-1. Decide the two concerns above.
-2. Extract the changeover dialog to `features/changeover/` (the rules are already core).
-3. Cherry-pick the guardrails onto a branch from `main` **first**, as their own PR —
-   `vitest.config.mts`, the two eslint configs, `ci.yml`, the npm scripts, `lib/core/**`.
-   They are additive: nothing on `main` imports them, so this cannot change production
-   behaviour, and it means every later cherry-pick lands with the net already under it.
-   The lint and type baselines will need re-measuring against `main`, which has never had
-   them.
-4. Cherry-pick features one at a time, per the CLAUDE.md promotion rule — never a branch
-   merge. Resolve `CHANGELOG.md` by keeping both sides.
-5. Apply pending Supabase migrations to production only **after** the code that needs
+The worry is legitimate: `lib/core` was extracted *from* capture pages that `main` does
+not have. The capture page differs by **1,187 lines** across the two branches (2,808 on
+main, 2,783 on staging) and all five section components are contested. So the question of
+whether core can travel without them was tested, by checking out `main`'s tree, dropping
+staging's `lib/core` and the three lint/test configs on top, and running the gates.
+
+| Probe | Result |
+|---|---|
+| `lint:boundaries` | **Passes**, exit 0 |
+| `npm run test` (lib/core only) | **413/413 pass**, unchanged, against `main`'s tree |
+| `tsc` over `lib/core` | **0 errors** |
+| Source type errors on `main` | **36** — identical to staging's ratchet baseline, so it transplants as-is |
+| `lint:hooks` | **FAILS — 1 error**, and it is a live production crash (below) |
+
+Two structural facts make this work, and both should be re-checked before the cherry-pick
+rather than assumed to hold:
+
+- **Nothing on `main` imports `@/lib/core`.** Not one file. So the module lands as dead
+  code with zero runtime effect — which is what "additive" has to mean to be worth
+  claiming. `main` keeps its own inline `buildDebag`/`buildBag` at `[section]/page.tsx`
+  lines 1052 and 1146 until the page is deliberately switched over, which is separate work.
+- **`main` already exports the five section data types** — `SievingData`, `RefiningData`,
+  `GranuleData`, `BlenderData`, `PasteuriserData` — with shapes compatible enough that
+  `lib/core/capture-rows` typechecks against them unmodified.
+
+That second point is also the **one hole in the boundary rule**. `lib/core/capture-rows/
+index.ts` imports those types from `@/components/production/capture/*`, and
+`eslint.boundaries.mjs` forbids `features/`, `app/`, React/Next and `lib/supabase/` — but
+not `components/`. So core reaching into components is currently legal, against the spirit
+of ARCHITECTURE.md §2. It works today only because the types happen to match on both
+branches. **This is the Phase 2 unfinished half wearing a different hat**: the five
+section data types still live in component files instead of `lib/core/types/`. Move them,
+then add `components/` to `CORE_FORBIDDEN`.
+
+#### The probe found a live crash on production
+
+    app/(app)/admin/inventory-import/page.tsx:129
+    error  React Hook "useCallback" is called conditionally  react-hooks/rules-of-hooks
+
+`const { role } = useAuth()` at line 91, `if (role !== 'admin') return <...>` at line 102,
+`useCallback` at line 129. `role` starts unresolved and then resolves, so the hook count
+changes between renders — React error #310, and the page comes down **for admins only**,
+which is to say for exactly the people the page is for. Same class as HOTFIX #901.
+
+**Staging already fixed it** (the hook moved above the gate, with a comment explaining
+why). This is the whole argument for the guardrails-first order in one example: the gate
+found a live production bug in under a minute, and the fix already exists.
+
+#### CORRECTION — the blank-serial collision was never live, on either branch
+
+An earlier version of this section said `main` carried the blank-serial collision PR #912
+fixed on staging, because its inline `buildBag` writes `bag_serial_no: b.serial` raw on six
+of seven paths. **That was wrong, and so was the #912 claim it rested on.**
+
+`persist()` normalises blanks before it inserts anything, on both branches:
+
+```ts
+const blankSerialToNull = (r: any) => {
+  if (!r.bag_serial_no || !String(r.bag_serial_no).trim()) r.bag_serial_no = null
+}
+debag.forEach(blankSerialToNull)
+bag.forEach(blankSerialToNull)
+```
+
+Staging line 1193, `prod_bagging` insert at 1345 — **before**, not after. It predates #912
+(present at `a8b5337`). And `buildBag` has exactly **one** call site on each branch, inside
+`persist()`, so nothing reaches the database around it. `''` never got to Postgres.
+
+**The lesson worth keeping**, since this is the second time a comment has been misread as a
+live symptom: the comment above that guard describes the bug it was *written to fix*. Scar
+tissue reads like an open wound (ARCHITECTURE.md §1B says as much about the defensive
+comments around the save path). Proving a function returns a bad value is not proving the
+system is broken — trace the value to the write before writing it up.
+
+The `serialOrNull()` change stays: the builders are pure and independently callable now, so
+the guarantee belongs in them, not in a caller three hundred lines away. But it is defence
+in depth, not a fix.
+
+**Order of work.** Steps 1 and 2 are decided and probed; the risk rises sharply at step 5.
+
+1. **The admin-page hook crash** — one file, thirteen lines, the fix already proven on
+   staging, and it is live on production now. Nothing to weigh.
+2. **The guardrails** — `vitest.config.mts`, `eslint.boundaries.mjs`, `eslint.hooks.mjs`,
+   `ci.yml`, `CODEOWNERS`, `ARCHITECTURE.md`, the npm scripts, the two devDependencies
+   (`vitest` only — Playwright is excluded), and `lib/core/**`. Probed inert: nothing on `main`
+   imports core, 413 tests pass, 0 type errors, baseline already 36. Land this **before**
+   any feature, so every later cherry-pick arrives with the net under it.
+3. ~~**The blank-serial fix**~~ — **withdrawn.** There is nothing to fix; `main` has the
+   same `blankSerialToNull` guard in the same place. See the correction above.
+4. **The changeover** — extract the dialog to `features/changeover/` on staging first
+   (the rules are already core), then cherry-pick the whole feature. **This is now the
+   next piece of work.**
+5. **The capture module itself** — the 1,187 differing lines, all five section
+   components, the reconcile deletion and the top-up accounting. **This is where the care
+   goes.** Not one PR: one concern at a time, each with the E2E capture spec run against
+   staging beforehand, because unit tests do not cover the components and
+   `renderToStaticMarkup` catches only crashes, not wrong numbers.
+6. Apply pending Supabase migrations to production only **after** the code that needs
    them is deployed there.
+
+**Steps 1–3 cannot change production behaviour** and are worth doing on their own merit
+regardless of whether the full promotion ever happens. Step 5 is the actual promotion and
+should not begin until 1–4 are on `main` and a shift has run against them.
 
 **Do not merge `staging` into `main`.** With 325 commits of divergence and no common
 recent ancestor, the conflict surface is the whole capture module, and a mis-resolution
