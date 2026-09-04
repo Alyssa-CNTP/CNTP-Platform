@@ -2,6 +2,58 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-04 — Alyssa (Guardrails on production: tests, the boundary rule, the hooks gate)
+
+**Files changed:** `lib/core/**` (29 new), `eslint.boundaries.mjs` (new),
+`eslint.hooks.mjs` (new), `vitest.config.mts` (new), `ARCHITECTURE.md` (new),
+`CODEOWNERS` (new), `docs/capture-phases.md` (new), `package.json`
+
+Production runs today with **no unit tests, no boundary rule, no hooks gate and no CI
+workflow**. This adds the first three. Nothing here changes what the app does.
+
+### Why it is inert, established rather than assumed
+
+`lib/core` was extracted from capture pages `main` does not have — the capture page differs
+by 1,187 lines between the branches and all five section components are contested — so
+whether core could travel alone was the real question. It was tested by checking out
+`main`'s tree, dropping `lib/core` and the configs on top, and running the gates:
+
+| Probe | Result |
+|---|---|
+| `lint:boundaries` | passes |
+| `npm run test` | **413/413 pass** |
+| `tsc` over `lib/core` | **0 errors** |
+| `tsc` overall | **36** — already `main`'s number |
+
+Two structural facts make it work. **Nothing on `main` imports `@/lib/core`** — not one
+file — so the module lands as dead code with no runtime effect; `main` keeps its own
+inline `buildDebag`/`buildBag` at `[section]/page.tsx` 1052 and 1146 until the page is
+deliberately switched over, which is separate work and **not** part of this. And `main`
+already exports the five section data types with compatible shapes, so
+`lib/core/capture-rows` typechecks unmodified.
+
+### What running the tests on main reveals
+
+**16 test files, not 12.** `main` has four specs under `lib/quality` that have never been
+executed, because there has never been a runner. They pass.
+
+### Deliberately not included
+
+- **`.github/workflows/ci.yml`** — the PAT has no `workflow` scope, so it must be added by
+  hand. Until it is, the gates run locally only. `posttest` means `npm run test` also runs
+  the hooks gate, so one command covers both.
+- **Playwright** — the E2E suite cannot run in CI (SSO), and the VPS is disk-constrained,
+  so there is no reason to install it on production yet.
+- **`features/`** — nothing there is wanted on `main` yet. `lint:boundaries` takes
+  `--no-error-on-unmatched-pattern`, so its absence is fine.
+
+`CODEOWNERS` makes `lib/core`, `ARCHITECTURE.md` and `supabase/migrations` require review.
+That is a governance change on top of existing branch protection, and it is intended.
+
+**Local `next build` could not be run** — the worktree's `node_modules` is a symlink
+Turbopack rejects. No route imports these files and the build sets `ignoreBuildErrors`, so
+`tsc` is the stronger check for this change, and it is clean.
+
 ## 2026-09-04 — Alyssa (Inventory Import is down for admins — a hook below the admin gate)
 
 **Files changed:** `app/(app)/admin/inventory-import/page.tsx`
