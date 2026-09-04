@@ -18,7 +18,7 @@ import FeatureBoundary from './FeatureBoundary'
  * responsibility, not ours; that it IS one, and what it renders, is ours.
  */
 
-function render(props: { name: string; silent?: boolean }, error: Error | null) {
+function render(props: { name: string; silent?: boolean; fallback?: React.ReactNode }, error: Error | null) {
   const instance = new FeatureBoundary({ ...props, children: 'CAPTURE CONTENT' })
   instance.state = { error }
   return instance.render()
@@ -80,5 +80,34 @@ describe('the crash is reported', () => {
     instance.componentDidCatch(new Error('boom'), { componentStack: '' } as React.ErrorInfo)
     expect(console.error).toHaveBeenCalled()
     expect(String(vi.mocked(console.error).mock.calls[0]?.[0])).toContain('Supervisor adjustments')
+  })
+})
+
+describe('a section mount needs its own fallback', () => {
+  /**
+   * The default notice tells the operator "your capture is unaffected". For a
+   * decorative side panel that is true. For the section capture component — the
+   * form they enter bags into — it is exactly wrong, and the capture screen
+   * mounts one of five of those. Hence the `fallback` prop.
+   */
+  it('renders the given fallback instead of the default notice', () => {
+    const out = render(
+      { name: 'Sieving Tower capture', fallback: 'ASK YOUR SUPERVISOR' },
+      new Error('boom'),
+    ) as React.ReactElement
+    // A fragment wrapping the caller's node, not the built-in red box.
+    expect(out).not.toBe(null)
+    expect(JSON.stringify(out)).toContain('ASK YOUR SUPERVISOR')
+    expect(JSON.stringify(out)).not.toContain('your capture is unaffected')
+  })
+
+  it('still renders the children when nothing has thrown', () => {
+    expect(render({ name: 'Sieving Tower capture', fallback: 'ASK YOUR SUPERVISOR' }, null))
+      .toBe('CAPTURE CONTENT')
+  })
+
+  it('silent beats fallback — an explicit "show nothing" is not overridden', () => {
+    expect(render({ name: 'x', silent: true, fallback: 'SHOULD NOT APPEAR' }, new Error('boom')))
+      .toBe(null)
   })
 })

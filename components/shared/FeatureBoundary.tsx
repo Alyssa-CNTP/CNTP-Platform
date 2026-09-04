@@ -11,9 +11,24 @@
 // Before this existed there was no error boundary anywhere in the app, so any
 // component that threw during render blanked the whole route.
 //
-// Every feature mounted per ARCHITECTURE.md §3 goes inside one of these. Core
-// capture logic does NOT — if the mass balance itself is broken we want that
-// loud and visible, not quietly swallowed behind a friendly message.
+// Every feature mounted per ARCHITECTURE.md §3 goes inside one of these.
+//
+// ── On wrapping core capture logic ──────────────────────────────────────────
+//
+// This comment used to say core capture logic must NOT be wrapped, because a
+// broken mass balance should be loud rather than quietly swallowed. The intent
+// was right; the conclusion was wrong, and it left the five section components
+// mounted bare in a ternary chain, where ONE of them throwing during render
+// blanked the entire route — tab strip, Checks, Overview, Sign-off and all.
+//
+// A boundary here is not a silent swallow. It logs to the console AND shows a
+// red notice naming what failed. The operator keeps the rest of the screen, the
+// autosaved draft, and something specific to tell a supervisor, instead of
+// "This page couldn't load".
+//
+// What a section mount needs is a fallback that does not claim capture is fine
+// — hence the `fallback` prop. Use `silent` only for genuinely decorative
+// additions.
 
 import React from 'react'
 
@@ -25,6 +40,10 @@ type Props = {
    *  decorative additions where a visible error box would be more disruptive
    *  than the missing feature. */
   silent?: boolean
+  /** Replaces the default notice. Needed where the default's reassurance —
+   *  "your capture is unaffected" — would be untrue, e.g. a section capture
+   *  component that the operator cannot work without. */
+  fallback?: React.ReactNode
 }
 
 type State = { error: Error | null }
@@ -45,6 +64,7 @@ export default class FeatureBoundary extends React.Component<Props, State> {
   render() {
     if (!this.state.error) return this.props.children
     if (this.props.silent) return null
+    if (this.props.fallback) return <>{this.props.fallback}</>
 
     return (
       <div style={{

@@ -1,4 +1,4 @@
-import { test, expect, hasAuthState, SKIP_REASON, AUTH_STATE } from './fixtures'
+import { test, expect, requireAuthState, AUTH_STATE } from './fixtures'
 
 /**
  * THE ACCEPTANCE TEST for the read-modify-write fix.
@@ -28,7 +28,7 @@ const SECTION = 'sieving'
 
 test.describe('concurrent save on one session', () => {
   test.beforeEach(() => {
-    test.skip(!hasAuthState(), SKIP_REASON)
+    requireAuthState(test)
   })
 
   test.fixme('two operators saving the same session both keep their bags', async ({ browser }) => {
