@@ -42,6 +42,7 @@ import { productionTotals, sumProductionTotals, withSessionAdjustments,
   type ProductionTotals, type AnyBalanceData } from '@/lib/core/mass-balance'
 import { logBucketElevator, outstandingBucketElevator, variantFamily } from '@/lib/production/bucket-elevator'
 import { mayPoolMaterial, isOrganicVariant, variantForDb } from '@/lib/core/variants'
+import FeatureBoundary from '@/components/shared/FeatureBoundary'
 import { upperCode } from '@/lib/production/normalize-code'
 import { dbDate } from '@/lib/production/db-date'
 import { CleaningPanel } from '@/components/production/capture/CleaningPanel'
@@ -2456,6 +2457,36 @@ function CaptureScreen() {
                   sections (Sieving). Refining and Granule are variant-only. */}
               {(gradeless ? !!active.variant : !!(active.variant && active.grade)) || locked ? (
                 <>
+                  {/* The five section components render bare in a ternary. Any one
+                      of them throwing during render used to blank the WHOLE route
+                      — tab strip, Checks, Overview, Sign-off — leaving an operator
+                      mid-shift with "This page couldn't load" and no way to see
+                      what had already been captured.
+
+                      ARCHITECTURE.md §3 has required this wrapper since Phase 3.
+                      It had zero usages anywhere in the app until now.
+
+                      Only one section renders at a time, so one boundary here is
+                      enough; a per-section boundary would buy nothing. The
+                      fallback is spelled out rather than the default, because the
+                      default reassures that "your capture is unaffected" and for
+                      this mount that would be untrue. */}
+                  <FeatureBoundary
+                    name={`${meta.name} capture`}
+                    fallback={
+                      <div className="flex items-start gap-2.5 px-4 py-3.5 bg-red-50 border border-red-300 rounded-2xl text-[13px] text-red-900">
+                        <AlertTriangle size={16} className="shrink-0 mt-0.5" />
+                        <div>
+                          <div className="font-semibold">This section&rsquo;s capture form could not load.</div>
+                          <div className="mt-0.5">
+                            Everything already captured is saved and visible on the Overview tab, and
+                            Checks and Sign-off still work. Tell your supervisor which section this is
+                            before carrying on — do not re-enter bags anywhere else.
+                          </div>
+                        </div>
+                      </div>
+                    }
+                  >
                   {sectionId.startsWith('refining')
                     ? <RefiningCapture
                         key={active.id}
@@ -2529,6 +2560,7 @@ function CaptureScreen() {
                         sessionId={sessionId}
                       />
                   }
+                  </FeatureBoundary>
                   {!locked && !isPasteuriser(sectionId) && (
                     <button onClick={() => setTopUpOpen(true)}
                       className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-violet-600 text-white font-medium text-[14px] hover:bg-violet-700 transition-colors">
@@ -2582,6 +2614,26 @@ function CaptureScreen() {
                 <Info size={14} className="shrink-0 mt-0.5" />
                 <span>{runId ? 'Totals are combined across the whole production run (all shifts), grouped by product, variant and grade.' : 'Totals are grouped and combined across both shifts where variant and grade match.'} Copy or print for Acumatica data entry.</span>
               </div>
+              {/* Overview reads EVERY section's data shape — this session's, its
+                  siblings', and the other shift's — so it is the one component
+                  most exposed to a change in a section it does not own. That is
+                  exactly where the duck-typing bug lived (ARCHITECTURE.md §1A).
+                  A crash here must not cost the operator the Capture tab. */}
+              <FeatureBoundary
+                name="Overview"
+                fallback={
+                  <div className="flex items-start gap-2.5 px-4 py-3.5 bg-red-50 border border-red-300 rounded-2xl text-[13px] text-red-900">
+                    <AlertTriangle size={16} className="shrink-0 mt-0.5" />
+                    <div>
+                      <div className="font-semibold">The Overview totals could not be shown.</div>
+                      <div className="mt-0.5">
+                        Nothing has been lost — this tab only summarises what the Capture tab
+                        holds. Carry on capturing and tell your supervisor.
+                      </div>
+                    </div>
+                  </div>
+                }
+              >
               <CaptureOverview
                 productions={[
                   // Tagged with which shift each batch belongs to — Sieving's
@@ -2602,6 +2654,7 @@ function CaptureScreen() {
                 productionOrders={assignment?.production_orders}
                 locked={locked}
               />
+              </FeatureBoundary>
             </>
           )}
 

@@ -1,4 +1,4 @@
-import { test, expect, hasAuthState, SKIP_REASON } from './fixtures'
+import { test, expect, requireAuthState } from './fixtures'
 
 /**
  * Regression guard for the operator capture screen (ARCHITECTURE.md §8).
@@ -13,7 +13,7 @@ import { test, expect, hasAuthState, SKIP_REASON } from './fixtures'
 const SECTIONS = ['sieving', 'refining1', 'refining2', 'granule', 'blender', 'pasteuriser']
 
 test.beforeEach(() => {
-  test.skip(!hasAuthState(), SKIP_REASON)
+  requireAuthState(test)
 })
 
 for (const section of SECTIONS) {

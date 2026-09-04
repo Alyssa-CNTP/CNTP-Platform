@@ -2,6 +2,65 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-04 — Alyssa (Safety net: hooks gate in CI, crash containment mounted, E2E skip can no longer lie)
+
+**Files changed:** `.github/workflows/ci.yml`,
+`components/shared/FeatureBoundary.tsx`, `components/shared/FeatureBoundary.test.ts`,
+`app/(app)/production/capture/[section]/page.tsx`, `e2e/fixtures.ts`,
+`e2e/capture-smoke.spec.ts`, `e2e/concurrent-save.spec.ts`
+
+Steps 1 and 2 of the capture-module plan. No behaviour change to capture itself —
+this is the net that has to exist before anything is moved.
+
+### The Rules of Hooks gate — STILL NOT IN CI, needs a hand
+
+`npm run lint:hooks` was written on 2026-09-03, passes, and is wired into
+nothing. It is the gate for the React #310 class that showed
+"This page couldn't load" on every section for two days.
+
+It is **not** in this change: GitHub refuses a Personal Access Token without
+`workflow` scope on any push that edits `.github/workflows/`. The four lines to
+add to `ci.yml`, above the "Unit tests" step, are in the PR description. Hard
+zero, alongside the Core/Feature boundary — not a ratchet, because a ratchet is
+for stylistic debt and these violations white-screen an operator mid-shift.
+
+### FeatureBoundary is actually mounted — it had zero usages
+
+`components/shared/FeatureBoundary.tsx` was built in Phase 3, unit-tested, and
+never used anywhere in the app. Meanwhile the five section capture components
+render in a bare ternary chain, so **any one of them throwing during render
+blanked the entire route** — tab strip, Checks, Overview, Sign-off and all. That
+is precisely the failure this module's rework exists to prevent.
+
+Now wrapped in two places:
+
+- the section mount (one boundary — only one section renders at a time)
+- `CaptureOverview`, which reads every section's data shape including the other
+  shift's, and is where the duck-typing bug lived
+
+The file's own header used to say core capture logic must NOT be wrapped,
+because a broken mass balance should be loud. The intent was right and the
+conclusion was wrong: this boundary is not a silent swallow — it logs to the
+console and shows a red notice naming what failed. Corrected in place.
+
+Added a `fallback` prop, because the default notice reassures that "your capture
+is unaffected", which is true for a decorative panel and false for the form the
+operator enters bags into. The section fallback tells them their captured work
+is saved, that Checks and Sign-off still work, and not to re-enter bags
+elsewhere.
+
+### The E2E skip can no longer pass silently in CI
+
+Both specs skip when `e2e/.auth/user.json` is absent. That is right on a
+developer's machine and wrong in CI, where every spec would skip and the job
+would go green having tested nothing. `requireAuthState()` now **throws** when
+`CI` is set and no session artefact exists, so wiring the suite into a pipeline
+before the artefact is available produces a red build that names what is
+missing. `E2E_ALLOW_SKIP=1` opts out deliberately.
+
+424 unit tests (3 new for the fallback path). Lint at the 3021 baseline exactly;
+type errors at the 36 baseline. Build clean.
+
 ## 2026-09-03 — Alyssa (Sieving checks: mesh sizes, no mass-balance re-confirm, VSD asked once; RB Blocks naming)
 
 **Files changed:** `lib/core/mesh.ts` (new), `lib/core/mesh.test.ts` (new),
