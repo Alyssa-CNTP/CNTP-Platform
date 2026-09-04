@@ -2,6 +2,15 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-01 — Gustav (Maintenance: Diamond Blender monthly checklist imported)
+
+**Files changed:** `supabase/migrations/20260901_011_monthly_checklist_diamond_blender.sql` (new, applied to staging)
+
+- **Diamond Blender** monthly checklist imported verbatim from *QM-FM-039 Rev.1* — **22 tasks** across 3 equipment groups (Mixing Tank, Electrical control panel, Gearboxes and Motors), replacing the 4 placeholder lines. Each task carries the sheet's EQUIPMENT prefix, same as the other 16.
+- **17 of the 18 monthly checklists now carry their real QM-FM task lists.** The one outstanding is **Generator 440 kVA** (QM-FM-028) — the supplied sheet is a *weekly* readings grid rather than a monthly fault checklist, and is on hold pending a decision.
+
+---
+
 ## 2026-09-04 — Alyssa (Core stops reaching into components; Phase 1B found already provisioned)
 
 **Files changed:** `lib/core/types/capture-data.ts` (new), `components/production/capture/core-conformance.ts` (new), `lib/core/capture-rows/index.ts`, `eslint.boundaries.mjs`, `docs/capture-phases.md`
