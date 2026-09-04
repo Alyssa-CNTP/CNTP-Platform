@@ -10,10 +10,10 @@ status table in the same commit as the work.
 
 | Phase | State | Outstanding |
 |---|---|---|
-| **0** Guardrails | **Open** | Item 7 only: `20260901_001_prod_bagging_unique_index_drift.sql` is written but applied **nowhere** |
+| **0** Guardrails | **Effectively closed** | Item 7: both index migrations verified 2026-09-04 against staging *and* production — the indexes already exist, matching their files exactly, so running them is a confirmed no-op that only closes the repo/live gap. Neither file has been run yet. |
 | **1** Populate core | **Done** | `n()`, `metrics`, `serials`, mass-balance, variant identity, `lookupSerial` all extracted — see the `n()` note below |
 | **1B** Serialization | **Built, not shipped** | `NEXT_PUBLIC_FF_DB_SERIAL_ALLOCATION` unset — no section is on it, so the duplicate-serial race is still live |
-| **2** Typed contracts | **Done, regressed** | Duck-typing gone, `assertNever` in place. But `as any` in the capture page went **57 → 61** |
+| **2** Typed contracts | **Done, still regressing** | Duck-typing gone, `assertNever` in place. But `as any` in `[section]/page.tsx` is **62** as of 2026-09-04, measured — the "61" written here on 09-02 was already wrong. Trend: 58 on 08-25, 59 on 08-26, 62 now. It has gone **up** through the whole clean-up. Also unfinished: the five section data types still live in component files; Phase 2 only moved `SectionKind` and `assertNever`. |
 | **3** Feature boundary | **Done** | Guardrails in place, proven by tests, **and now actually mounted** — see below |
 | **4** Ledger foundation | Not started | `lib/core/ledger/` absent; `scan_events` unextended; `live/capture/page.tsx` still bulk-deletes the ledger |
 | **5** Reconciliation | Not started | |
@@ -27,15 +27,22 @@ test file across 144 component files, and both E2E specs skipping in CI.
 
 | | State |
 |---|---|
-| `lint:hooks` in CI | **Outstanding** — written and passing, but the PAT has no `workflow` scope so `ci.yml` must be edited by hand. Four lines, above the Unit tests step. |
+| `lint:hooks` gated | **Done, by another route** — the PAT has no `workflow` scope, so `ci.yml` still cannot be edited from here. Instead `package.json` runs it as a `posttest` hook, so `npm run test` exits non-zero on a hooks violation and the existing Unit tests step fails. Verified both ways by planting a hook below an early return. Adding the four named `ci.yml` lines is now cosmetic — it reads better in the Actions log, nothing more. |
 | `<FeatureBoundary>` mounted | **Done** — it had **zero usages** since Phase 3. The five sections rendered bare in a ternary, so one throwing blanked the whole route. Now wrapping the section mount and `CaptureOverview`. |
 | E2E skip made honest | **Done** — `requireAuthState()` throws when `CI` is set, so wiring the suite in before a session artefact exists gives a red build instead of a false pass. |
-| Row builders characterised | **Done** — 33 tests over `buildDebagRows`/`buildBagRows`, all five sections. |
+| Row builders characterised | **Done** — 42 tests over `buildDebagRows`/`buildBagRows`, all five sections. The extraction has already paid for itself: a blank-serial collision that fails the whole save was reproduced by *calling the builders*, where before it would have needed a live save on the floor. |
+| Render smoke tests | **Done** — 22 tests. Every section rendered empty, populated and locked, plus `CaptureOverview` against all five section shapes and both shifts. |
 
-**Still no runtime cover over the capture components themselves.** vitest is node-only
-by design and there is no jsdom or Testing Library in the repo; the Playwright suite
-cannot run in CI because the app signs in through SSO. Until one of those changes, the
-boundary is containment, not detection.
+**The "no runtime cover" gap is now partly closed.** `renderToStaticMarkup` runs the
+render pass in plain node — no jsdom, no new dependency, no auth, about two seconds in
+CI on every PR. Proven to work by planting a throw in `GranuleCapture`: exactly the three
+Granule cases fail, and the failure names the section.
+
+What it still does **not** cover: `useEffect` does not run in a server render, so effects,
+event handlers, the scanner and anything browser-only are untested. This is a crash
+detector for the render pass, not an integration test, and it does not replace the
+Playwright suite — which still cannot run in CI, because the app signs in through
+Microsoft SSO and that must not be scripted with stored credentials.
 
 ### The changeover — decided 2026-09-04
 
@@ -47,11 +54,89 @@ in that state.
 So the fork resolves in staging's direction, with one condition: the changeover is a
 **core function**, not something living inside each capture page. Supervisor-gated,
 single-fire, clean slate by default, and the organic rule a property of the ledger it
-writes to (§5). What exists on staging today is the right behaviour in the wrong place —
-it is still ~150 lines of state machine inside `[section]/page.tsx`. Extracting it to
-`features/changeover/` is the next feature-shaped piece of work, and it must happen
-before the promotion, not after.
+writes to (§5).
 
+**Half of that is now done.** `lib/core/changeover.ts` owns the *rules*: `planChangeover()`
+returns one plan — may this actor do it, how much is left, may that material be carried —
+and the trigger, the dialog and the save handler all read the same plan instead of each
+re-deciding. Two decisions that used to be tangled are now separate axes, which is what
+the earlier code kept getting wrong:
+
+- `blockedReason` answers **who** — a non-supervisor cannot open the changeover at all.
+- `carryRefusal` answers **what material** — organic never pools, an unrecognised variant
+  fails closed, and there is nothing to carry when the leftover is zero.
+
+`isPastShiftChangeover()` and `isEarlyChangeoverLikely()` take `now` as an argument rather
+than reading the clock, so both are testable and neither can drift from
+`productionDayFor()`.
+
+**What is left is the UI.** Roughly 150 lines of dialog JSX still sit in
+`[section]/page.tsx`. Moving them to `features/changeover/` is the next feature-shaped
+piece of work, and it must happen before the promotion, not after — see below.
+
+
+### Promotion to production — measured 2026-09-04
+
+The goal is staging and `main` aligned, on a system that is more robust than either, not
+one that breaks when a feature is added. Before planning that, here is what the two
+branches actually are. Every number below is measured, not estimated.
+
+**`main` and `staging` are a fork, not a lead and a lag.** They last shared a commit on
+**2026-08-05** (`7fe884b`). Since then: **325 commits on `main` only**, **278 on
+`staging` only**. Both are still moving — those numbers were 310 and 273 two days ago, so
+the gap is widening, not closing. Within the capture module alone the split is **75
+commits on `main` only** against **79 on `staging` only**. Neither branch is a superset
+of the other, and neither can be fast-forwarded onto the other.
+
+**None of the architecture work exists on `main`.** This is the part that had not been
+stated plainly, and it changes what "promote" means:
+
+| | `main` | `staging` |
+|---|---|---|
+| `lib/core/**` | **absent** | 29 files |
+| `features/**` | **absent** | 6 files |
+| `ARCHITECTURE.md` | **absent** | present |
+| `eslint.boundaries.mjs` / `eslint.hooks.mjs` | **absent** | present |
+| `vitest.config.mts` | **absent** | present |
+| `.github/workflows/ci.yml` | **absent** | present |
+| npm scripts | `dev`, `build`, `start`, `lint` | those plus `test`, `posttest`, `lint:boundaries`, `lint:hooks`, `test:e2e` |
+
+So production today runs with **no unit tests, no boundary rule, no hooks gate and no CI
+workflow at all**. The 526 tests and the four gates are a staging-only safety net. That is
+the strongest argument for promoting, and also the reason promoting cannot be done as one
+merge: the guardrails and the code they guard would land together, on a branch that has
+had 325 commits of independent production hotfixes since the split.
+
+**Two concerns have genuinely diverged and must be decided before any cherry-pick.** These
+are not merge conflicts to resolve mechanically; each is two working implementations of
+the same idea and only one can survive:
+
+| Concern | `main` | `staging` | Decision needed |
+|---|---|---|---|
+| #867 reconcile | `lib/production/self-heal-reconcile.ts` | `lib/production/debag-reconcile.ts` (+ tests) | Which reconcile is correct on the floor. Note the 2026-08-31 incident: a session-scoped self-heal against batch-scoped writes doubled rows on every page load. |
+| Top-up accounting | `lib/production/order-detail.ts`, **845 lines**, no `transferInKg` | `order-detail.ts` **492 lines**, with `transferInKg` handled in `lib/core/mass-balance/` | Whether bag-to-bag transfers are subtracted in core (staging) or absorbed in the order detail (main). Getting this wrong double-counts material on production orders. |
+
+**Until both are decided, "promote to production" has no well-defined meaning** — there is
+no single answer to what the promoted behaviour should be.
+
+**Order of work, once they are decided:**
+
+1. Decide the two concerns above.
+2. Extract the changeover dialog to `features/changeover/` (the rules are already core).
+3. Cherry-pick the guardrails onto a branch from `main` **first**, as their own PR —
+   `vitest.config.mts`, the two eslint configs, `ci.yml`, the npm scripts, `lib/core/**`.
+   They are additive: nothing on `main` imports them, so this cannot change production
+   behaviour, and it means every later cherry-pick lands with the net already under it.
+   The lint and type baselines will need re-measuring against `main`, which has never had
+   them.
+4. Cherry-pick features one at a time, per the CLAUDE.md promotion rule — never a branch
+   merge. Resolve `CHANGELOG.md` by keeping both sides.
+5. Apply pending Supabase migrations to production only **after** the code that needs
+   them is deployed there.
+
+**Do not merge `staging` into `main`.** With 325 commits of divergence and no common
+recent ancestor, the conflict surface is the whole capture module, and a mis-resolution
+there is a silent data fault, not a build error.
 
 ### Deviations from the plan, and why
 

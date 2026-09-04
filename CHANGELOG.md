@@ -2,6 +2,62 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-04 — Alyssa (Plan of record caught up; the promotion gap measured)
+
+**Files changed:** `docs/capture-phases.md`
+
+`docs/capture-phases.md` says, in its own opening line, to update the status table in the
+same commit as the work. Five PRs landed today and none of them did. This closes that gap
+and records the thing that had only ever been said in chat.
+
+### Status corrections
+
+- **Phase 0 is effectively closed.** Both index migrations were verified on staging *and*
+  production: the indexes already exist, matching their files exactly, so running them is
+  a confirmed no-op. Neither file has been run yet, and that is now stated as the residue
+  it is rather than as open work.
+- **The hooks gate is done, by another route.** The table said "outstanding, four lines in
+  `ci.yml`". The PAT has no `workflow` scope, so instead `lint:hooks` runs as a `posttest`
+  hook and the existing Unit tests step fails on a violation. Adding the named `ci.yml`
+  step is now cosmetic.
+- **Render smoke tests added to the safety-net table** — 22 of them, and the honest limits
+  written next to them: `useEffect` does not run in a server render, so effects, handlers
+  and the scanner are still uncovered.
+- **Phase 2 is not merely "regressed", it is still regressing.** The table claimed `as any`
+  in `[section]/page.tsx` went 57 → 61. Measured today it is **62**, and it was already 62
+  when that line was written on 09-02 — so the number was wrong then too. The trend is 58
+  on 08-25, 59 on 08-26, 62 now: it has gone **up** through the entire clean-up, while the
+  page itself shrank to 2,783 lines and `sectionId.startsWith` branches held at 2.
+- **The changeover entry was stale.** It still read "~150 lines of state machine inside
+  `[section]/page.tsx`". The *rules* moved to `lib/core/changeover.ts`; what remains is the
+  dialog UI. The two axes that code kept conflating — `blockedReason` for *who*,
+  `carryRefusal` for *what material* — are written down so the distinction survives.
+
+### The promotion gap, measured
+
+New section, because the aim is staging and `main` aligned and this had not been stated
+plainly anywhere in the repo.
+
+`main` and `staging` last shared a commit on **2026-08-05**. Since then: **325 commits on
+`main` only, 278 on `staging` only** — and both are still moving, so the gap is widening.
+Within capture alone it is 75 against 79. Neither branch is a superset of the other.
+
+The finding that changes what "promote" means: **none of the architecture work exists on
+`main`.** No `lib/core/**` (29 files on staging), no `features/**`, no `ARCHITECTURE.md`,
+no boundary or hooks eslint config, no `vitest.config.mts`, no `ci.yml`. `main`'s
+`package.json` has four scripts — `dev`, `build`, `start`, `lint`. **Production runs today
+with no unit tests, no boundary rule, no hooks gate and no CI workflow at all.** That is
+the strongest argument for promoting and the reason it cannot be one merge.
+
+Two concerns have genuinely diverged and each needs a decision before any cherry-pick —
+the #867 reconcile (`self-heal-reconcile.ts` on main vs `debag-reconcile.ts` on staging)
+and top-up accounting (`order-detail.ts` at 845 lines on main vs 492 plus `transferInKg`
+in core on staging). Until those are decided, "promote to production" has no well-defined
+meaning. The recommended order — guardrails cherry-picked **first**, as their own additive
+PR, before any feature — is written out in the new section.
+
+Docs only. No code, no behaviour change.
+
 ## 2026-09-04 — Alyssa (prod_bagging verified; a blank serial no longer fails the save)
 
 **Files changed:** `lib/core/capture-rows/index.ts`,
