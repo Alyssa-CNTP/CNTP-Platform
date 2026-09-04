@@ -2,6 +2,39 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-04 — Alyssa (Inventory Import is down for admins — a hook below the admin gate)
+
+**Files changed:** `app/(app)/admin/inventory-import/page.tsx`
+
+`app/(app)/admin/inventory-import/page.tsx` calls `useCallback` at line 129, below an
+early return at line 102:
+
+```
+const { role } = useAuth()          // line 91
+if (role !== 'admin') return <...>  // line 102
+const onDrop = useCallback(...)     // line 129
+```
+
+`role` starts unresolved and then resolves. On the first render the gate returns early and
+`useCallback` is not called; on the next it is. The hook count changes between renders,
+which is React error #310 — "Rendered more hooks than during the previous render" — and
+the page comes down.
+
+It comes down **for admins only**, which is to say for exactly the people the page exists
+for. A non-admin never passes the gate, so their hook count never changes and they see the
+access-required message correctly. That is why this went unreported.
+
+Same class as the capture page outage (HOTFIX #901 on staging). This is the fix already
+running on staging, taken across unchanged: the hook moves above the gate, with a comment
+saying why it has to stay there. `handleFile` is a hoisted function declaration, so
+referring to it from above its definition is fine.
+
+**How it was found:** running staging's `react-hooks/rules-of-hooks` gate against `main`'s
+tree, while checking whether the capture refactor's guardrails could be promoted. It was
+the **only** violation on the whole branch — with this fix the gate exits 0 over the repo.
+
+Verified: hooks gate clean, source type errors unchanged at 36, no other file touched.
+
 ## 2026-09-02 — Alyssa (The Bagging panel's total now adds up to its own rows)
 
 **Files changed:** `app/(app)/production/orders/[id]/page.tsx`, `scripts/verify-output-panel-totals.py` (new)
