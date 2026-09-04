@@ -86,6 +86,28 @@ export const flags = {
    * already.
    */
   acumaticaResolver: envFlag('NEXT_PUBLIC_FF_ACUMATICA_RESOLVER', false),
+
+  /**
+   * The mid-shift grade/variant changeover UI (features/changeover).
+   *
+   * DEFAULTS TO TRUE, unlike every other flag here, and the reason matters.
+   * This is not a half-finished feature waiting to reach operators — it is
+   * shipped, working behaviour on staging. A flag that defaulted to false would
+   * silently remove a control supervisors use the moment this merged, and the
+   * floor would report it as "the changeover is gone" with nothing in the logs.
+   * That is the silent-latch failure mode, not a safe default.
+   *
+   * The flag exists for the PROMOTION. `main` removed this button because it was
+   * broken, so the changeover must arrive on production switched OFF and be
+   * turned on deliberately once a shift has run against it.
+   *
+   *     NEXT_PUBLIC_FF_CHANGEOVER=false     <- REQUIRED in production's env,
+   *                                            in the same change that ships it
+   *
+   * Setting it is part of that cherry-pick, not a follow-up. See
+   * docs/capture-phases.md, promotion order step 4.
+   */
+  changeover: envFlag('NEXT_PUBLIC_FF_CHANGEOVER', true),
 } as const
 
 export type FeatureFlag = keyof typeof flags

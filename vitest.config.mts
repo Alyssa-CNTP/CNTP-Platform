@@ -34,6 +34,7 @@ export default defineConfig({
     include: [
       'lib/**/*.test.ts',
       'features/**/*.test.ts',
+      'features/**/*.test.tsx',
       'components/shared/*.test.ts',
       'components/production/capture/*.test.tsx',
     ],
