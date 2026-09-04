@@ -43,6 +43,7 @@ import { productionTotals, sumProductionTotals, withSessionAdjustments,
 import { logBucketElevator, outstandingBucketElevator, variantFamily } from '@/lib/production/bucket-elevator'
 import { mayPoolMaterial, isOrganicVariant, variantForDb } from '@/lib/core/variants'
 import FeatureBoundary from '@/components/shared/FeatureBoundary'
+import { buildDebagRows, buildBagRows } from '@/lib/core/capture-rows'
 import { upperCode } from '@/lib/production/normalize-code'
 import { dbDate } from '@/lib/production/db-date'
 import { CleaningPanel } from '@/components/production/capture/CleaningPanel'
@@ -1101,213 +1102,15 @@ function CaptureScreen() {
   }
 
   // ── Build structured rows from SievingData or RefiningData ───────────────
-  function buildDebag(prods: Production[], sid: string) {
-    const rows: any[] = []
-    let bagNo = 1
-    prods.forEach(prod => {
-      if (kind === 'refining') {
-        const rd = prod.data as RefiningData
-        ;(rd.inputs ?? []).forEach(r => {
-          if (n(r.weight) === 0) return
-          rows.push({
-            session_id: sid, bag_no: bagNo++,
-            // bag_serial_no is a FK to bag_tags — only set for scan/system bags
-            // guaranteed to exist there. Manual serials go in notes to avoid FK failure.
-            bag_serial_no: r.inputMode !== 'manual' ? r.serial || null : null,
-            notes: r.inputMode === 'manual' ? r.serial || null : null,
-            lot_number: r.lot || prod.lot || null,
-            product_type: r.productType || null, variant: variantForDb(r.variant || prod.variant),
-            kg_nett: n(r.weight),
-            delivery_date: r.deliveryDate || null, is_spillage: false,
-          })
-        })
-      } else if (kind === 'granule') {
-        const gd = prod.data as GranuleData
-        ;(gd.blends ?? []).forEach(bl => {
-          (bl.rows ?? []).forEach(r => {
-            if (n(r.weight) === 0) return
-            rows.push({
-              session_id: sid, bag_no: bagNo++,
-              // bag_serial_no is a FK to bag_tags — only set for scan/system bags.
-              // Manual serials go in notes to avoid an FK failure.
-              bag_serial_no: r.inputMode !== 'manual' ? r.serial || null : null,
-              notes: [`blend ${bl.blendNo}`, r.inputMode === 'manual' ? r.serial : null].filter(Boolean).join(' · ') || null,
-              lot_number: r.lot || prod.lot || null,
-              product_type: dustProductType(r.dustKey), variant: variantForDb(r.variant || prod.variant),
-              kg_nett: n(r.weight), is_spillage: false,
-            })
-          })
-        })
-      } else if (kind === 'blender') {
-        const bd = prod.data as BlenderData
-        ;(bd.inputs ?? []).forEach(r => {
-          if (n(r.weight) === 0) return
-          rows.push({
-            session_id: sid, bag_no: bagNo++,
-            bag_serial_no: r.inputMode !== 'manual' ? r.serial || null : null,
-            grade: r.destination || null,
-            notes: r.inputMode === 'manual' ? r.serial : null,
-            lot_number: r.lot || prod.lot || null,
-            product_type: r.productType || null, variant: variantForDb(r.variant || prod.variant),
-            kg_nett: n(r.weight), is_spillage: false,
-          })
-        })
-      } else if (kind === 'pasteuriser') {
-        const pd = prod.data as PasteuriserData
-        ;(pd.debag ?? []).forEach(r => {
-          if (n(r.weight) === 0) return
-          rows.push({
-            session_id: sid, bag_no: bagNo++,
-            // bag_serial_no is a FK to bag_tags — only set for scan/system bags
-            // guaranteed to be there; a manual serial goes in notes to avoid an FK failure.
-            bag_serial_no: r.inputMode !== 'manual' ? r.serial || null : null,
-            notes: [r.stream === 'postsieve' ? 'post-sieve' : null, r.inputMode === 'manual' ? r.serial : null].filter(Boolean).join(' · ') || null,
-            lot_number: r.lot || pd.batchNo || prod.lot || null,
-            product_type: r.productType || null, variant: variantForDb(r.variant || prod.variant),
-            kg_nett: n(r.weight), is_spillage: false,
-          })
-        })
-      } else if (kind === 'sieving') {
-        const sd = prod.data as SievingData
-        // spillage[0] is the bucket-elevator carry-over; spillage[1..] are
-        // machine spillage — they're different inputs and must read as their
-        // own type on the production order, not both as "Bucket Elevator".
-        sd.spillage.forEach((r, idx) => {
-          if (n(r.kg) === 0) return
-          rows.push({ session_id: sid, bag_no: bagNo++, product_type: idx === 0 ? 'Bucket Elevator' : 'Machine Spillage', variant: variantForDb(prod.variant), kg_nett: n(r.kg), is_spillage: true })
-        })
-        sd.debag.forEach(r => {
-          if (n(r.nett) === 0) return
-          rows.push({
-            session_id: sid, bag_no: bagNo++,
-            // bag_serial_no is a FK to bag_tags — farm bags aren't in bag_tags, so null it.
-            // Preserve the operator's physical bag number in notes for traceability.
-            bag_serial_no: null, notes: r.bag_no || null,
-            lot_number: r.lot || prod.lot || null,
-            // Was '500kg Farm Bag' — kept unchanged on historical rows (Acumatica
-            // actually reads batch numbers + total weight, not this string, so the
-            // rename is safe going forward without a backfill).
-            product_type: 'Farm Bag', variant: variantForDb(prod.variant),
-            kg_gross: n(r.gross) || null, kg_nett: n(r.nett),
-            delivery_date: r.delivery_date || null, grade: r.grade || null,
-            // Real capture instant, immune to persist()'s delete+reinsert restamping
-            // created_at on every save — same pattern as output bags' bagging_time.
-            bagging_time: r.logged_at || null,
-            is_spillage: false,
-          })
-        })
-      } else { assertNever(kind, 'section kind') }
-    })
-    return rows
-  }
-  function buildBag(prods: Production[], sid: string) {
-    const rows: any[] = []
-    let bagNo = 1
-    prods.forEach(prod => {
-      if (kind === 'refining') {
-        const rd = prod.data as RefiningData
-        const groups: Array<[string, typeof rd.outputB]> = [['A', rd.outputA], ['B', rd.outputB], ['C', rd.outputC], ['D', rd.outputD]]
-        groups.forEach(([grp, g]) => {
-          ;(g?.bags ?? []).forEach(b => {
-            if (n(b.weight) === 0) return
-            rows.push({
-              session_id: sid, bag_no: bagNo++, output_group: grp,
-              bag_serial_no: b.serial, lot_number: prod.lot || null,
-              product_type: b.productType, acumatica_id: b.code || null,
-              variant: variantForDb(prod.variant),
-              kg: n(b.weight),
-              // The exact moment this bag was added on the Refining (sieving
-              // tower) screen — set client-side as RefiningOutputBag.logged_at
-              // when the operator adds it. Carried through so downstream
-              // consumers (Quality's Final QC picker) show the true bagging
-              // time instead of when the whole session was last saved — every
-              // other output section already does this via its own b.time.
-              bagging_time: b.logged_at || null,
-            })
-          })
-        })
-      } else if (kind === 'granule') {
-        const gd = prod.data as GranuleData
-        ;(gd.outputs ?? []).forEach(b => {
-          if (n(b.weight) === 0) return
-          rows.push({
-            session_id: sid, bag_no: bagNo++, output_group: null,
-            bag_serial_no: b.serial, lot_number: b.lot || prod.lot || null,
-            product_type: b.item, acumatica_id: b.code || null, variant: variantForDb(prod.variant),
-            kg: n(b.weight), bagging_time: b.logged_at || null,
-          })
-        })
-        ;(gd.dustOutputs ?? []).forEach(r => {
-          if (n(r.weight) === 0) return
-          rows.push({
-            session_id: sid, bag_no: bagNo++, output_group: null,
-            bag_serial_no: r.serial, lot_number: prod.lot || null,
-            product_type: r.dustType, acumatica_id: r.code || null, variant: variantForDb(prod.variant),
-            kg: n(r.weight),
-          })
-        })
-      } else if (kind === 'blender') {
-        const bd = prod.data as BlenderData
-        const bomId = bd.bomId
-        ;(bd.outputs ?? []).forEach(b => {
-          if (n(b.weight) === 0) return
-          rows.push({
-            session_id: sid, bag_no: bagNo++, output_group: null,
-            bag_serial_no: b.serial, lot_number: prod.lot || null,
-            product_type: bomId ? `Blend ${bomId}` : null, acumatica_id: bomId || null, variant: variantForDb(prod.variant),
-            kg: n(b.weight), bagging_time: b.logged_at || null,
-          })
-        })
-      } else if (kind === 'pasteuriser') {
-        const pd = prod.data as PasteuriserData
-        const perBag = n(pd.weightPerBag) || 0
-        // Final-product pallet lines (A): one bagging row per line, kg = bags × kg/bag.
-        ;(pd.outputs ?? []).forEach(l => {
-          const kg = n(l.bagCount) * (n(l.bagWeight) || perBag)
-          if (kg === 0) return
-          rows.push({
-            session_id: sid, bag_no: bagNo++, output_group: null,
-            bag_serial_no: l.serial, lot_number: l.lot || pd.batchNo || prod.lot || null,
-            product_type: l.item || l.kind || null, acumatica_id: l.itemCode || null, variant: variantForDb(prod.variant),
-            kg, bagging_time: l.logged_at || null,
-          })
-        })
-        // By-products (B) — recorded as bagging rows so they count in the output total.
-        ;(pd.byProducts ?? []).forEach(r => {
-          if (n(r.weight) === 0) return
-          rows.push({
-            session_id: sid, bag_no: bagNo++, output_group: null,
-            bag_serial_no: r.serial || null, lot_number: pd.batchNo || prod.lot || null,
-            product_type: r.type || null, variant: variantForDb(prod.variant), kg: n(r.weight),
-          })
-        })
-      } else if (kind === 'sieving') {
-        const sd = prod.data as SievingData
-        sd.outputs.forEach(b => {
-          if (n(b.weight) === 0) return
-          rows.push({
-            session_id: sid, bag_no: bagNo++, output_group: 'B',
-            bag_serial_no: b.serial, lot_number: b.batch || prod.lot || null, product_type: b.productType,
-            acumatica_id: b.code || null, variant: variantForDb(prod.variant),
-            kg: n(b.weight),
-            bagging_time: b.logged_at || null,   // see bagging_time note above
-          })
-        })
-      } else { assertNever(kind, 'section kind') }
-    })
-    // Stamp the work centre (Sieving Tower / Refining 1 / … / Pasteuriser) on
-    // every output bag so prod_bagging carries the producing line directly,
-    // without having to join back through prod_sessions.section_id.
-    rows.forEach(r => { r.work_centre = meta.name })
-    return rows
-  }
-  // Per-production totals — dispatches by section type. `sh` is the shift the
-  // production belongs to; Sieving uses it to place the bucket elevator on the
-  // input (morning) or output (afternoon) side of the balance.
-  // One balance, from lib/core/mass-balance. The screen, the persisted
-  // prod_mass_balance row and the production-order summaries all read it, so
-  // they can no longer disagree — and they did: the screen ignored half-bag
-  // top-ups entirely while the persisted row counted them, for Sieving only.
+  // buildDebag / buildBag now live in lib/core/capture-rows. They were two
+  // closures inside this component and therefore untestable, while being what
+  // persist() writes for every save the floor makes. Moved verbatim; `kind` and
+  // the work-centre name were their only closure dependencies and are now
+  // arguments. Pinned by capture-rows.test.ts (ARCHITECTURE.md §8).
+  const rowCtx = { kind, workCentre: meta.name, dustProductType }
+  const buildDebag = (prods: Production[], sid: string) => buildDebagRows(prods, sid, rowCtx)
+  const buildBag   = (prods: Production[], sid: string) => buildBagRows(prods, sid, rowCtx)
+
   function prodTotals(p: Production, sh: Shift = shiftBal): ProductionTotals {
     return productionTotals(kind, p.data as AnyBalanceData, { shift: sh, carryOverInKg })
   }

@@ -2,6 +2,72 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-04 — Alyssa (Row builders characterised and moved to core)
+
+**Files changed:** `lib/core/capture-rows/index.ts` (new),
+`lib/core/capture-rows/capture-rows.test.ts` (new),
+`app/(app)/production/capture/[section]/page.tsx`
+
+Step 3 of the capture-module plan, plus the step-4 move it unblocks.
+No behaviour change — the point is that the tests prove it.
+
+### What moved
+
+`buildDebag` and `buildBag` were two closures inside the 2,913-line capture page
+and therefore impossible to test, while being **what `persist()` writes** — every
+input and output row, for every section, for every save the floor makes. 207
+lines, 30% of the page's data layer.
+
+They now live in `lib/core/capture-rows/`, moved line for line. Only the two
+values they read off the component's closure became arguments:
+
+| Was | Now |
+|---|---|
+| `kind` (from `sectionKindFor(sectionId)`) | `ctx.kind` |
+| `meta.name`, stamped on every output row | `ctx.workCentre` |
+
+`persist()` itself is untouched — it calls them exactly as before, through two
+one-line adapters that keep the old names.
+
+### 33 characterisation tests
+
+These pin what the code does **today**, right or wrong. They are the rollback
+detector for this move and for the Phase 7 rewrite of the save path. Coverage
+per section, plus cross-section invariants:
+
+- Sieving's `spillage[0]` is Bucket Elevator and the rest Machine Spillage; farm
+  bags null `bag_serial_no` and keep the physical number in `notes`
+- Refining routes a scanned serial to `bag_serial_no` and a manual one to
+  `notes` — the FK to `bag_tags` would fail the whole insert otherwise
+- Granule joins the blend number into `notes`; the dust product type resolves
+  through the injected lookup
+- Blender names every output after the BOM, and writes `null` when none is chosen
+- Pasteuriser computes pallet kg as bags × per-bag weight with the line's own
+  weight winning, and counts by-products as output rows
+- `bag_no` continues across productions within a session — two batch records must
+  not both start at 1 and collide on `prod_debagging_session_bag_uidx`
+- An unhandled section kind **throws** rather than silently writing zero rows
+
+One current oddity is pinned rather than fixed: Granule's granule output carries
+`bagging_time` and its dust output does not. Recorded so a change to it is
+deliberate.
+
+### Two seams left open, deliberately
+
+- `dustProductType` arrives through the context instead of being imported. It
+  lives in `GranuleCapture.tsx`, a `'use client'` module, and core importing that
+  would pull React into a pure module at runtime. `DUST_META` belongs in core
+  next to `product-names.ts`.
+- The five section data types are still `import type` from their component files
+  — type-only, so nothing is pulled in at runtime. Phase 2 was supposed to move
+  all five into `lib/core/types/capture.ts` and only moved `SectionKind` and
+  `assertNever`. That is the remaining Phase 2 work.
+
+The capture page is now **2,769 lines**, down from 2,913.
+
+457 unit tests. Lint at the 3021 baseline exactly; type errors at the 36
+baseline. Build clean.
+
 ## 2026-09-04 — Alyssa (Safety net: hooks gate in CI, crash containment mounted, E2E skip can no longer lie)
 
 **Files changed:** `.github/workflows/ci.yml`,
