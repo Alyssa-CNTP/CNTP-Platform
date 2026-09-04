@@ -2,6 +2,54 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-02 — Alyssa (The Bagging panel's total now adds up to its own rows)
+
+**Files changed:** `app/(app)/production/orders/[id]/page.tsx`, `scripts/verify-output-panel-totals.py` (new)
+
+Reported from the 2 September order: it says the top-ups are in Total output, but the totals do not justify it.
+
+They were in the total — and the **Bagging panel header showed that total over a list containing only the bags**. On 2 September: header `18 217.0 kg`, rows summing to `17 925.0`, with the missing 292 kg being top-ups into 1 September bags shown in a separate panel further down. Depending on which figure you read, the top-ups looked either double-counted or absent. Nothing was wrong with the arithmetic; the panel just asserted an answer its own contents contradicted.
+
+- **The header now shows the bags' own weight**, so it matches the rows beneath it.
+- **The panel foots with the sum in view** — `Bagged out` + `Half-bag top-ups — added into older bags` = `Total output` — the same figure the mass balance uses. Only when there is a top-up to add; otherwise the bags' total *is* the output and a second identical number is noise.
+- The top-up line says those bags were bagged on an earlier day and are not in the count above, which is why the bag count does not move.
+- The per-shift block's `N bags · X kg` now reads `X kg out`, since that figure also includes the shift's top-ups while the count does not.
+
+`scripts/verify-output-panel-totals.py` — 14 checks against the 2 September figures, including the 292 kg gap the old header left, and the no-top-up, top-ups-only and bag-count cases.
+
+---
+
+## 2026-09-03 — Alyssa (PRODUCTION: Blender scans bags in the same way Refining does)
+
+**Files changed:** `components/production/capture/BlenderCapture.tsx`
+
+Promotion to `main` of the Blender scan-in fix. Two things, both needed for the Big
+Blender to scan at all on production:
+
+**1. Scan-first debagging (ported from `staging`, PR #708).** The Blender now has the same
+top-level scan box as Refining and Pasteuriser — the shared `ScanBox` / `BagScanModal` from
+`BagScanIn.tsx`, which was already on production but only wired into Refining. Scan a bag →
+its `bag_tags` record and validity pop up → **Consume into &lt;ingredient&gt;** files it under
+the matching ingredient group in the Debagging tab, decided by the bag's own product type
+(matched against the blend's declared components, or a new "not in recipe" group created for
+it, same mechanism as "+ Add Other"). No pick-the-group-first step. The manual group pick and
+"Add Other" both remain.
+
+**2. One unregistered bag no longer stops all further scanning.** In the add/edit bag modal,
+a `not_found` lookup switches the row to manual entry (`setInputMode('manual')`) and the
+auto-lookup effect was gated on `inputMode !== 'manual'` — with nothing resetting that when a
+*different* serial was entered. So after scanning one bag that isn't in `bag_tags`, every
+later scan in that modal did nothing: no popup, no message (`onChange` cleared `scanMsg` on
+each keystroke, so the stale error vanished too). Enter and the "Look up" button still fired,
+but a hardware scanner sends neither — which is the whole reason the auto-fire exists. The
+gate was really protecting the *mount* case (re-reading `bag_tags` for a row opened for
+editing would overwrite a hand-captured weight or lot), so it now keys on that directly via
+an `openedWithSerial` ref, and all three input paths (typing, scanner burst, camera) go
+through one `changeSerial()` helper that clears the previous bag's verdict.
+
+Scoped deliberately: only `BlenderCapture.tsx`. The Granule trailing-space lot fix that
+shared PR #708, and the rest of the capture work on `staging`, are NOT included.
+
 ## 2026-08-21 — Gustav (COA: fix signature resize distortion, screen/print layout mismatch, and add a "Ready to print" queue + Lab Manager notification)
 
 **Files changed:** `app/(app)/quality/coa/page.tsx`, `app/api/quality/coa-signoff/route.ts`
@@ -564,6 +612,7 @@ and no link from a run to the spec it is actually judged against.
   a hydration mismatch. Only the family is passed, because the filters are exact
   string matches and a batch's customer would filter the list to nothing
   whenever the spec row is the generic blank-customer one.
+
 
 ## 2026-09-02 — Alyssa (The batch list is actually this session's, and the Overview mass balance shows on the afternoon shift)
 
