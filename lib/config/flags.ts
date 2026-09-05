@@ -16,8 +16,35 @@
  * rollback of the whole deploy.
  */
 
-function envFlag(name: string, fallback: boolean): boolean {
-  const raw = process.env[name]
+/**
+ * ── EVERY CALL SITE MUST PASS `process.env.NEXT_PUBLIC_FF_X` DIRECTLY ────────
+ *
+ * These take the VALUE, not the name. That is not a style preference; it is the
+ * whole reason flags work in the browser at all.
+ *
+ * Next replaces `process.env.NEXT_PUBLIC_FOO` with a literal at build time by
+ * matching the *static member access* in the source. It cannot replace
+ * `process.env[name]`, because the key is only known at runtime — and in the
+ * client bundle `process` is a polyfill whose `env` is literally `{}`. So a
+ * dynamic lookup compiles to `{}[name]` → `undefined` → the fallback, forever,
+ * no matter what the environment says.
+ *
+ * These helpers previously took a NAME and did exactly that. The effect was
+ * silent and total: **every flag in this file was permanently stuck at its
+ * fallback in the browser.** Setting NEXT_PUBLIC_FF_PASTEURISER_LABELS=true on
+ * staging and rebuilding changed nothing, and nothing anywhere reported a
+ * problem — the flag simply read false. Confirmed against the built bundle:
+ * `NEXT_PUBLIC_SUPABASE_URL` does not appear by name (its value was inlined),
+ * while every flag name appears verbatim as a string argument and no value
+ * ever does.
+ *
+ * Server-side the old form worked, because Node has a real `process.env` — so
+ * an API route and a client component could disagree about the same flag. That
+ * is worse than a flag that is simply off.
+ *
+ * `flags-inlining.test.ts` fails the build if a dynamic lookup comes back.
+ */
+function envFlag(raw: string | undefined, fallback: boolean): boolean {
   if (raw === undefined || raw === '') return fallback
   return raw === 'true' || raw === '1'
 }
@@ -28,12 +55,14 @@ function envFlag(name: string, fallback: boolean): boolean {
  * Unset means none. 'true'/'1' are accepted as synonyms for 'all' so an
  * environment already set to the old boolean form does not silently mean
  * "no sections" after this changed shape.
+ *
+ * Takes the value, not the name — see the note above.
  */
-function sectionSetFlag(name: string): ReadonlySet<string> {
-  const raw = (process.env[name] ?? '').trim().toLowerCase()
-  if (!raw) return new Set()
-  if (raw === 'all' || raw === 'true' || raw === '1') return new Set(['*'])
-  return new Set(raw.split(',').map(s => s.trim()).filter(Boolean))
+function sectionSetFlag(raw: string | undefined): ReadonlySet<string> {
+  const value = (raw ?? '').trim().toLowerCase()
+  if (!value) return new Set()
+  if (value === 'all' || value === 'true' || value === '1') return new Set(['*'])
+  return new Set(value.split(',').map(s => s.trim()).filter(Boolean))
 }
 
 export const flags = {
@@ -41,7 +70,7 @@ export const flags = {
    * Supervisor adjustment page — Tier 1 corrections on open sessions,
    * Tier 2 stock adjustments on submitted ones. See ARCHITECTURE.md §6.
    */
-  supervisorAdjustments: envFlag('NEXT_PUBLIC_FF_SUPERVISOR_ADJUSTMENTS', false),
+  supervisorAdjustments: envFlag(process.env.NEXT_PUBLIC_FF_SUPERVISOR_ADJUSTMENTS, false),
 
   /**
    * Read bag totals from the append-only ledger instead of prod_bagging.
@@ -49,7 +78,7 @@ export const flags = {
    * and reconciled while prod_bagging remains authoritative. Flipping this is
    * the cutover, and flipping it back is the rollback.
    */
-  ledgerAuthoritative: envFlag('NEXT_PUBLIC_FF_LEDGER_AUTHORITATIVE', false),
+  ledgerAuthoritative: envFlag(process.env.NEXT_PUBLIC_FF_LEDGER_AUTHORITATIVE, false),
 
   /**
    * Sections that mint serials under the current scheme (ARCHITECTURE.md §5),
@@ -66,7 +95,7 @@ export const flags = {
    *     NEXT_PUBLIC_FF_DB_SERIAL_ALLOCATION=all      (every section)
    *     unset / empty                                (none — the default)
    */
-  dbSerialSections: sectionSetFlag('NEXT_PUBLIC_FF_DB_SERIAL_ALLOCATION'),
+  dbSerialSections: sectionSetFlag(process.env.NEXT_PUBLIC_FF_DB_SERIAL_ALLOCATION),
 
   /**
    * The Pasteuriser finished-product label workflow: design -> proof ->
@@ -78,7 +107,7 @@ export const flags = {
    * routes themselves, which stay behind their own permissions — a flag is a
    * rollout control, not an access control.
    */
-  pasteuriserLabels: envFlag('NEXT_PUBLIC_FF_PASTEURISER_LABELS', false),
+  pasteuriserLabels: envFlag(process.env.NEXT_PUBLIC_FF_PASTEURISER_LABELS, false),
 
   /**
    * Resolve Acumatica item codes against the synced master inventory
@@ -97,7 +126,7 @@ export const flags = {
    * warning — that is the point, and those bags were failing the import
    * already.
    */
-  acumaticaResolver: envFlag('NEXT_PUBLIC_FF_ACUMATICA_RESOLVER', false),
+  acumaticaResolver: envFlag(process.env.NEXT_PUBLIC_FF_ACUMATICA_RESOLVER, false),
 
   /**
    * The mid-shift grade/variant changeover UI (features/changeover).
@@ -119,7 +148,7 @@ export const flags = {
    * Setting it is part of that cherry-pick, not a follow-up. See
    * docs/capture-phases.md, promotion order step 4.
    */
-  changeover: envFlag('NEXT_PUBLIC_FF_CHANGEOVER', true),
+  changeover: envFlag(process.env.NEXT_PUBLIC_FF_CHANGEOVER, true),
 } as const
 
 export type FeatureFlag = keyof typeof flags
