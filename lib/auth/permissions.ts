@@ -76,6 +76,16 @@ export type PermissionKey =
   // Production — Granule job cards (separate line, separate people from Pasteuriser's)
   | 'can_generate_job_cards_granule'
   | 'can_approve_job_cards_granule'
+  // Pasteuriser finished-product LABELS — design -> proof -> approval -> PO -> print.
+  // Split five ways because five different people touch a label and the whole
+  // point of the workflow is that they are separable: designing is not
+  // approving, and approving on the strength of Control Union's reply is not
+  // committing a customer PO to it.
+  | 'can_view_labels'          // see the label library and print history
+  | 'can_design_labels'        // author/edit a draft template, issue a proof
+  | 'can_approve_labels'       // sales: record the CU/customer sign-off
+  | 'can_assign_label_po'      // sales: bind an approved template to a customer PO
+  | 'can_print_labels'         // supervisor: print finished-product labels on the line
   // Production — Shift Report (the generated end-of-shift record)
   | 'can_view_shift_report'    // read a shift report (any date/shift)
   | 'can_edit_shift_report'    // regenerate, add supervisor notes, save the draft
@@ -169,6 +179,7 @@ export const ALL_PERMISSION_KEYS: PermissionKey[] = [
   'can_view_blends',
   'can_generate_job_cards','can_approve_job_cards',
   'can_generate_job_cards_granule','can_approve_job_cards_granule',
+  'can_view_labels','can_design_labels','can_approve_labels','can_assign_label_po','can_print_labels',
   'can_view_shift_report','can_edit_shift_report','can_submit_shift_report','can_approve_shift_report',
   'can_view_capture_ratings','can_rate_capture','can_delete_capture_rating',
   'can_access_sales','can_access_marketing','can_access_research','can_access_intelligence',
@@ -371,6 +382,9 @@ export const ROLE_PERMISSION_DEFAULTS: Record<string, Permissions> = {
     // Note Books — supervises what the gate writes, so can also correct (void) it
     can_access_notebooks: true, can_create_notebook_doc: true,
     can_sign_notebook_doc: true, can_void_notebook_doc: true,
+    // Labels — the supervisor prints finished product on the line. Read + print
+    // only: they never author or approve wording.
+    can_view_labels: true, can_print_labels: true,
   },
 
   // ── Production Manager — Supervisor Hub sign-off tier. Sees everything the
@@ -391,6 +405,10 @@ export const ROLE_PERMISSION_DEFAULTS: Record<string, Permissions> = {
     can_view_capture_ratings: true,
     // BOM catalogue (read) + Pasteuriser/Granule job cards — manager generates, supervisor approves
     can_view_blends: true, can_generate_job_cards: true, can_generate_job_cards_granule: true,
+    // Labels — the manager SELECTS an approved label + PO when raising the job
+    // card. Deliberately no design/approve rights: the wording is sales' and the
+    // certifier's, and the manager must not be able to change what was approved.
+    can_view_labels: true,
   },
 
   // ── Store — owns the Store roster section ──────────────────────────────────
@@ -683,12 +701,27 @@ export const PERMISSION_GROUPS: {
     ],
   },
   {
+    group: 'Production — Finished-Product Labels',
+    department: 'Production',
+    permissions: [
+      { key: 'can_view_labels',     label: 'View the label library, proofs and print history' },
+      { key: 'can_design_labels',   label: 'Author a label template and issue a proof for approval' },
+      { key: 'can_approve_labels',  label: 'Record the Control Union / customer approval of a template' },
+      { key: 'can_assign_label_po', label: 'Assign a customer PO to an approved label' },
+      { key: 'can_print_labels',    label: 'Print finished-product labels on the line' },
+    ],
+  },
+  {
     group: 'Sales',
     department: 'Sales',
     permissions: [
       { key: 'can_access_sales',    label: 'Access sales module' },
       { key: 'can_access_research', label: 'Access research engine' },
       { key: 'can_export_csv',      label: 'Export data to CSV' },
+      { key: 'can_view_labels',     label: 'View the label library' },
+      { key: 'can_design_labels',   label: 'Author label templates and issue proofs' },
+      { key: 'can_approve_labels',  label: 'Mark a label approved once the certifier and customer sign off' },
+      { key: 'can_assign_label_po', label: 'Assign a customer PO to an approved label' },
     ],
   },
   {

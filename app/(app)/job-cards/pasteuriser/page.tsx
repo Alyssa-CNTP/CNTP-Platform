@@ -47,6 +47,10 @@ interface Form {
   final_ratio_lines: RatioLine[] | null
   packaging_item_id: string | null
   packaging_lines: PackagingLine[] | null
+  // The approved label + customer PO this card produces against. Nullable:
+  // plenty of Pasteuriser product has no customer label, and cards raised
+  // before the label workflow existed have none.
+  label_assignment_id: string | null
 }
 
 function empty(): Form {
@@ -64,6 +68,7 @@ function empty(): Form {
     special_instructions: '', rework_material: '',
     sig_production_coordinator: null, sig_production_supervisor: null,
     sig_quality_officer: null, sig_production_manager: null, submitted_at: null,
+    label_assignment_id: null,
     status: 'draft', bom_output_item_id: null, rejected_reason: null,
     blend_ratio_lines: null, final_ratio_lines: null,
     packaging_item_id: null, packaging_lines: null,
@@ -248,6 +253,9 @@ function PasteuriserJobCardScreen() {
   const canApprove = isFullAdmin || p('can_approve_job_cards')
   const searchParams = useSearchParams()
   const deepLinkBomId = searchParams.get('bomId')
+  // Arriving from /pasteuriser/job-cards: the manager picked an approved
+  // label + PO and this card produces against it.
+  const deepLinkAssignment = searchParams.get('assignment')
 
   const [form, setForm] = useState<Form>(empty())
   const [saving, setSaving] = useState(false)
@@ -295,6 +303,37 @@ function PasteuriserJobCardScreen() {
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deepLinkBomId])
+
+  // Deep-linked from /pasteuriser/job-cards — the manager picked an approved
+  // label with a customer PO on it. Prefills the customer, PO and the order's
+  // own product/item, and binds the card to that assignment so the supervisor's
+  // print screen knows which approved wording this run's bags carry.
+  //
+  // The supply-chain planned batch number is offered as a DEFAULT, not
+  // enforced: it is advisory, and the manager sets the real batch on the day.
+  // The whole workflow exists so the line does not wait on that field.
+  useEffect(() => {
+    if (!deepLinkAssignment) return
+    ;(async () => {
+      const { data } = await (db as any).schema('public')
+        .from('label_po_assignments')
+        .select('*, template:label_templates(name, code, version)')
+        .eq('id', deepLinkAssignment).maybeSingle()
+      if (!data) return
+      setForm(f => ({
+        ...f,
+        label_assignment_id: data.id,
+        customer:     f.customer     || data.customer   || '',
+        customer_po:  f.customer_po  || data.po_number  || '',
+        item_no:      f.item_no      || data.item_number || '',
+        product_name: f.product_name || data.product    || '',
+        batch_number: f.batch_number || data.planned_batch_no || '',
+        expected_commencement: f.expected_commencement || data.planned_date || '',
+        bag_markings: f.bag_markings || (data.template ? `${data.template.name} (${data.template.code} v${data.template.version})` : ''),
+      }))
+    })()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deepLinkAssignment])
 
   // No drawing here — "Send to Supervisor" IS the manager's Verify & Sign;
   // this just tells the UI whether they have a signature on file yet.
