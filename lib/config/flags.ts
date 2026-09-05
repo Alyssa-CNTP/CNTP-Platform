@@ -69,6 +69,18 @@ export const flags = {
   dbSerialSections: sectionSetFlag('NEXT_PUBLIC_FF_DB_SERIAL_ALLOCATION'),
 
   /**
+   * The Pasteuriser finished-product label workflow: design -> proof ->
+   * Control Union / customer approval -> PO -> job card -> print.
+   *
+   * Off by default so the whole chain can sit on staging while the thirteen
+   * existing BarTender designs are transcribed and re-approved. Turning it off
+   * hides the nav entries and the job-card label picker; it does NOT hide the
+   * routes themselves, which stay behind their own permissions — a flag is a
+   * rollout control, not an access control.
+   */
+  pasteuriserLabels: envFlag('NEXT_PUBLIC_FF_PASTEURISER_LABELS', false),
+
+  /**
    * Resolve Acumatica item codes against the synced master inventory
    * (features/acumatica-items) instead of building them from the templates in
    * lib/production/acumatica-codes.ts.

@@ -71,6 +71,19 @@ const ROUTE_GUARDS: Array<{
   { prefix: '/production/blends',    departments: ['Production','Management'], permission: 'can_view_blends',    orPermission: true },
   { prefix: '/production',           departments: ['Production'], permission: 'can_view_ops_dashboard', orPermission: true },
 
+  // Pasteuriser — the label chain. Four routes, three different owners, so each
+  // is guarded on its own permission rather than on one module-wide gate:
+  // Sales authors and approves wording and never touches the line; Production
+  // schedules and prints and must never be able to change approved wording.
+  // orPermission because the permission is what actually grants it — Sales are
+  // not in the Production department and legitimately own the Labels screen.
+  // Longest prefix wins, so the bare '/pasteuriser' hub rule sits last.
+  { prefix: '/pasteuriser/labels',    departments: ['Production','Sales','Management'], permission: 'can_view_labels',  orPermission: true },
+  { prefix: '/pasteuriser/job-cards', departments: ['Production','Management'],         permission: 'can_view_labels',  orPermission: true },
+  { prefix: '/pasteuriser/run',       departments: ['Production'],                      permission: 'can_print_labels', orPermission: true },
+  { prefix: '/pasteuriser/history',   departments: ['Production','Sales','Management','Quality'], permission: 'can_view_labels', orPermission: true },
+  { prefix: '/pasteuriser',           departments: ['Production','Sales','Management'], permission: 'can_view_labels',  orPermission: true },
+
   // Maintenance — full module is Maintenance + Management. Job cards specifically
   // are also reachable by PRODUCTION (they raise breakdowns and track their own
   // cards) and QUALITY (the QC does the post-maintenance check on a card). Both

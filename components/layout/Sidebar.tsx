@@ -16,8 +16,10 @@ import {
   Sparkles, Flag, Network, Cpu, Ticket, Flower2,
   CalendarCheck, CalendarRange, Activity, ClipboardCheck,
   FileSpreadsheet, GraduationCap, Printer, Warehouse, Wrench,
+  Tags, History,
 } from 'lucide-react'
 import type { PermissionKey } from '@/lib/auth/permissions'
+import { flags } from '@/lib/config/flags'
 
 export interface NavItem {
   href:         string
@@ -33,7 +35,7 @@ export interface NavItem {
 }
 
 // Group order is driven by first-appearance below:
-// Production → Operations → HR → Quality → Maintenance → Sales → Marketing →
+// Production → Pasteuriser → Operations → HR → Quality → Maintenance → Sales → Marketing →
 // Logistics → Management → Workspace → AXIS → Admin.
 // Home is rendered as a standalone item above the groups (see render).
 export const NAV: NavItem[] = [
@@ -46,6 +48,16 @@ export const NAV: NavItem[] = [
   { href: '/job-cards',                 label: 'Job Cards',                  icon: FileText,        group: 'Production', departments: ['Production','Management'], permission: 'can_view_blends', orPermission: true },
   { href: '/count',                     label: 'Stock Count',                icon: Boxes,           group: 'Production', departments: ['Production'], permission: 'can_submit_count' },
   { href: '/supervisor',                label: 'Supervisor Hub',             icon: Activity,        group: 'Production', departments: ['Production','Management'] },
+
+  // ── Pasteuriser — the finished-product label chain ──
+  // Four entries rather than one, because three different people own three of
+  // them and each lands on the screen for their own step. Sales appear here via
+  // orPermission: they are not in the Production department but the Labels
+  // screen is theirs.
+  { href: '/pasteuriser/labels',        label: 'Labels',                     icon: Tags,            group: 'Pasteuriser', departments: ['Production','Sales','Management'], permission: 'can_view_labels', orPermission: true },
+  { href: '/pasteuriser/job-cards',     label: 'Label Job Cards',            icon: ClipboardList,   group: 'Pasteuriser', departments: ['Production','Management'], permission: 'can_view_labels', orPermission: true },
+  { href: '/pasteuriser/run',           label: 'Run & Print',                icon: Printer,         group: 'Pasteuriser', departments: ['Production'], permission: 'can_print_labels', orPermission: true },
+  { href: '/pasteuriser/history',       label: 'Label History',              icon: History,         group: 'Pasteuriser', departments: ['Production','Sales','Management','Quality'], permission: 'can_view_labels', orPermission: true },
 
   // ── Operations — cross-role, universal entries ──
   { href: '/production/roster',         label: 'Shift Rosters',              icon: CalendarRange,   group: 'Operations', permission: 'can_view_roster' },
@@ -191,7 +203,11 @@ export default function Sidebar({ mobileOpen, onMobileClose }: { mobileOpen: boo
   const pathname  = usePathname()
   const { department, role, displayName, initials, signOut, p, isIT, isFullAdmin } = useAuth()
 
-  const visibleNav = getVisibleNavItems(NAV, { role, department, isIT, isFullAdmin, p })
+  // Plain conditional filtering, not a registry (ARCHITECTURE.md §3.2). The
+  // flag is a ROLLOUT control: it hides the entries while the label set is
+  // being transcribed and re-approved. Access is still the route guards' job.
+  const nav = flags.pasteuriserLabels ? NAV : NAV.filter(i => i.group !== 'Pasteuriser')
+  const visibleNav = getVisibleNavItems(nav, { role, department, isIT, isFullAdmin, p })
 
   const groups: { label: string; items: NavItem[] }[] = []
   for (const item of visibleNav) {

@@ -562,3 +562,85 @@ export function resolveTypeCode(wc: WorkCentre, productType: string): ResolvedTy
   const letters = String(productType ?? '').replace(/[^A-Za-z]/g, '').toUpperCase()
   return { code: letters.slice(0, 2) || 'XX', configured: false }
 }
+
+// ═════════════════════════════════════════════════════════════════════════════
+// PASTEURISER FINISHED PRODUCT  (ARCHITECTURE.md §5 — "sequenced last")
+// ═════════════════════════════════════════════════════════════════════════════
+//
+// §5 says the Pasteuriser is deliberately outside the {WC}{TYPE}-{DDMMYYYY}-{NNN}
+// scheme because "its final product carries its own serial and label
+// conventions". This is that convention, written down.
+//
+//     DD-MM-NN        e.g. 20-08-01  =  20 August, bag 1
+//
+// It is short because it is read aloud off a bag by a packer and typed into a
+// customer's goods-receipt system, and because it is already printed on stock
+// approved by Kunitaro and others — the 26166-CON-CH and Kunitaro RA templates
+// both carry exactly this form. Changing it to match the other five sections
+// would mean re-approving every customer label, which is the tail wagging the
+// dog: the format is a customer-facing commitment, not an internal preference.
+//
+// COUNTING SCOPE IS THE JOB CARD, not the day. One job card is one batch of one
+// product for one customer, and the customer counts "how many bags of my order"
+// — so two job cards running on the same day each start at 01. That is why the
+// year is absent and does not need to be: the batch number alongside it on the
+// label carries the year (26166 = 2026), and the pair is unique.
+//
+// NOTE the pre-existing `pasteuriserSerial(lot, bagNo)` above is a DIFFERENT
+// thing and stays: it expands the historic bag-count *ranges* the capture screen
+// records ({LOT}-{NNN}), which are an internal record with no label attached.
+// The two coexist until pasteuriser bagging moves to per-bag capture; naming
+// them apart is what stops one silently being used where the other is meant.
+
+/** `yyyy-mm-dd` → `DD-MM`. Returns '00-00' for anything that isn't a date. */
+export function ddmm(dateStr: string): string {
+  const d = String(dateStr).split('-')
+  if (d.length !== 3 || !d[0] || !d[1] || !d[2]) return '00-00'
+  return `${d[2]}-${d[1]}`
+}
+
+/** Two-digit sequence — the width the approved labels are printed at. */
+export function pad2(seq: number): string {
+  return String(seq).padStart(2, '0')
+}
+
+/**
+ * The prefix a job card's bags share: `DD-MM-`.
+ *
+ * This is the allocation scope's printed form. `dateStr` is the PRODUCTION RUN
+ * date off the job card, never `new Date()` — a run goes 07h00→01h00 and the
+ * live clock would roll the stem over mid-run (ARCHITECTURE.md §5, §9).
+ */
+export function pasteuriserLabelStem(dateStr: string): string {
+  return `${ddmm(dateStr)}-`
+}
+
+/**
+ * Pasteuriser finished-product serial: `DD-MM-NN`.
+ *
+ * `seq` must come from the database (`next_pasteuriser_label_serial`), never
+ * from a max read in app code — two supervisors printing in the same second
+ * both read the same max and mint the same serial onto two different bags.
+ * That is the documented cause of the 44% bag loss (ARCHITECTURE.md §1B, §5).
+ */
+export function pasteuriserLabelSerial(dateStr: string, seq: number): string {
+  return `${pasteuriserLabelStem(dateStr)}${pad2(seq)}`
+}
+
+export interface ParsedPasteuriserSerial { day: string; month: string; seq: number }
+
+/**
+ * Read a `DD-MM-NN` serial back.
+ *
+ * Anchored from both ends like every other parser here, not `split('-')` —
+ * that habit is what mis-reads Granule lots (ARCHITECTURE.md §5). Returns null
+ * rather than a partial result, so a caller cannot half-succeed.
+ */
+export function parsePasteuriserLabelSerial(serial: string): ParsedPasteuriserSerial | null {
+  const m = String(serial).trim().match(/^(\d{2})-(\d{2})-(\d{1,4})$/)
+  if (!m) return null
+  const day = parseInt(m[1], 10)
+  const month = parseInt(m[2], 10)
+  if (day < 1 || day > 31 || month < 1 || month > 12) return null
+  return { day: m[1], month: m[2], seq: parseInt(m[3], 10) }
+}

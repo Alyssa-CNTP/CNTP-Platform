@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { ESLint } from 'eslint'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -136,6 +136,14 @@ export const y = useSomething(2)
     const errs = await errorsFor(`
 'use client'
 import { useState, useEffect } from 'react'
+
+// Booting ESLint is slow — seconds, not milliseconds — and these tests do it for
+// real rather than mocking the rule they exist to prove still bites. Vitest's
+// 5s default is a limit on TEST logic, and under a loaded worker pool ESLint's
+// startup alone exceeds it, so the suite went red for a reason that had nothing
+// to do with the rules. The timeout is raised here rather than globally: every
+// other test in this repo is pure and should stay on a tight default.
+vi.setConfig({ testTimeout: 30_000 })
 export default function Screen() {
   const [n, setN] = useState(0)
   useEffect(() => { setN(n + 1) }, [])
