@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getCallerPermissions, getAdminClient } from '@/lib/auth/server-helpers'
+import { getCallerPermissions } from '@/lib/auth/server-helpers'
+import { labelDb, isUniqueViolation } from '../../../_db'
 import { writeAudit } from '@/lib/audit/write'
 
 /**
@@ -21,7 +22,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     return NextResponse.json({ error: 'Permission denied' }, { status: 403 })
   }
 
-  const admin = getAdminClient() as any
+  const admin = labelDb()
 
   const { data: src, error: readErr } = await admin
     .from('label_templates').select('*').eq('id', id).maybeSingle()
@@ -44,7 +45,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const { data: latest } = await admin
     .from('label_templates').select('version').eq('code', src.code)
     .order('version', { ascending: false }).limit(1)
-  const version = ((latest?.[0]?.version as number) ?? src.version) + 1
+  const version = (Number(latest?.[0]?.version) || Number(src.version)) + 1
 
   const { data, error } = await admin.from('label_templates').insert({
     code: src.code,
@@ -63,7 +64,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   }).select('*').single()
 
   if (error) {
-    if ((error as any).code === '23505') {
+    if (isUniqueViolation(error)) {
       return NextResponse.json({ error: `${src.code} v${version} already exists` }, { status: 409 })
     }
     return NextResponse.json({ error: error.message }, { status: 500 })

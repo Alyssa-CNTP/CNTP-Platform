@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getCallerPermissions, getAdminClient } from '@/lib/auth/server-helpers'
+import { getCallerPermissions } from '@/lib/auth/server-helpers'
+import { labelDb, readBody, str, isUniqueViolation } from '../_db'
 import { SEED_TEMPLATES } from '@/features/pasteuriser-labels'
 import { writeAudit } from '@/lib/audit/write'
 
@@ -18,12 +19,12 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Permission denied' }, { status: 403 })
   }
 
-  let body: any
-  try { body = await req.json() } catch { return NextResponse.json({ error: 'Bad request' }, { status: 400 }) }
+  const body = await readBody(req)
+  if (!body) return NextResponse.json({ error: 'Bad request' }, { status: 400 })
 
-  const code = String(body?.code ?? '').trim().toUpperCase()
-  const name = String(body?.name ?? '').trim()
-  const seedCode = body?.seedFrom ? String(body.seedFrom).trim().toUpperCase() : null
+  const code = str(body.code).toUpperCase()
+  const name = str(body.name)
+  const seedCode = str(body.seedFrom).toUpperCase() || null
   if (!code) return NextResponse.json({ error: 'A label code is required' }, { status: 400 })
 
   const seed = seedCode ? SEED_TEMPLATES.find(t => t.code === seedCode) : null
@@ -31,7 +32,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: `No seed template '${seedCode}'` }, { status: 400 })
   }
 
-  const admin = getAdminClient() as any
+  const admin = labelDb()
 
   // Version is per code. Reading the current max here is safe in a way the bag
   // serials are not: two people creating the same NEW label code in the same
@@ -41,16 +42,16 @@ export async function POST(req: NextRequest) {
   const { data: existing } = await admin.from('label_templates')
     .select('version').eq('code', code)
     .order('version', { ascending: false }).limit(1)
-  const version = ((existing?.[0]?.version as number) ?? 0) + 1
+  const version = (Number(existing?.[0]?.version) || 0) + 1
 
   const row = {
     code,
     name: name || seed?.name || code,
     version,
     status: 'draft',
-    market: body?.market ?? seed?.market ?? 'export',
-    organic: typeof body?.organic === 'boolean' ? body.organic : (seed?.organic ?? false),
-    size: body?.size ?? seed?.size ?? '100x100',
+    market: str(body.market) || seed?.market || 'export',
+    organic: typeof body.organic === 'boolean' ? body.organic : (seed?.organic ?? false),
+    size: str(body.size) || seed?.size || '100x100',
     lines: seed?.lines ?? [],
     certifications: seed?.certifications ?? [],
     mark_position: seed?.markPosition ?? 'right',
@@ -60,7 +61,7 @@ export async function POST(req: NextRequest) {
 
   const { data, error } = await admin.from('label_templates').insert(row).select('*').single()
   if (error) {
-    if ((error as any).code === '23505') {
+    if (isUniqueViolation(error)) {
       return NextResponse.json({ error: `Label ${code} v${version} already exists` }, { status: 409 })
     }
     return NextResponse.json({ error: error.message }, { status: 500 })

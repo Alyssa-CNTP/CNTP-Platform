@@ -31,6 +31,8 @@ export {
 export { SEED_TEMPLATES, SEED_BY_CODE } from './seed-templates'
 
 export {
+  publicDb,
+  errMessage,
   fetchTemplates,
   fetchTemplate,
   fetchTemplateEvents,

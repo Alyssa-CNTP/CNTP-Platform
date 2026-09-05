@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getCallerPermissions, getAdminClient } from '@/lib/auth/server-helpers'
+import { getCallerPermissions } from '@/lib/auth/server-helpers'
+import { labelDb, readBody, str, strOrNull, posInt, isUniqueViolation } from '../_db'
 import { writeAudit } from '@/lib/audit/write'
 
 /**
@@ -22,17 +23,17 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Permission denied' }, { status: 403 })
   }
 
-  let body: any
-  try { body = await req.json() } catch { return NextResponse.json({ error: 'Bad request' }, { status: 400 }) }
+  const body = await readBody(req)
+  if (!body) return NextResponse.json({ error: 'Bad request' }, { status: 400 })
 
-  const templateId = String(body?.templateId ?? '').trim()
-  const customer   = String(body?.customer ?? '').trim()
-  const poNumber   = String(body?.poNumber ?? '').trim()
+  const templateId = str(body.templateId)
+  const customer   = str(body.customer)
+  const poNumber   = str(body.poNumber)
   if (!templateId || !customer || !poNumber) {
     return NextResponse.json({ error: 'templateId, customer and poNumber are all required' }, { status: 400 })
   }
 
-  const admin = getAdminClient() as any
+  const admin = labelDb()
 
   // Fresh read of the template's status — a PO must never be attached to
   // wording that is not approved. Checked here rather than trusted from the
@@ -52,22 +53,21 @@ export async function POST(req: NextRequest) {
     template_id: templateId,
     customer,
     po_number: poNumber,
-    item_number:  body?.itemNumber ?? null,
-    product:      body?.product ?? null,
-    net_mass:     body?.netMass ?? null,
-    gross_mass:   body?.grossMass ?? null,
-    importer:     body?.importer ?? null,
-    ordered_bags: Number.isFinite(Number(body?.orderedBags)) && Number(body?.orderedBags) > 0
-      ? Math.round(Number(body.orderedBags)) : null,
-    planned_batch_no: body?.plannedBatchNo ?? null,
-    planned_date:     body?.plannedDate ?? null,
-    notes:            body?.notes ?? null,
+    item_number:  strOrNull(body.itemNumber),
+    product:      strOrNull(body.product),
+    net_mass:     strOrNull(body.netMass),
+    gross_mass:   strOrNull(body.grossMass),
+    importer:     strOrNull(body.importer),
+    ordered_bags: posInt(body.orderedBags),
+    planned_batch_no: strOrNull(body.plannedBatchNo),
+    planned_date:     strOrNull(body.plannedDate),
+    notes:            strOrNull(body.notes),
     created_by: caller.userId,
   }
 
   const { data, error } = await admin.from('label_po_assignments').insert(row).select('*').single()
   if (error) {
-    if ((error as any).code === '23505') {
+    if (isUniqueViolation(error)) {
       return NextResponse.json({
         error: `PO ${poNumber} is already assigned to ${tpl.code} v${tpl.version}.`,
       }, { status: 409 })
@@ -91,9 +91,9 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ error: 'Permission denied' }, { status: 403 })
   }
 
-  let body: any
-  try { body = await req.json() } catch { return NextResponse.json({ error: 'Bad request' }, { status: 400 }) }
-  const id = String(body?.id ?? '').trim()
+  const body = await readBody(req)
+  if (!body) return NextResponse.json({ error: 'Bad request' }, { status: 400 })
+  const id = str(body.id)
   if (!id) return NextResponse.json({ error: 'id is required' }, { status: 400 })
 
   const patch: Record<string, unknown> = { updated_at: new Date().toISOString() }
@@ -114,7 +114,7 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ error: 'Invalid status' }, { status: 400 })
   }
 
-  const admin = getAdminClient() as any
+  const admin = labelDb()
   const { data: before } = await admin.from('label_po_assignments').select('*').eq('id', id).maybeSingle()
   const { data, error } = await admin
     .from('label_po_assignments').update(patch).eq('id', id).select('*').maybeSingle()

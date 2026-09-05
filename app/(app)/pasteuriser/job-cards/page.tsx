@@ -4,7 +4,9 @@ import { useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { CalendarClock, CircleAlert, Package } from 'lucide-react'
 import { LabelPreview, fetchAssignments, toTemplate,
-  type LabelPoAssignmentRow, type LabelTemplateRow } from '@/features/pasteuriser-labels'
+  type LabelPoAssignmentRow, type LabelTemplateRow,
+  errMessage,
+} from '@/features/pasteuriser-labels'
 import { useAuth } from '@/lib/auth/context'
 
 type Row = LabelPoAssignmentRow & { template: LabelTemplateRow }
@@ -32,7 +34,7 @@ export default function PasteuriserJobCardsPage() {
   useEffect(() => {
     ;(async () => {
       try { setRows(await fetchAssignments(['open', 'in_production'])) }
-      catch (e: any) { setError(e.message) }
+      catch (e) { setError(errMessage(e)) }
       finally { setLoading(false) }
     })()
   }, [])

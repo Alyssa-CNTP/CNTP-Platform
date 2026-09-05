@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { ChevronRight, Plus, Search } from 'lucide-react'
 import {
   SEED_TEMPLATES, fetchTemplates, toTemplate, type LabelTemplateRow,
+  errMessage,
 } from '@/features/pasteuriser-labels'
 import type { LabelTemplateStatus } from '@/lib/core/labels'
 import { useAuth } from '@/lib/auth/context'
@@ -47,7 +48,7 @@ export default function LabelLibraryPage() {
   async function load() {
     setLoading(true)
     try { setRows(await fetchTemplates()); setError(null) }
-    catch (e: any) { setError(e.message) }
+    catch (e) { setError(errMessage(e)) }
     finally { setLoading(false) }
   }
   useEffect(() => { void load() }, [])
@@ -92,7 +93,7 @@ export default function LabelLibraryPage() {
       const json = await res.json()
       if (!res.ok) throw new Error(json.error ?? 'Could not create the label')
       router.push(`/pasteuriser/labels/${json.template.id}`)
-    } catch (e: any) { setError(e.message) }
+    } catch (e) { setError(errMessage(e)) }
     finally { setCreating(false) }
   }
 

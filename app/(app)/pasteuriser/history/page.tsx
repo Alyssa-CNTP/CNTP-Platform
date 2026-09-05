@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Search } from 'lucide-react'
 import { getSupabaseClient } from '@/lib/supabase/client'
+import { publicDb, errMessage } from '@/features/pasteuriser-labels'
 
 /**
  * Every label printed, and the approval behind it.
@@ -36,15 +37,14 @@ export default function PasteuriserHistoryPage() {
   useEffect(() => {
     ;(async () => {
       try {
-        const { data, error } = await (getSupabaseClient() as any)
-          .schema('public')
+        const { data, error } = await publicDb()
           .from('label_prints')
           .select('id, serial_no, binding, printed_at, print_path, reprint_of, void_of, void_reason, template:label_templates(code, name, version, approved_at, cu_approval_ref), assignment:label_po_assignments(customer, po_number)')
           .order('printed_at', { ascending: false })
           .limit(500)
         if (error) throw new Error(error.message)
         setRows((data ?? []) as PrintRow[])
-      } catch (e: any) { setError(e.message) }
+      } catch (e) { setError(errMessage(e)) }
       finally { setLoading(false) }
     })()
   }, [])

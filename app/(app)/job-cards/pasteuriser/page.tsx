@@ -14,6 +14,7 @@ import { upperCode } from '@/lib/production/normalize-code'
 import { loadImage } from '@/lib/pdf/load-image'
 import { getMySignatureStatus, type MySignatureStatus } from '@/lib/production/employee-signature'
 import { JobCardApprovalsPanel } from '@/components/production/JobCardApprovalsPanel'
+import { publicDb } from '@/features/pasteuriser-labels'
 
 interface RatioLine { componentItemId: string; label: string; pct: number }
 interface PackagingLine { componentItemId: string; label: string; kgPerUnit: number }
@@ -315,7 +316,7 @@ function PasteuriserJobCardScreen() {
   useEffect(() => {
     if (!deepLinkAssignment) return
     ;(async () => {
-      const { data } = await (db as any).schema('public')
+      const { data } = await publicDb()
         .from('label_po_assignments')
         .select('*, template:label_templates(name, code, version)')
         .eq('id', deepLinkAssignment).maybeSingle()

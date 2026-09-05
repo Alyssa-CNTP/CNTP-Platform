@@ -7,6 +7,7 @@ import {
   LabelPreview, TemplateEditor,
   buildLabelDocument, fetchTemplate, fetchTemplateEvents, saveDraft, toTemplate,
   type LabelTemplateRow, type TemplateEventRow,
+  errMessage,
 } from '@/features/pasteuriser-labels'
 import { canRequestApproval, resolveLabel, type LabelTemplate } from '@/lib/core/labels'
 import { useAuth } from '@/lib/auth/context'
@@ -48,7 +49,7 @@ export default function LabelTemplatePage() {
       setDirty(false)
       setEvents(await fetchTemplateEvents(id))
       setError(null)
-    } catch (e: any) { setError(e.message) }
+    } catch (e) { setError(errMessage(e)) }
     finally { setLoading(false) }
   }, [id])
 
@@ -68,7 +69,7 @@ export default function LabelTemplatePage() {
       })
       setDirty(false)
       await load()
-    } catch (e: any) { setError(e.message) }
+    } catch (e) { setError(errMessage(e)) }
     finally { setBusy(false) }
   }
 
@@ -82,13 +83,16 @@ export default function LabelTemplatePage() {
       })
       const json = await res.json()
       if (!res.ok) {
-        const detail = json.issues?.length
-          ? `${json.error}\n\n${json.issues.map((i: any) => `• ${i.message}`).join('\n')}`
+        // The route reports compliance failures as a list, so the designer sees
+        // every problem at once rather than fixing one and resubmitting.
+        const issues = (json.issues ?? []) as { message: string }[]
+        const detail = issues.length
+          ? `${json.error}\n\n${issues.map(i => `• ${i.message}`).join('\n')}`
           : json.error
         throw new Error(detail ?? 'Could not complete that')
       }
       await load()
-    } catch (e: any) { setError(e.message) }
+    } catch (e) { setError(errMessage(e)) }
     finally { setBusy(false) }
   }
 
@@ -99,7 +103,7 @@ export default function LabelTemplatePage() {
       const json = await res.json()
       if (!res.ok) throw new Error(json.error ?? 'Could not create a new version')
       router.push(`/pasteuriser/labels/${json.template.id}`)
-    } catch (e: any) { setError(e.message) }
+    } catch (e) { setError(errMessage(e)) }
     finally { setBusy(false) }
   }
 
@@ -286,7 +290,7 @@ function ApprovedPanel({ row, template, canAssign, onDone }: {
       setF({ customer: '', poNumber: '', product: '', itemNumber: '', netMass: '', grossMass: '',
              importer: '', orderedBags: '', plannedBatchNo: '', plannedDate: '', notes: '' })
       onDone()
-    } catch (e: any) { setErr(e.message) }
+    } catch (e) { setErr(errMessage(e)) }
     finally { setBusy(false) }
   }
 

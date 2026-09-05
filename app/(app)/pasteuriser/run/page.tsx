@@ -6,6 +6,7 @@ import { ExternalLink, Printer, TriangleAlert } from 'lucide-react'
 import {
   LabelPreview, fetchPrints, liveSerials, openAndPrintLabel, pplbFidelity, toTemplate,
   type LabelPrintRow, type LabelPoAssignmentRow, type LabelTemplateRow,
+  publicDb, errMessage,
 } from '@/features/pasteuriser-labels'
 import { resolveLabel, type LabelBinding } from '@/lib/core/labels'
 import { getSupabaseClient } from '@/lib/supabase/client'
@@ -47,8 +48,7 @@ export default function PasteuriserRunPage() {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const { data, error } = await (getSupabaseClient() as any)
-        .schema('public')
+      const { data, error } = await publicDb()
         .from('job_cards_pasteuriser')
         .select('id, job_card_no, customer, batch_number, product_name, status, expected_commencement, date_of_card, assignment:label_po_assignments(*, template:label_templates(*))')
         .eq('status', 'approved')
@@ -58,7 +58,7 @@ export default function PasteuriserRunPage() {
       if (error) throw new Error(error.message)
       setCards((data ?? []) as Card[])
       setError(null)
-    } catch (e: any) { setError(e.message) }
+    } catch (e) { setError(errMessage(e)) }
     finally { setLoading(false) }
   }, [])
 
@@ -154,7 +154,7 @@ function JobCardPanel({ card, canPrint, router }: {
         setErr(`The printer refused some labels — reprint these:\n${json.sendErrors.join('\n')}`)
       }
       await load()
-    } catch (e: any) { setErr(e.message) }
+    } catch (e) { setErr(errMessage(e)) }
     finally { setBusy(false) }
   }
 

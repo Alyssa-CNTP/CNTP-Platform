@@ -2,6 +2,57 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-05 — Alyssa (Pasteuriser finished-product labels: design → approve → PO → print)
+
+**Files changed:** `lib/core/labels/` (new — `types.ts`, `resolve.ts`, `compliance.ts`, `index.ts`, `labels.test.ts`), `lib/core/serials.ts`, `features/pasteuriser-labels/` (new — `marks.ts`, `render-html.ts`, `render-pplb.ts`, `seed-templates.ts`, `db.ts`, `index.ts`, `render.test.ts`, `components/LabelPreview.tsx`, `components/TemplateEditor.tsx`), `app/(app)/pasteuriser/` (new — hub, `labels/`, `labels/[id]/`, `job-cards/`, `run/`, `history/`), `app/api/pasteuriser/` (new — `_db.ts`, `labels/route.ts`, `labels/[id]/transition/route.ts`, `labels/[id]/version/route.ts`, `assignments/route.ts`, `print/route.ts`), `app/(app)/job-cards/pasteuriser/page.tsx`, `app/(app)/layout.tsx`, `components/layout/Sidebar.tsx`, `lib/auth/permissions.ts`, `lib/config/flags.ts`, `lib/config/boundary-rule.test.ts`, `lib/config/hooks-rule.test.ts`, `supabase/migrations/20260905_001_pasteuriser_label_workflow.sql` (new)
+
+### What this replaces
+
+Label artwork lives in thirteen BarTender `.btw` files on one workstation. Proofs are emailed as attachments, approvals come back in an inbox, and the link from *"Control Union approved this wording"* to *"these bags were printed from it"* exists only in someone's memory. Under FSSC that link is documented information; today it is not documented anywhere.
+
+### Four routes, three owners
+
+| Route | Who | What |
+|---|---|---|
+| `/pasteuriser/labels` | Sales | Design a label, issue a proof, record the CU/customer approval, assign a customer PO |
+| `/pasteuriser/job-cards` | Production Manager | Pick an approved label + PO and raise the job card |
+| `/pasteuriser/run` | Supervisor | Print finished-product labels against an approved job card |
+| `/pasteuriser/history` | Everyone | Serial → wording → approval, for traceability |
+
+**Not one page.** The chain crosses three roles at three different times and each step needs its own permission. One page would enforce access by hiding sections rather than by route guard, and would grow into the 2,770-line screen the capture module is being unwound from (ARCHITECTURE §1A).
+
+### The dependency deliberately left out
+
+`label_po_assignments.planned_batch_no` / `planned_date` are **nullable**. The supply chain analyst fills them when the plan is known; the production manager may raise the job card without them, and the picker says *"not planned yet"* rather than showing a blank. Making them required would encode the bottleneck this workflow exists to remove.
+
+### Core (`lib/core/labels`, own commit)
+
+Template / binding / instance are kept apart, and approval attaches to the **template** — so an approved one is frozen, and an edit mints a new version rather than silently invalidating the approval the customer gave. Superseded versions are never deleted: bags printed from them are in the warehouse.
+
+Compliance is checked at **request-approval** time, not at print — a proof must not reach Control Union already non-compliant, because their sign-off would then certify a bad label. Two rules are why this is code and not a checklist:
+
+- **Organic** must carry the Control Union registration *and* operator number as **data**. A template can carry "Certified Organic by Control Union" in prose with no number anywhere; it reads as correct and is not.
+- **Japan-bound organic** must carry the **JAS** leaf-in-two-circles mark. `requiredMarks()` ends in `assertNever`, so adding a market without deciding its rules fails the build.
+
+### Two failure modes this refuses to have
+
+1. **A silently degraded print.** PPLB cannot draw an SVG, so a thermal stream of a JAS label would produce a bag that looks completely normal and cannot legally be sold as organic in Japan. `pplbFidelity()` **refuses** rather than degrades, and those labels print through the browser path, which renders the marks.
+2. **A truncated line.** The first type scale fitted on height only; with marks down the right the text column is ~17mm narrower, and an export label came out reading `Manufacturer: Cape Natural Tea Pr…`. Nothing in the data was wrong and no test failed — it was visible only by looking at a bag. The scale now solves both dimensions per line, and `render.test.ts` asserts the fit across all thirteen templates.
+
+### Concurrency and the ledger
+
+Serials come from `public.next_pasteuriser_label_seq`, which delegates to the existing `production.next_bag_seq` rather than adding a second counter (§7 — check the reuse index first). Scope is the **job card**, since `DD-MM-NN` counts one customer's order, not a day. Every state transition re-reads the row and guards its `UPDATE` on the status it read, so a concurrent transition conflicts instead of silently overwriting (§1B applied to a state machine).
+
+`label_prints` is append-only. The ledger row is written **before** the send and a send failure does not remove it — the serial may already be on paper, and a ledger is reversed by appending a void, never by deleting (§6).
+
+### Also
+
+- Two ESLint-booting tests had a 5s timeout. They boot a real ESLint, and under a loaded worker pool the startup alone exceeds that — so adding one test file anywhere turned the suite red for a reason unrelated to the rules. Raised locally to 30s; every other test stays on the tight default.
+- Behind `NEXT_PUBLIC_FF_PASTEURISER_LABELS`, **off by default**, while the thirteen designs are transcribed and re-approved. The flag hides the nav; the routes stay behind their own permissions, because a flag is a rollout control and not an access control.
+- New permissions: `can_view_labels`, `can_design_labels`, `can_approve_labels`, `can_assign_label_po`, `can_print_labels`.
+
+**Migration `20260905_001` to be run in Supabase SQL Editor — staging first, then production.** 619 tests pass; boundaries clean; type errors and lint unchanged at their CI baselines (34 / 3021).
+
 ## 2026-09-03 — Alyssa (Audit log: fix production rejecting all app-level audit writes)
 
 **Files changed:** `supabase/migrations/20260903_001_audit_log_action_freeform.sql` (new)

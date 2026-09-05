@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getCallerPermissions, getAdminClient } from '@/lib/auth/server-helpers'
+import { getCallerPermissions } from '@/lib/auth/server-helpers'
+import { labelDb, readBody, str, strOrNull, errMessage } from '../_db'
 import { writeAudit } from '@/lib/audit/write'
 import { pasteuriserLabelSerial } from '@/lib/core/serials'
 import { resolveLabel, printBlockers, type LabelBinding } from '@/lib/core/labels'
@@ -48,15 +49,15 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Permission denied' }, { status: 403 })
   }
 
-  let body: any
-  try { body = await req.json() } catch { return NextResponse.json({ error: 'Bad request' }, { status: 400 }) }
+  const body = await readBody(req)
+  if (!body) return NextResponse.json({ error: 'Bad request' }, { status: 400 })
 
-  const jobCardId = String(body?.jobCardId ?? '').trim()
+  const jobCardId = str(body.jobCardId)
   if (!jobCardId) return NextResponse.json({ error: 'jobCardId is required' }, { status: 400 })
 
-  const count = Math.min(50, Math.max(1, Math.round(Number(body?.count ?? 1)) || 1))
+  const count = Math.min(50, Math.max(1, Math.round(Number(body.count ?? 1)) || 1))
 
-  const admin = getAdminClient() as any
+  const admin = labelDb()
 
   // ── The job card, its assignment and its template, in one fresh read ───────
   const { data: card, error: cardErr } = await admin
@@ -107,15 +108,16 @@ export async function POST(req: NextRequest) {
     lot_number:       card.batch_number ?? undefined,
     job_card_no:      card.job_card_no ?? undefined,
     production_date:  formatSast(productionDate),
-    best_before_date: body?.bestBeforeDate ? String(body.bestBeforeDate) : undefined,
+    best_before_date: strOrNull(body.bestBeforeDate) ?? undefined,
   }
 
   // Values the operator legitimately supplies at the machine (a per-pallet
   // gross mass, a best-before the customer specified for this shipment).
   const overrides: LabelBinding = {}
+  const supplied = (body.binding ?? {}) as Record<string, unknown>
   for (const k of ['gross_mass', 'best_before_date', 'pallet_no'] as const) {
-    const v = body?.binding?.[k]
-    if (typeof v === 'string' && v.trim()) overrides[k] = v.trim()
+    const v = strOrNull(supplied[k])
+    if (v) overrides[k] = v
   }
 
   const template = toTemplate(templateRow)
@@ -178,7 +180,7 @@ export async function POST(req: NextRequest) {
           await sendToPrinter(payload, printer.ip, printer.port ?? 9100)
         }
       } catch (err) {
-        sendErrors.push(`${serial}: ${err instanceof Error ? err.message : String(err)}`)
+        sendErrors.push(`${serial}: ${errMessage(err)}`)
       }
     }
   }

@@ -112,18 +112,23 @@ export function toTemplate(row: LabelTemplateRow): LabelTemplate {
   }
 }
 
-// The label tables live in `public`, alongside job_cards_pasteuriser. The shared
-// client is bound to the `production` schema, so every call here re-points it.
-//
-// The cast is to `SupabaseLike` rather than `any`: generated database types do
-// not cover the `public` schema for this client, but narrowing the escape hatch
-// to "has .schema()" keeps the rest of the chain typed, instead of turning every
-// call downstream into `any` — the habit ARCHITECTURE.md §1A blames for the
-// compiler being switched off exactly where it would have caught something.
-type SupabaseLike = { schema: (name: string) => any }  // eslint-disable-line @typescript-eslint/no-explicit-any
+/**
+ * The shared client re-pointed at the `public` schema.
+ *
+ * The label tables live in `public`, alongside job_cards_pasteuriser, while the
+ * shared client is bound to `production`. Exported so the five pages that read
+ * these tables call one helper instead of each repeating `as any`-style
+ * re-pointing inline — which is how a screen ends up reaching the wrong schema
+ * and silently finding nothing.
+ */
+export function publicDb() {
+  return getSupabaseClient().schema('public')
+}
 
-function publicDb() {
-  return (getSupabaseClient() as unknown as SupabaseLike).schema('public')
+/** An unknown thrown value → something showable. Every page catches with this,
+ *  so none of them needs `catch (e: any)`. */
+export function errMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err)
 }
 
 export async function fetchTemplates(): Promise<LabelTemplateRow[]> {

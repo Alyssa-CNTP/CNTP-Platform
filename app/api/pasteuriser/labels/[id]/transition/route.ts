@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getCallerPermissions, getAdminClient } from '@/lib/auth/server-helpers'
+import { getCallerPermissions } from '@/lib/auth/server-helpers'
+import { labelDb, readBody, str, strOrNull, isUniqueViolation } from '../../../_db'
 import { writeAudit } from '@/lib/audit/write'
 import { checkCompliance, type LabelTemplateStatus } from '@/lib/core/labels'
 import { toTemplate, type LabelTemplateRow } from '@/features/pasteuriser-labels'
@@ -43,18 +44,18 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const caller = await getCallerPermissions()
   if (!caller.userId) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 })
 
-  let body: any
-  try { body = await req.json() } catch { return NextResponse.json({ error: 'Bad request' }, { status: 400 }) }
+  const body = await readBody(req)
+  if (!body) return NextResponse.json({ error: 'Bad request' }, { status: 400 })
 
-  const action = body?.action as Action
+  const action = str(body.action) as Action
   const rule = RULES[action]
   if (!rule) return NextResponse.json({ error: `Unknown action '${action}'` }, { status: 400 })
   if (!caller.can(rule.permission)) return NextResponse.json({ error: 'Permission denied' }, { status: 403 })
 
-  const note = typeof body?.note === 'string' ? body.note.trim() || null : null
-  const externalRef = typeof body?.externalRef === 'string' ? body.externalRef.trim() || null : null
+  const note = strOrNull(body.note)
+  const externalRef = strOrNull(body.externalRef)
 
-  const admin = getAdminClient() as any
+  const admin = labelDb()
 
   // Fresh read. This is the authority for what state the template is in.
   const { data: row, error: readErr } = await admin
@@ -97,9 +98,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     patch.approved_at = now
     patch.rejected_reason = null
     if (externalRef) patch.cu_approval_ref = externalRef
-    if (typeof body?.customerRef === 'string' && body.customerRef.trim()) {
-      patch.customer_approval_ref = body.customerRef.trim()
-    }
+    const customerRef = strOrNull(body.customerRef)
+    if (customerRef) patch.customer_approval_ref = customerRef
   }
   if (action === 'reject') patch.rejected_reason = note
   if (action === 'reopen') { patch.rejected_reason = null; patch.proof_issued_at = null }
@@ -115,7 +115,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     .select('*').maybeSingle()
   if (updErr) {
     // The partial unique index allowing only one approved version per code.
-    if ((updErr as any).code === '23505') {
+    if (isUniqueViolation(updErr)) {
       return NextResponse.json({
         error: `Another version of ${row.code} is already approved. Supersede it first — ` +
                `two approved versions of one label would mean two live orders printing different wording.`,
