@@ -8,14 +8,29 @@ import {
   errMessage,
 } from '@/features/pasteuriser-labels'
 import type { LabelTemplateStatus } from '@/lib/core/labels'
+import { groupLibraryByCustomer } from '@/lib/core/labels/library'
 import { useAuth } from '@/lib/auth/context'
 
 /**
  * The label library.
  *
- * Groups by label CODE (the family) rather than listing every version flat,
- * because "which EU Organic label is live?" is the question people actually
- * arrive with, and a flat list of eleven EU-ORG rows answers it badly.
+ * Grouped by CUSTOMER, then by label family, then by version.
+ *
+ * Not by certification scheme. The library is named EU-ORG / JAS / NOP-USA /
+ * EU-NOP-RA-ORG, so browsing it used to mean knowing which union's rules apply
+ * to your customer before you could find their label — which is backwards, and
+ * bombards a salesperson with the names of certification bodies they do not
+ * need to think about. The scheme code is still there, one line down, for when
+ * it matters.
+ *
+ * A customer legitimately has SEVERAL labels at once — rooibos carrying the
+ * importer address and rosehips not, each approved separately for its product —
+ * so the family level stays. Flattening to customer -> versions would imply two
+ * independently approved labels were versions of one another.
+ *
+ * The grouping itself is lib/core/labels/library.ts: it decides what is shown
+ * and in what order, it is pure arithmetic on data, and the job-card picker and
+ * the print screen will need exactly the same answer. One owner, tested.
  */
 
 const STATUS_STYLE: Record<LabelTemplateStatus, { label: string; cls: string }> = {
@@ -53,25 +68,21 @@ export default function LabelLibraryPage() {
   }
   useEffect(() => { void load() }, [])
 
-  const families = useMemo(() => {
+  const groups = useMemo(() => {
     const needle = q.trim().toLowerCase()
-    const byCode = new Map<string, LabelTemplateRow[]>()
-    for (const r of rows) {
-      if (needle && !`${r.code} ${r.name} ${r.market}`.toLowerCase().includes(needle)) continue
-      const list = byCode.get(r.code) ?? []
-      list.push(r)
-      byCode.set(r.code, list)
-    }
-    return [...byCode.entries()].map(([code, versions]) => ({
-      code,
-      versions: versions.sort((a, b) => b.version - a.version),
-      // The version that matters at a glance: the one that can be printed, or
-      // failing that the newest thing in flight.
-      headline: versions.find(v => v.status === 'approved')
-        ?? versions.find(v => v.status === 'pending_approval')
-        ?? versions[0],
-    })).sort((a, b) => a.code.localeCompare(b.code))
+    const matching = needle
+      // Customer is part of the haystack, so typing "kunitaro" finds their
+      // labels even though no label is named that.
+      ? rows.filter(r => `${r.code} ${r.name} ${r.market} ${r.customer ?? ''}`
+          .toLowerCase().includes(needle))
+      : rows
+    return groupLibraryByCustomer(matching)
   }, [rows, q])
+
+  const familyCount = useMemo(
+    () => groups.reduce((a, g) => a + g.families.length, 0),
+    [groups],
+  )
 
   // Seed designs not yet in the library — the thirteen BarTender files.
   const unseeded = useMemo(() => {
@@ -127,34 +138,46 @@ export default function LabelLibraryPage() {
 
       {loading ? (
         <p className="text-sm text-text-muted py-8 text-center">Loading…</p>
-      ) : families.length === 0 ? (
+      ) : familyCount === 0 ? (
         <p className="text-sm text-text-muted py-8 text-center">
           No labels yet{q ? ' matching that search' : ''}.
         </p>
       ) : (
-        <div className="space-y-2">
-          {families.map(f => (
-            <button key={f.code} onClick={() => router.push(`/pasteuriser/labels/${f.headline.id}`)}
-              className="w-full text-left card p-4 flex items-center gap-4 hover:shadow-md transition-shadow">
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <p className="font-display font-bold text-[15px] text-text">{f.headline.name}</p>
-                  <StatusPill status={f.headline.status} />
-                </div>
-                <p className="font-mono text-[10px] text-text-muted mt-0.5">
-                  {f.code} · v{f.headline.version}
-                  {f.versions.length > 1 && ` · ${f.versions.length} versions`}
-                </p>
-                <p className="text-xs text-text-muted mt-0.5">
-                  {f.headline.market.toUpperCase()}
-                  {f.headline.organic && ' · Organic'}
-                  {f.headline.certifications?.length
-                    ? ` · ${f.headline.certifications.map(c => c.mark.replace(/_/g, ' ')).join(', ')}`
-                    : ''}
-                </p>
+        <div className="space-y-5">
+          {groups.map(g => (
+            <div key={g.label} className="space-y-2">
+              <div className="flex items-baseline gap-2">
+                <h2 className="font-display font-bold text-[13px] uppercase tracking-wide text-text-muted">
+                  {g.label}
+                </h2>
+                <span className="text-[11px] text-text-faint">
+                  {g.families.length} label{g.families.length === 1 ? '' : 's'}
+                </span>
               </div>
-              <ChevronRight size={18} className="text-text-faint flex-shrink-0" />
-            </button>
+              {g.families.map(f => (
+                <button key={f.code} onClick={() => router.push(`/pasteuriser/labels/${f.headline.id}`)}
+                  className="w-full text-left card p-4 flex items-center gap-4 hover:shadow-md transition-shadow">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <p className="font-display font-bold text-[15px] text-text">{f.headline.name}</p>
+                      <StatusPill status={f.headline.status} />
+                    </div>
+                    <p className="font-mono text-[10px] text-text-muted mt-0.5">
+                      {f.code} · v{f.headline.version}
+                      {f.versions.length > 1 && ` · ${f.versions.length} versions`}
+                    </p>
+                    <p className="text-xs text-text-muted mt-0.5">
+                      {f.headline.market.toUpperCase()}
+                      {f.headline.organic && ' · Organic'}
+                      {f.headline.certifications?.length
+                        ? ` · ${f.headline.certifications.map(c => c.mark.replace(/_/g, ' ')).join(', ')}`
+                        : ''}
+                    </p>
+                  </div>
+                  <ChevronRight size={18} className="text-text-faint flex-shrink-0" />
+                </button>
+              ))}
+            </div>
           ))}
         </div>
       )}

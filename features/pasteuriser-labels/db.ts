@@ -33,6 +33,16 @@ export interface LabelTemplateRow {
   name: string
   version: number
   status: LabelTemplateStatus
+  /**
+   * Canonical customer name, matching qms.customer_specs.customer.
+   * null = a generic label any customer can use (LOCAL, plain EXPORT).
+   *
+   * Optional on the TYPE as well as nullable in the column, so this file still
+   * compiles and the library page still renders against a database where
+   * migration 20260907_001 has not been run yet. Without that, merging the code
+   * before running the migration takes the page down.
+   */
+  customer?: string | null
   market: LabelMarket
   organic: boolean
   size: LabelSizeKey
@@ -141,6 +151,32 @@ export async function fetchTemplates(): Promise<LabelTemplateRow[]> {
   return (data ?? []) as LabelTemplateRow[]
 }
 
+/**
+ * Customer names the quality module already knows.
+ *
+ * Read from qms.customer_specs rather than a customers master table, because
+ * there is no customers master table — checked on staging 2026-09-07:
+ * public.customers, logistics.customers and sales.customers all absent, while
+ * qms.customer_specs holds 45 spec rows across 10 real customers. Alyssa
+ * confirmed that is the source to reference.
+ *
+ * DISTINCT is done here rather than in SQL because PostgREST has no DISTINCT —
+ * asking for the column and de-duplicating in memory is 45 rows, not a scan.
+ *
+ * Failure is NOT fatal. A label can still be assigned a customer that is
+ * already in use on another label, and the picker falls back to those. Quality
+ * being unavailable must not stop Sales designing a label.
+ */
+export async function fetchKnownCustomers(): Promise<string[]> {
+  const { data, error } = await getSupabaseClient()
+    .schema('qms' as never)
+    .from('customer_specs')
+    .select('customer')
+  if (error) return []
+  const names = (data ?? []) as { customer: string | null }[]
+  return names.map(r => r.customer ?? '').filter(Boolean)
+}
+
 export async function fetchTemplate(id: string): Promise<LabelTemplateRow | null> {
   const { data, error } = await publicDb()
     .from('label_templates').select('*').eq('id', id).maybeSingle()
@@ -223,7 +259,8 @@ export function liveSerials(prints: LabelPrintRow[]): string[] {
 export async function saveDraft(
   id: string,
   patch: Partial<Pick<LabelTemplateRow,
-    'name' | 'market' | 'organic' | 'size' | 'lines' | 'certifications' | 'mark_position' | 'proof_note'>>,
+    'name' | 'market' | 'organic' | 'size' | 'lines' | 'certifications' | 'mark_position'
+    | 'proof_note' | 'customer'>>,
 ): Promise<void> {
   const { error } = await publicDb()
     .from('label_templates')
