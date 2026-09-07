@@ -119,7 +119,7 @@ export default function LabelLibraryPage() {
         </div>
         {can('can_design_labels') && (
           <button onClick={() => create()} disabled={creating}
-            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-primary text-white text-sm font-medium disabled:opacity-50">
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-brand text-white hover:bg-brand-mid transition-colors text-sm font-medium disabled:opacity-50">
             <Plus size={15} /> New label
           </button>
         )}
@@ -133,7 +133,7 @@ export default function LabelLibraryPage() {
         <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-faint" />
         <input value={q} onChange={e => setQ(e.target.value)}
           placeholder="Search by code, name or market"
-          className="w-full pl-9 pr-3 py-2 rounded-lg border border-border bg-surface text-sm text-text" />
+          className="w-full pl-9 pr-3 py-2 rounded-lg border border-surface-rule bg-surface text-sm text-text" />
       </div>
 
       {loading ? (
@@ -196,7 +196,7 @@ export default function LabelLibraryPage() {
           <div className="flex flex-wrap gap-2">
             {unseeded.map(s => (
               <button key={s.code} onClick={() => create(s.code)} disabled={creating}
-                className="px-2.5 py-1.5 rounded-lg border border-border text-xs font-medium text-text-muted hover:text-text hover:border-text-faint disabled:opacity-50">
+                className="px-2.5 py-1.5 rounded-lg border border-surface-rule text-xs font-medium text-text-muted hover:text-text hover:border-text-faint disabled:opacity-50">
                 {s.name}
               </button>
             ))}

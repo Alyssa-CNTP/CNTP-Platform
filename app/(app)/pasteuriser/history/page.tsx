@@ -82,7 +82,7 @@ export default function PasteuriserHistoryPage() {
         <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-faint" />
         <input value={q} onChange={e => setQ(e.target.value)}
           placeholder="Serial, batch, customer, PO or label code"
-          className="w-full pl-9 pr-3 py-2 rounded-lg border border-border bg-surface text-sm text-text" />
+          className="w-full pl-9 pr-3 py-2 rounded-lg border border-surface-rule bg-surface text-sm text-text" />
       </div>
 
       {loading ? (
@@ -95,7 +95,7 @@ export default function PasteuriserHistoryPage() {
         <div className="card overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr className="text-left border-b border-border">
+              <tr className="text-left border-b border-surface-rule">
                 {['Serial', 'Batch', 'Customer / PO', 'Label', 'Approved', 'Printed'].map(h => (
                   <th key={h} className="px-3 py-2 text-[10px] uppercase tracking-wide font-semibold text-text-faint whitespace-nowrap">
                     {h}
@@ -103,7 +103,7 @@ export default function PasteuriserHistoryPage() {
                 ))}
               </tr>
             </thead>
-            <tbody className="divide-y divide-border">
+            <tbody className="divide-y divide-surface-rule">
               {filtered.map(r => {
                 const isVoid = voided.has(r.id)
                 return (

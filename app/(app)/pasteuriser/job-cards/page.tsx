@@ -88,7 +88,7 @@ function Section({ title, rows, canGenerate, router }: {
       </p>
       {rows.map(r => (
         <div key={r.id} className="card p-4 flex items-start gap-4">
-          <div className="rounded-lg bg-white p-1.5 border border-border hidden sm:block flex-shrink-0">
+          <div className="rounded-lg bg-white p-1.5 border border-surface-rule hidden sm:block flex-shrink-0">
             <LabelPreview template={toTemplate(r.template)} scale={0.3} />
           </div>
 
@@ -121,7 +121,7 @@ function Section({ title, rows, canGenerate, router }: {
           {canGenerate && (
             <button
               onClick={() => router.push(`/job-cards/pasteuriser?assignment=${r.id}`)}
-              className="px-3 py-2 rounded-lg bg-primary text-white text-sm font-medium flex-shrink-0">
+              className="px-3 py-2 rounded-lg bg-brand text-white hover:bg-brand-mid transition-colors text-sm font-medium flex-shrink-0">
               Raise job card
             </button>
           )}
