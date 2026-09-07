@@ -95,8 +95,21 @@ export async function acumaticaRest(
   method: string,
   path: string,
   body?: unknown,
+  /**
+   * Use a DIFFERENT contract endpoint for this one call.
+   *
+   * The CNTP endpoint (CNTP/25.201.0213) is a custom endpoint and exposes only
+   * what someone added to it — today that is LotDetail and nothing else. Standard
+   * entities like SalesOrder live in Acumatica's built-in `Default` endpoint,
+   * which exists in every instance and needs no customisation.
+   *
+   * The token is minted from the client id/secret and is not endpoint-scoped, so
+   * pointing one call elsewhere is safe and needs no second config.
+   */
+  endpointOverride?: string,
 ): Promise<unknown> {
-  const url = `${cfg.baseUrl}/entity/${cfg.endpoint}/${path}`
+  const endpoint = (endpointOverride ?? cfg.endpoint).replace(/^\/+|\/+$/g, '')
+  const url = `${cfg.baseUrl}/entity/${endpoint}/${path}`
   const call = async (token: string) => timedFetch(url, {
     method,
     headers: {
