@@ -17,6 +17,9 @@ export interface ServiceStatus {
   totalHours: number | null
   sinceService: number | null
   lastServiceDate: string | null
+  /** Set when the service date is only inferred from a counter reset (see
+   *  serviceRows) — the service happened somewhere in this window. */
+  serviceWindow: { after: string; before: string } | null
   latest: { reading_date: string } | null
   due: Date | null
   dueReason: 'hours' | 'calendar'
@@ -66,7 +69,9 @@ export function ServiceCard({ s, compact = false }: { s: ServiceStatus; compact?
             {s.sinceService != null ? s.sinceService.toLocaleString() : '—'}
           </div>
           <div className="text-[10px] text-text-faint">
-            {s.lastServiceDate ? `serviced ${fmtD(s.lastServiceDate)}` : 'no service logged'}
+            {s.lastServiceDate ? `serviced ${fmtD(s.lastServiceDate)}`
+              : s.serviceWindow ? `serviced ${fmtD(s.serviceWindow.after)}–${fmtD(s.serviceWindow.before)} · date not logged`
+              : 'no service logged'}
           </div>
         </div>
         <div>

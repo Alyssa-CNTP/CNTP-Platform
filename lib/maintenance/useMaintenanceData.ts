@@ -910,11 +910,32 @@ export function useMaintenanceData() {
       .slice()
       .sort((a, b) => String(a.reading_date).localeCompare(String(b.reading_date)))
     const latest = readings[readings.length - 1] ?? null
-    // Last service = newest reading explicitly marked serviced, else the newest
-    // reading whose counter sits at zero (how older resets were captured).
-    const lastServiceRow =
-      [...readings].reverse().find(r => r.serviced) ??
-      [...readings].reverse().find(r => (r.hours_since_service ?? null) === 0) ?? null
+    // Last service = newest reading explicitly marked serviced. Failing that, the
+    // service is INFERRED from the point the hours-since-service counter dropped:
+    // a reading of 636 following one of 1773 can only mean the machine was
+    // serviced somewhere in between. That is how the compressor's August service
+    // reached the register — the reading was captured, the service date was not.
+    //
+    // The exact date is unknown, so it is reported as a window (after the previous
+    // reading, before this one) rather than asserted. Taking the newest zero row
+    // instead — the old rule — pointed at January and quietly contradicted the
+    // 636 hours sitting next to it.
+    let resetIdx = -1
+    for (let i = 0; i < readings.length; i++) {
+      const cur = readings[i].hours_since_service
+      const prev = i > 0 ? readings[i - 1].hours_since_service : null
+      const dropped = cur != null && prev != null && cur < prev
+      if (readings[i].serviced || cur === 0 || dropped) resetIdx = i
+    }
+    const resetRow = resetIdx >= 0 ? readings[resetIdx] : null
+    const exactService = resetRow?.serviced || (resetRow?.hours_since_service ?? null) === 0
+    const lastServiceRow = resetRow
+    // Where the date is only inferred, assume the EARLIER bound for calendar
+    // scheduling — it brings the next service forward rather than pushing it out.
+    const serviceWindow = resetRow && !exactService && resetIdx > 0
+      ? { after: readings[resetIdx - 1].reading_date, before: resetRow.reading_date }
+      : null
+    const serviceDateForCalendar = serviceWindow?.after ?? resetRow?.reading_date ?? null
 
     const sinceService = latest?.hours_since_service ?? null
     const totalHours = latest?.total_hours ?? null
@@ -924,15 +945,17 @@ export function useMaintenanceData() {
       const remaining = cfg.service_interval_hours - sinceService
       dueByHours = workdayAdd(new Date(latest.reading_date), remaining / cfg.hours_per_workday)
     }
-    const dueByDays = cfg.service_interval_days && lastServiceRow
-      ? addDays(lastServiceRow.reading_date, cfg.service_interval_days)
+    const dueByDays = cfg.service_interval_days && serviceDateForCalendar
+      ? addDays(serviceDateForCalendar, cfg.service_interval_days)
       : null
 
     const candidates = [dueByHours, dueByDays].filter(Boolean) as Date[]
     const due = candidates.length ? new Date(Math.min(...candidates.map(d => d.getTime()))) : null
     return {
       cfg, latest, totalHours, sinceService,
-      lastServiceDate: lastServiceRow?.reading_date ?? null,
+      // Only a real service record gives a date; an inferred one gives a window.
+      lastServiceDate: exactService ? (lastServiceRow?.reading_date ?? null) : null,
+      serviceWindow,
       due, dueByHours, dueByDays,
       // Which limit triggers first — so the UI can say WHY it is due.
       dueReason: due && dueByDays && due.getTime() === dueByDays.getTime() ? 'calendar' as const : 'hours' as const,

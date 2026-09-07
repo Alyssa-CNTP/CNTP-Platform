@@ -2,6 +2,24 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-07 — Gustav (Maintenance: compressor & generator run-hours captured; service date no longer guessed)
+
+**Files changed:** `lib/maintenance/useMaintenanceData.ts`, `components/maintenance/ServiceCard.tsx`
+
+**Data recorded (staging + production):**
+
+| Machine | Reading date | Total hours | Since service |
+|---|---|---|---|
+| 500L Factory Compressor | 2026-08-31 | 8 935 | 636 |
+| Generator GKSD-440 | 2026-09-07 | 1 618 | 676 |
+
+Both figures were reported by Gustav. The compressor's previous reading was 08/06/2026 at 7 836 total / 1 773 since service, so a service happened between the two — but its date was never captured. The generator had **no** run-hours rows at all; this is its first. Production's compressor service interval was also corrected 350 → 2 000 hours and the generator added to `equipment_config` (500 hours), matching what staging already had.
+
+- **The "last serviced" date is now inferred from the counter reset, not from the newest zero row.** A reading of 636 hours-since-service following one of 1 773 can only mean the machine was serviced in between; the old rule instead reported the last row that happened to sit at zero, which for the compressor pointed at **21/01/2026** and flatly contradicted the 636 printed next to it. Where the date is inferred rather than recorded, the card now says so — *"serviced 08/06/2026–31/08/2026 · date not logged"* — instead of asserting a date nobody entered.
+- **Calendar-interval scheduling takes the earlier bound of that window**, so an unknown service date brings the next service forward rather than pushing it out.
+
+---
+
 ## 2026-09-05 — Gustav (Maintenance: checklist allocation reaches technicians, period locking, checklist history, run-hour service tracking)
 
 **Files changed:** `lib/maintenance/useMaintenanceData.ts`, `lib/maintenance/types.ts`, `app/(app)/maintenance/scheduled/page.tsx`, `app/(app)/maintenance/page.tsx`, `components/maintenance/TrendsPanel.tsx`, `components/maintenance/ServiceCard.tsx` (new), `supabase/migrations/20260905_010_generator_checklist_service_tracking.sql` (new, applied to staging)
