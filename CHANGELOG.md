@@ -250,6 +250,52 @@ ships the feature — not as a follow-up.
 
 ---
 
+## 2026-09-07 — Alyssa (Labels belong to a customer; the library groups by customer)
+
+**Files changed:** `supabase/migrations/20260907_001_label_templates_customer.sql` (new), `lib/core/labels/library.ts` (new), `lib/core/labels/library.test.ts` (new), `features/pasteuriser-labels/db.ts`, `features/pasteuriser-labels/index.ts`, `app/(app)/pasteuriser/labels/page.tsx`, `app/(app)/pasteuriser/labels/[id]/page.tsx`
+
+Sales pick a label for a customer, not for a certification scheme. The library was named EU-ORG / JAS / NOP-USA / EU-NOP-RA-ORG, so finding Lipton's label meant knowing which union's rules applied to it first — and being bombarded with the names of certification bodies that are a *consequence* of the customer and the market, not something a salesperson should search on.
+
+The seed set already half-admitted this: nine templates named by scheme, one — `KUNITARO-RA` — named by customer. This finishes the model that was started there.
+
+### Where the customer actually comes from
+
+`customer_id` was the obvious design and it does not work: **there is no customers master table.** Checked on staging:
+
+| | |
+|---|---|
+| `public.customers` | absent |
+| `logistics.customers` | absent — the dispatch page reads it, but the table is not deployed |
+| `sales.customers` | absent, and the `sales` schema **is** exposed (`sales.signals` answers), so this is a missing table rather than an unexposed schema |
+
+What exists and is populated is **`qms.customer_specs.customer`** — 45 spec rows across 10 real customers (Kunitaro, Lipton and Infusion, Lupicia, Tanganda, Alveus, Edelweiss, Entyce, OTG, East West Tea Company, Afri Tea and Coffee's). Alyssa confirmed that is the source to reference.
+
+So the column holds the **canonical customer name**, the same vocabulary quality uses. Not a foreign key: `customer_specs.customer` is not unique (one customer holds many spec rows, so there is no key to point at), and a cross-schema FK from `public` to `qms` would couple label writes to the quality module's row lifecycle. Spelling drift is the obvious objection and is already solved — `qms.customer_aliases` and `resolveCustomerName()` exist for exactly that, and the editor offers a **picker**, not a free-text box.
+
+Also found: `label_po_assignments.customer` already existed. The customer link was being captured *downstream of approval*, at PO assignment — just not on the template, which is where Sales needs it to browse.
+
+### Grouping is core, not page code
+
+`lib/core/labels/library.ts` — `groupLibraryByCustomer()`, `pickHeadline()`, `customerOptions()`. It decides what is shown and in what order, it is pure arithmetic, and the job-card picker and print screen will need the same answer; three copies is how they end up disagreeing about which version is "the" label. 17 tests.
+
+**Three levels, not two.** customer → family → versions. The middle level is not optional: a customer legitimately has several approved labels at once — rooibos carrying the importer address, rosehips not — each approved for its product. Flattening to customer → versions would imply two independently approved labels were versions of one another.
+
+Two smaller decisions worth naming. `pickHeadline` prefers **approved** (that is what can be printed) and deliberately does **not** surface a `superseded` label over a `draft`, because superseded is history and showing it as the headline reads as usable. And the generic group sorts **last** regardless of name — it is a fallback, and someone scanning for their customer should not read past it.
+
+### Reassignment is draft-only, on purpose
+
+The customer picker is editable only while the label is a draft, like every other field. Reassigning an approved label would put one customer's product under an approval a different customer gave. To move an approved design, copy it.
+
+`customer` is also deliberately **not** part of the core `LabelTemplate` type. That type is the label's *content* — the thing Control Union approves. Ownership is metadata about the record, and folding it in would make reassigning a customer look like editing approved content.
+
+### ⚠ Migration ordering — safe either way
+
+`20260907_001` must be run for any of this to do anything, **but the code does not require it to have been run.** `LabelTemplateRow.customer` is optional on the type as well as nullable in the column, so against a database without the column every label reads as generic and groups under "Any customer" — the page renders, nothing throws. That is deliberate: merging code before running SQL is how a page goes down.
+
+Every existing template keeps `customer = NULL` and keeps working. Nothing is rewritten and no approval is disturbed.
+
+683 tests (17 new). Lint 3021, at baseline. Type errors 32. Boundaries clean.
+
 ## 2026-09-07 — Alyssa (The Argox CAN print the certification marks; artwork rasterised)
 
 **Files changed:** `lib/core/labels/bitmap.ts` (new), `lib/core/labels/bitmap.test.ts` (new), `features/pasteuriser-labels/mark-bitmaps.generated.ts` (new), `features/pasteuriser-labels/mark-bitmaps.test.ts` (new), `scripts/build-mark-bitmaps.py` (new)

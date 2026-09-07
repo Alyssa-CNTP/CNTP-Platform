@@ -35,6 +35,7 @@ export {
   errMessage,
   fetchTemplates,
   fetchTemplate,
+  fetchKnownCustomers,
   fetchTemplateEvents,
   fetchAssignments,
   fetchPrints,

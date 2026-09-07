@@ -5,12 +5,13 @@ import { useParams, useRouter } from 'next/navigation'
 import { ArrowLeft, Copy, Download, Save, Send, ThumbsDown, ThumbsUp } from 'lucide-react'
 import {
   LabelPreview, TemplateEditor,
-  buildLabelDocument, fetchTemplate, fetchTemplateEvents, saveDraft, toTemplate,
+  buildLabelDocument, fetchTemplate, fetchTemplateEvents, fetchKnownCustomers, saveDraft, toTemplate,
   type LabelTemplateRow, type TemplateEventRow,
   errMessage,
 } from '@/features/pasteuriser-labels'
 import { canRequestApproval, resolveLabel, type LabelTemplate } from '@/lib/core/labels'
 import { useAuth } from '@/lib/auth/context'
+import { customerOptions } from '@/lib/core/labels/library'
 import FeatureBoundary from '@/components/shared/FeatureBoundary'
 import { StatusPill } from '../page'
 
@@ -33,6 +34,15 @@ export default function LabelTemplatePage() {
 
   const [row, setRow] = useState<LabelTemplateRow | null>(null)
   const [draft, setDraft] = useState<LabelTemplate | null>(null)
+  /**
+   * Customer is NOT part of the core LabelTemplate, deliberately. That type is
+   * the label's CONTENT — the thing Control Union approves. Who the label
+   * belongs to is ownership metadata about the record, and folding it into the
+   * approved content would mean reassigning a customer looked like editing an
+   * approved label.
+   */
+  const [customer, setCustomer] = useState<string | null>(null)
+  const [customerOpts, setCustomerOpts] = useState<string[]>([])
   const [events, setEvents] = useState<TemplateEventRow[]>([])
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
@@ -46,6 +56,7 @@ export default function LabelTemplatePage() {
       if (!r) { setError('Label not found'); return }
       setRow(r)
       setDraft(toTemplate(r))
+      setCustomer(r.customer ?? null)
       setDirty(false)
       setEvents(await fetchTemplateEvents(id))
       setError(null)
@@ -54,6 +65,20 @@ export default function LabelTemplatePage() {
   }, [id])
 
   useEffect(() => { void load() }, [load])
+
+  /**
+   * Customer options, loaded once. Includes the name already on this label even
+   * if quality has no spec for it, so opening an assigned label never silently
+   * drops its own customer out of the dropdown.
+   */
+  useEffect(() => {
+    let alive = true
+    void (async () => {
+      const known = await fetchKnownCustomers()
+      if (alive) setCustomerOpts(customerOptions(known, [row?.customer ?? null]))
+    })()
+    return () => { alive = false }
+  }, [row?.customer])
 
   const editable = !!row && row.status === 'draft' && can('can_design_labels')
   const compliant = useMemo(() => (draft ? canRequestApproval(draft) : false), [draft])
@@ -66,6 +91,9 @@ export default function LabelTemplatePage() {
         name: draft.name, market: draft.market, organic: draft.organic,
         size: draft.size, lines: [...draft.lines], certifications: [...draft.certifications],
         mark_position: draft.markPosition, proof_note: draft.proofNote ?? null,
+        // Empty select -> null, never ''. A '' customer would sort into its own
+        // group next to the real generic one and read as a second "unassigned".
+        customer: customer?.trim() ? customer.trim() : null,
       })
       setDirty(false)
       await load()
@@ -156,6 +184,34 @@ export default function LabelTemplatePage() {
             {row.code} · version {row.version} · {row.market.toUpperCase()}
             {row.organic && ' · ORGANIC'}
           </p>
+
+          {/* Customer. Editable only while the label is a DRAFT, like every
+              other field — reassigning an approved label would put one
+              customer's product under an approval another customer gave. To
+              move an approved design to a different customer, copy it. */}
+          <div className="mt-2">
+            {editable ? (
+              <label className="flex items-center gap-2 text-xs text-text-muted">
+                Customer
+                <select
+                  value={customer ?? ''}
+                  onChange={e => { setCustomer(e.target.value || null); setDirty(true) }}
+                  className="border border-stone-200 rounded-lg px-2 py-1 text-xs text-text bg-white"
+                >
+                  {/* Generic is a real, common answer (LOCAL, plain EXPORT) and
+                      not an empty state, so it is worded as a choice. */}
+                  <option value="">Any customer (generic)</option>
+                  {customerOpts.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </label>
+            ) : (
+              <p className="text-xs text-text-muted">
+                Customer: <span className="text-text font-medium">
+                  {row.customer?.trim() || 'Any customer (generic)'}
+                </span>
+              </p>
+            )}
+          </div>
           {row.rejected_reason && (
             <p className="text-xs text-red-700 mt-1 max-w-lg">
               Rejected: {row.rejected_reason}
