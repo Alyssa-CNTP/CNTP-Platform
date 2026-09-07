@@ -1,0 +1,125 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# CI for `main`.  COPY THIS FILE TO .github/workflows/ci.yml AND COMMIT IT.
+#
+# It is parked here because the token this repo's agent uses has no `workflow`
+# scope, so a push that touches .github/workflows/ is rejected outright. Nothing
+# else about it is unusual — `git mv docs/ci.main.yml .github/workflows/ci.yml`
+# and commit.
+#
+# ── Why these four gates and not five ────────────────────────────────────────
+#
+# There is deliberately NO unit-test step. `main` has no test runner: vitest and
+# the lib/core test files were held back, because tsconfig includes **/*.ts and
+# every test file imports from 'vitest' — with the package absent, `npm install`
+# prunes it and all twelve become unresolved-module errors, which would break the
+# typecheck gate below. Tests and the runner land together, in one commit, and
+# the step to uncomment is at the bottom of this file.
+#
+# What is here needs no dependency that `main` does not already have.
+#
+# ── Hard gates vs ratchets (ARCHITECTURE.md §8) ──────────────────────────────
+#
+# The two lint/type ratchets exist because this repo carries ~3000 pre-existing
+# lint errors and 36 type errors, with DISABLE_ESLINT_PLUGIN=true and
+# typescript.ignoreBuildErrors: true both set — which is how they accumulated
+# unnoticed. Demanding zero would leave CI permanently red and teach everyone to
+# ignore it. Demanding "no worse than today" stops the backlog growing.
+#
+# LOWER THESE NUMBERS AS YOU CLEAR ERRORS. NEVER RAISE THEM. Raising a baseline
+# to make a red build green is the one move that makes the gate pointless.
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-main-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install
+        run: npm install --legacy-peer-deps
+
+      # ── HARD GATE 1 — the architecture rule ────────────────────────────────
+      # lib/core must not import features/, app/, React/Next, lib/supabase/ or
+      # components/. Separate from `npm run lint` on purpose: among ~3000
+      # pre-existing errors the one rule that protects the architecture would be
+      # invisible. No exceptions, no baseline.
+      - name: Boundary rule
+        run: npm run lint:boundaries
+
+      # ── HARD GATE 2 — hooks ────────────────────────────────────────────────
+      # react-hooks/rules-of-hooks over the whole repo. This is not theoretical:
+      # it found Inventory Import calling useCallback below an admin early
+      # return, which took the page down for admins only (React #310) and had
+      # been live and unreported. No baseline — one violation fails the build.
+      - name: React hooks
+        run: npm run lint:hooks
+
+      # ── RATCHET 1 — typecheck ──────────────────────────────────────────────
+      # MEASURED on main, 2026-09-07: 36.
+      #
+      # .test. files are EXCLUDED, and that is not a fudge. main has no test
+      # runner, so whether lib/quality's four orphan specs typecheck depends on
+      # whether vitest happens to be installed — with it absent (the real state
+      # on the VPS, since it is not in package.json) each one emits TS2307 and
+      # the count reads 40 instead of 36. Ratcheting on a number that moves with
+      # an uninstalled dependency is worse than not ratcheting. Test files are
+      # not shipped code; when the runner lands, drop this filter.
+      - name: Typecheck (baseline 36, excluding test files)
+        run: |
+          set -o pipefail
+          ERRS=$(npx tsc --noEmit -p tsconfig.json 2>&1 | grep -E 'error TS' | grep -v '^\.next' | grep -vE '\.test\.tsx?\(' || true)
+          COUNT=$(printf '%s' "$ERRS" | grep -c . || true)
+          echo "Source type errors: $COUNT (baseline 36)"
+          if [ "$COUNT" -gt 36 ]; then
+            echo "::error::Type errors rose to $COUNT, above the baseline of 36."
+            echo "$ERRS" | head -40
+            exit 1
+          fi
+
+      # ── RATCHET 2 — lint ───────────────────────────────────────────────────
+      # MEASURED on main, 2026-09-07: 3035. NOT staging's 3021 — the branches
+      # have diverged and main carries 14 more. Using staging's number here
+      # would fail the very first run.
+      - name: Lint (baseline 3035)
+        run: |
+          COUNT=$(npx eslint . -f json 2>/dev/null | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{try{console.log(JSON.parse(s).reduce((a,f)=>a+f.errorCount,0))}catch{console.log(-1)}})")
+          echo "Lint errors: $COUNT (baseline 3035)"
+          if [ "$COUNT" -lt 0 ]; then echo "::error::Could not parse eslint output."; exit 1; fi
+          if [ "$COUNT" -gt 3035 ]; then
+            echo "::error::Lint errors rose to $COUNT, above the baseline of 3035."
+            exit 1
+          fi
+
+      # ── HARD GATE 3 — the build ────────────────────────────────────────────
+      # Last, because it is the slowest and the cheap gates should fail first.
+      - name: Build
+        run: DISABLE_ESLINT_PLUGIN=true npx next build
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: build-time-placeholder
+
+      # ── Uncomment when vitest and the lib/core tests land ──────────────────
+      # Add to package.json in the SAME commit:
+      #   "scripts":          { "test": "vitest run", "posttest": "npm run lint:hooks" }
+      #   "devDependencies":  { "vitest": "^4.1.11" }
+      # and bring back vitest.config.mts plus lib/core/**/*.test.ts.
+      #
+      # - name: Unit tests
+      #   run: npm run test
