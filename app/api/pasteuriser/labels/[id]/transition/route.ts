@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getCallerPermissions } from '@/lib/auth/server-helpers'
+import { getCallerPermissions, resolveEmployeeId } from '@/lib/auth/server-helpers'
 import { labelDb, readBody, str, strOrNull, isUniqueViolation } from '../../../_db'
 import { writeAudit } from '@/lib/audit/write'
 import { checkCompliance, type LabelTemplateStatus } from '@/lib/core/labels'
@@ -127,6 +127,34 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     return NextResponse.json({ error: 'Someone else changed this label just now. Reload and try again.' }, { status: 409 })
   }
 
+  /**
+   * Who did this, by name, with their signature — SNAPSHOT, not a join.
+   *
+   * An approved template is frozen because it records what was agreed at a
+   * moment in time. Join the Staff Directory live and the record changes
+   * underneath itself: a rename, a re-signed signature or an offboarding would
+   * silently alter an approval from six months ago. The certifier's question is
+   * "who signed this, at the time", and only a copy can answer it.
+   *
+   * Both are best-effort. A missing signature must NOT block an approval — the
+   * granule job card refuses in that case, and that is right there because the
+   * signature IS the sign-off. Here the approval is the Control Union or
+   * customer decision being recorded; refusing to record it because the person
+   * has not drawn a signature yet would lose the actual fact.
+   */
+  const employeeId = await resolveEmployeeId(caller.userId)
+  let actorSignature: string | null = null
+  if (employeeId) {
+    const { data: sig } = await admin
+      .schema('production' as never)
+      .from('employee_signatures')
+      .select('signature')
+      .eq('employee_id', employeeId)
+      .maybeSingle()
+    actorSignature = (sig as { signature?: string } | null)?.signature ?? null
+  }
+  const actorName = caller.name ?? null
+
   // Approving a version retires the one it replaces. Superseded rows are kept
   // forever — bags printed from them are in the warehouse, and a traceability
   // query has to be able to reconstruct exactly what was on them.
@@ -139,6 +167,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     for (const r of retired ?? []) {
       await admin.from('label_template_events').insert({
         template_id: r.id, event: 'superseded', actor_id: caller.userId,
+        actor_name: actorName, actor_signature: actorSignature,
         note: `Superseded by ${row.code} v${row.version}`,
       })
     }
@@ -148,6 +177,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     template_id: id,
     event: rule.event,
     actor_id: caller.userId,
+    actor_name: actorName,
+    actor_signature: actorSignature,
     note,
     external_ref: externalRef,
   })

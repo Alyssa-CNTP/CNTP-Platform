@@ -206,6 +206,13 @@ export interface TemplateEventRow {
   template_id: string
   event: 'created' | 'proof_issued' | 'approved' | 'rejected' | 'superseded' | 'reopened'
   actor_id: string | null
+  /**
+   * Name and signature AS AT the event, snapshot by the transition route.
+   * Optional on the type as well as nullable in the column, so the page still
+   * renders against a database where 20260907_003 has not been run.
+   */
+  actor_name?: string | null
+  actor_signature?: string | null
   note: string | null
   external_ref: string | null
   created_at: string
