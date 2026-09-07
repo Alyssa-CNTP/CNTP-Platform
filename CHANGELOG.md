@@ -250,6 +250,79 @@ ships the feature — not as a follow-up.
 
 ---
 
+## 2026-09-07 — Alyssa (The Argox CAN print the certification marks; artwork rasterised)
+
+**Files changed:** `lib/core/labels/bitmap.ts` (new), `lib/core/labels/bitmap.test.ts` (new), `features/pasteuriser-labels/mark-bitmaps.generated.ts` (new), `features/pasteuriser-labels/mark-bitmaps.test.ts` (new), `scripts/build-mark-bitmaps.py` (new)
+
+### The refusal was based on a wrong premise
+
+`pplbFidelity()` refuses any label carrying certification artwork — "a PPLB
+thermal stream cannot draw" it — and routes those labels through a browser
+popup. Every organic, JAS, Rainforest and Fairtrade label therefore prints the
+slowest possible way, at the one moment an operator has a bag in their hands.
+
+The premise is half right. PPLB cannot draw an **SVG**. It does not have to.
+PPLB is Argox's EPL2-compatible mode and EPL2 has a graphics command: hand it a
+1-bit bitmap. The printers are Argox CP-2140EX at 203dpi, which
+`lib/production/label-pplb.ts` already drives for bag tags.
+
+The likely origin of the caution is a real note in that file — "a downloaded
+Arial was silently dropped". That is the soft-FONT download path, a different
+command, genuinely unreliable on these units. It does not generalise to
+graphics, and treating it as though it did cost the feature its fast path.
+
+### What this adds
+
+Alyssa supplied the certifier artwork — JAS (with CU892408), Control Union,
+Rainforest Alliance, Fairtrade, and the Cape Natural logo. This is exactly what
+`marks.ts` was waiting for with `officialArtworkRequired: true` on RA and
+Fairtrade.
+
+- **`scripts/build-mark-bitmaps.py`** rasterises them to 1-bit at 96 dots (12mm)
+  and packs them for EPL2. A build step, not runtime: the artwork never changes
+  between deploys, and re-deriving identical bytes on every print is work in the
+  wrong place. Sizes were chosen by looking at the output at real scale — at 80
+  dots the JAS CU number and the Rainforest ring text go mushy; 96 is the floor
+  for any mark carrying text.
+- **`lib/core/labels/bitmap.ts`** emits the `GW` command. Pure, no I/O (§2). The
+  generated data lives in the feature and imports the *type* from core, never
+  the reverse.
+
+### Two ways to get this wrong that both print something plausible
+
+- **Polarity.** EPL2 is inverted: a 0 bit burns a dot. Backwards, every mark
+  prints as a black tile with the artwork knocked out — and holds the head at
+  full power across the cell. `INVERT_BITS` is a named constant so a bad test
+  print is a one-line fix.
+- **Row padding.** Rows pad to a byte boundary and must pad WHITE. Pad black and
+  every mark grows a bar down its right edge.
+
+Both are asserted against the real artwork, not a fixture — a fixture built by
+the same hand as the packer agrees with it whether or not it is right. The
+checks are properties: corners blank, coverage in a sane band, payload length
+matching the stated dimensions. Verified additionally by decoding the generated
+TypeScript back to an image with the same rule core uses, and looking at it.
+
+### What the tests turned up
+
+Four marks at 96 dots need 408 of the label's 800 dots across — comfortable. The
+binding constraint is **height**: a 96-dot strip is a quarter of a 394-dot
+label, leaving 282 dots for text, and the template set runs to 16 lines. The
+densest templates must drop a font size. That is recorded as a test rather than
+a comment, so shrinking the label or growing the marks fails there instead of on
+a bag.
+
+### Not wired up yet, on purpose
+
+`pplbFidelity()` still refuses, and nothing calls the new emitter. Rewiring it
+changes what physically comes out of a printer and touches the run page, the
+print route and their tests — that is its own change, per §3 rule 4, and it
+needs a **test print on a real CP-2140EX first**. The generator and the decoder
+agree with each other; agreeing with each other is not the same as agreeing with
+the printer.
+
+666 tests (71 new). Lint 3021, at baseline. Boundaries clean.
+
 ## 2026-09-04 — Alyssa (CORRECTION: the blank-serial collision was never live, on either branch)
 
 **Files changed:** `CHANGELOG.md`, `docs/capture-phases.md`
