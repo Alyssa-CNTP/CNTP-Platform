@@ -21,7 +21,7 @@
 
 import { getAcumaticaRestConfig, acumaticaRest } from './rest'
 import supabaseAdmin from '@/lib/supabase/admin'
-import { rowsFromPayload, customerNameMap, OPEN_STATUSES } from './sales-order-map'
+import { rowsFromPayload, customerNameMap, salesOrderSelect, OPEN_STATUSES } from './sales-order-map'
 
 /**
  * Acumatica's built-in endpoint. The version is part of the URL and varies by
@@ -32,6 +32,25 @@ import { rowsFromPayload, customerNameMap, OPEN_STATUSES } from './sales-order-m
 // Default/24.200.001. The instance also exposes Default at 20.200.001,
 // 22.200.001, 23.200.001 and 25.200.001; 24 is used because it is the version
 // the probe was verified on, not because it is newest.
+/**
+ * Rows per request.
+ *
+ * The first version asked for every open order with $expand=Details, no $select
+ * and no $top. That returned a 504 — Nginx gave up before Acumatica finished,
+ * and the app's own fetch timeout is 60s so it would have failed either way.
+ *
+ * 100 is a page that comes back in seconds. Pagination costs more round trips
+ * but each one completes, which is the difference between a slow sync and no
+ * sync.
+ */
+const PAGE_SIZE = 100
+
+/**
+ * Hard stop. Without one a bad filter turns a sync into an unbounded crawl of
+ * the whole order history, and the first symptom is the same 504.
+ */
+const MAX_PAGES = 40
+
 const DEFAULT_ENDPOINT = process.env.ACUMATICA_DEFAULT_ENDPOINT ?? 'Default/24.200.001'
 
 /** Endpoints the probe tries, in order of how likely they are to work. */
@@ -89,7 +108,9 @@ export async function probeSalesOrders(): Promise<{
 
   for (const t of targets) {
     try {
-      const data = await acumaticaRest(cfg, 'GET', 'SalesOrder?$expand=Details&$top=1', undefined, t.endpoint)
+      const data = await acumaticaRest(
+        cfg, 'GET', 'SalesOrder?$expand=Details&$top=1', undefined, t.endpoint,
+      )
       const first = (Array.isArray(data) ? data[0] : data) as Record<string, unknown> | undefined
       if (!first) {
         attempts.push({ target: t.label, ok: true, detail: 'Reachable, but returned no orders. Try widening the filter.' })
@@ -131,16 +152,46 @@ export async function syncSalesOrders(): Promise<{ ok: boolean; count: number; m
     return { ok: false, count: 0, message: 'Acumatica REST not configured (ACUMATICA_CLIENT_ID / ACUMATICA_CLIENT_SECRET / ACUMATICA_API_USER / ACUMATICA_API_PASSWORD).' }
   }
 
-  let data: unknown
+  /**
+   * Paged. $select cuts the payload to the 16 fields the mapper reads (the
+   * sampled order carried ~105), and $top/$skip keeps every request short
+   * enough to answer before the proxy gives up.
+   */
+  const started = Date.now()
+  const filter = OPEN_STATUSES.map(s => `Status eq '${s}'`).join(' or ')
+  const select = salesOrderSelect()
+  const orders: unknown[] = []
+  let pages = 0
+  let truncated = false
+
   try {
-    const filter = OPEN_STATUSES.map(s => `Status eq '${s}'`).join(' or ')
-    data = await acumaticaRest(
-      cfg, 'GET', `SalesOrder?$expand=Details&$filter=${encodeURIComponent(filter)}`,
-      undefined, DEFAULT_ENDPOINT,
-    )
+    for (let skip = 0; pages < MAX_PAGES; skip += PAGE_SIZE) {
+      const path =
+        `SalesOrder?$expand=Details&$select=${encodeURIComponent(select)}` +
+        `&$filter=${encodeURIComponent(filter)}` +
+        `&$top=${PAGE_SIZE}&$skip=${skip}`
+      const page = await acumaticaRest(cfg, 'GET', path, undefined, DEFAULT_ENDPOINT)
+      const batch = Array.isArray(page) ? page : page ? [page] : []
+      pages += 1
+      orders.push(...batch)
+      // A short page is the last page. Acumatica returns no total count, so
+      // this is the only end signal available.
+      if (batch.length < PAGE_SIZE) break
+      if (pages >= MAX_PAGES) truncated = true
+    }
   } catch (e) {
-    return { ok: false, count: 0, message: e instanceof Error ? e.message : 'Acumatica REST call failed.' }
+    const msg = e instanceof Error ? e.message : 'Acumatica REST call failed.'
+    // Pages already fetched are still worth keeping — a partial sync of real
+    // orders beats none, and the message says it was partial.
+    if (orders.length === 0) return { ok: false, count: 0, message: msg }
+    return {
+      ok: false,
+      count: 0,
+      message: `Failed after ${pages} page(s) with ${orders.length} orders fetched: ${msg}`,
+    }
   }
+
+  const data: unknown = orders
 
   /**
    * Customer names come from a SECOND call. SalesOrder carries CustomerID
@@ -153,7 +204,8 @@ export async function syncSalesOrders(): Promise<{ ok: boolean; count: number; m
   let names: Map<string, string> | undefined
   try {
     const customers = await acumaticaRest(
-      cfg, 'GET', 'Customer?$select=CustomerID,CustomerName', undefined, DEFAULT_ENDPOINT,
+      cfg, 'GET', `Customer?$select=CustomerID,CustomerName&$top=${PAGE_SIZE * 5}`,
+      undefined, DEFAULT_ENDPOINT,
     )
     names = customerNameMap(customers)
   } catch {
@@ -167,12 +219,28 @@ export async function syncSalesOrders(): Promise<{ ok: boolean; count: number; m
   // because "0 open orders" and "the filter is wrong" look identical from the
   // outside and only the person running it can tell them apart.
   if (rows.length === 0) {
-    return { ok: true, count: 0, message: 'Fetched 0 sales order lines. Nothing written — check the status filter if that is unexpected.' }
+    return {
+      ok: true,
+      count: 0,
+      message:
+        `Fetched 0 sales order lines from ${orders.length} orders over ${pages} page(s). ` +
+        `Nothing written. If that is unexpected, the status filter (${OPEN_STATUSES.join(', ')}) ` +
+        'is the thing to widen — every line on the sampled order was Completed.',
+    }
   }
 
   const { data: cnt, error } = await supabaseAdmin.rpc('acumatica_upsert_sales_orders', { p_rows: rows })
   if (error) {
     return { ok: false, count: 0, message: `Fetched ${rows.length} lines but the DB write failed: ${error.message}` }
   }
-  return { ok: true, count: Number(cnt ?? rows.length), message: `Synced ${rows.length} sales order lines.` }
+  const secs = ((Date.now() - started) / 1000).toFixed(1)
+  return {
+    ok: true,
+    count: Number(cnt ?? rows.length),
+    message:
+      `Synced ${rows.length} sales order lines from ${orders.length} orders ` +
+      `over ${pages} page(s) in ${secs}s` +
+      (names ? '' : ' (customer names unavailable — ids only)') +
+      (truncated ? `. STOPPED AT THE ${MAX_PAGES}-PAGE CAP — there is more; narrow the filter.` : '.'),
+  }
 }

@@ -228,3 +228,29 @@ export function customerNameMap(data: unknown): Map<string, string> {
   }
   return out
 }
+
+/**
+ * The fields the mapper reads — and therefore the only ones worth asking for.
+ *
+ * Kept HERE, next to mapLine, so the query and the mapping cannot drift: a
+ * field added to one without the other is the bug where a column silently goes
+ * null forever.
+ *
+ * Without a $select Acumatica returns everything: the sampled order carried ~50
+ * header fields and ~55 per line, of which this uses 16. On every open order,
+ * expanded, that is the difference between a response and a 504.
+ */
+export const SELECT_HEADER = [
+  'OrderType', 'OrderNbr', 'Status', 'CustomerID', 'CustomerOrder',
+  'Date', 'RequestedOn', 'ShipVia', 'Description', 'ExternalRef',
+] as const
+
+export const SELECT_LINE = [
+  'LineNbr', 'InventoryID', 'LineDescription', 'OrderQty', 'OpenQty',
+  'Completed', 'UOM', 'WarehouseID', 'ShipOn', 'SchedOrderDate',
+] as const
+
+/** `$select` for a SalesOrder query with Details expanded. */
+export function salesOrderSelect(): string {
+  return [...SELECT_HEADER, ...SELECT_LINE.map(f => `Details/${f}`)].join(',')
+}
