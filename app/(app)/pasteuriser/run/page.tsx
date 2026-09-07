@@ -162,7 +162,7 @@ function JobCardPanel({ card, canPrint, router }: {
     <div className="card p-4 space-y-3">
       <div className="flex items-start gap-4">
         {template && (
-          <div className="rounded-lg bg-white p-1.5 border border-border hidden sm:block flex-shrink-0">
+          <div className="rounded-lg bg-white p-1.5 border border-surface-rule hidden sm:block flex-shrink-0">
             <LabelPreview template={template} scale={0.32} />
           </div>
         )}
@@ -206,9 +206,9 @@ function JobCardPanel({ card, canPrint, router }: {
           <label className="text-xs text-text-muted">Labels</label>
           <input type="number" min={1} max={50} value={count}
             onChange={e => setCount(Math.max(1, Math.min(50, Number(e.target.value) || 1)))}
-            className="w-20 px-2 py-1.5 rounded-lg border border-border bg-surface text-sm text-text" />
+            className="w-20 px-2 py-1.5 rounded-lg border border-surface-rule bg-surface text-sm text-text" />
           <button onClick={print} disabled={busy || !template}
-            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-primary text-white text-sm font-medium disabled:opacity-50">
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-brand text-white hover:bg-brand-mid transition-colors text-sm font-medium disabled:opacity-50">
             <Printer size={15} /> {busy ? 'Printing…' : 'Print'}
           </button>
         </div>
@@ -217,7 +217,7 @@ function JobCardPanel({ card, canPrint, router }: {
       {prints.length > 0 && (
         <div className="flex flex-wrap gap-1 pt-1">
           {liveSerials(prints).slice(0, 24).map(s => (
-            <span key={s} className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-surface-alt text-text-muted">
+            <span key={s} className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-surface-dim text-text-muted">
               {s}
             </span>
           ))}

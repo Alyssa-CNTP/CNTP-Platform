@@ -118,12 +118,12 @@ export function TemplateEditor({
 
         <ComplianceBanner errors={errors} warnings={warnings} />
 
-        <div className="flex gap-1 border-b border-border">
+        <div className="flex gap-1 border-b border-surface-rule">
           {([['lines', 'Label lines'], ['marks', 'Certification marks'], ['stock', 'Stock & market']] as const)
             .map(([k, label]) => (
               <button key={k} onClick={() => setTab(k)}
                 className={`px-3 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
-                  tab === k ? 'border-primary text-text' : 'border-transparent text-text-muted hover:text-text'
+                  tab === k ? 'border-brand text-text' : 'border-transparent text-text-muted hover:text-text'
                 }`}>
                 {label}
                 {k === 'marks' && needed.length > 0 && (
@@ -193,7 +193,7 @@ export function TemplateEditor({
         <p className="text-[11px] uppercase tracking-wide font-semibold text-text-faint">
           Preview · {LABEL_SIZES[template.size].widthMm} × {LABEL_SIZES[template.size].heightMm} mm
         </p>
-        <div className="rounded-xl bg-white p-2 shadow-sm border border-border">
+        <div className="rounded-xl bg-white p-2 shadow-sm border border-surface-rule">
           <LabelPreview template={template} scale={template.size === '100x50' ? 1.05 : 0.95} />
         </div>
         <p className="text-[11px] text-text-muted max-w-[260px] leading-relaxed">
@@ -208,7 +208,7 @@ export function TemplateEditor({
 function AddButton({ icon, label, onClick }: { icon: React.ReactNode; label: string; onClick: () => void }) {
   return (
     <button onClick={onClick}
-      className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-border text-xs font-medium text-text-muted hover:text-text hover:border-text-faint transition-colors">
+      className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-surface-rule text-xs font-medium text-text-muted hover:text-text hover:border-text-faint transition-colors">
       {icon} {label}
     </button>
   )
@@ -259,7 +259,7 @@ function LineRow({ line, editable, first, last, onUp, onDown, onRemove, onChange
   onRemove: () => void
   onChange: (l: LabelLine) => void
 }) {
-  const input = 'w-full px-2.5 py-1.5 rounded-lg border border-border bg-surface text-sm text-text disabled:opacity-60 disabled:cursor-not-allowed'
+  const input = 'w-full px-2.5 py-1.5 rounded-lg border border-surface-rule bg-surface text-sm text-text disabled:opacity-60 disabled:cursor-not-allowed'
 
   return (
     <div className="card p-2.5 flex items-start gap-2">
@@ -337,7 +337,7 @@ function Toggle({ label, checked, disabled, onChange }: {
   return (
     <label className={`inline-flex items-center gap-1.5 text-[11px] ${disabled ? 'opacity-50' : 'cursor-pointer'} text-text-muted`}>
       <input type="checkbox" checked={checked} disabled={disabled}
-        onChange={e => onChange(e.target.checked)} className="accent-primary" />
+        onChange={e => onChange(e.target.checked)} className="accent-brand" />
       {label}
     </label>
   )
@@ -353,14 +353,14 @@ function MarkRow({ mark, cert, required, editable, onToggle, onChange }: {
 }) {
   const art = MARK_ART[mark]
   const on = !!cert
-  const input = 'px-2 py-1 rounded-lg border border-border bg-surface text-xs text-text w-full'
+  const input = 'px-2 py-1 rounded-lg border border-surface-rule bg-surface text-xs text-text w-full'
 
   return (
     <div className={`card p-3 ${required && !on ? 'border-l-4 border-l-red-500' : ''}`}>
       <div className="flex items-start gap-3">
         <label className="flex items-center gap-2.5 flex-1 min-w-0 cursor-pointer">
           <input type="checkbox" checked={on} disabled={!editable}
-            onChange={onToggle} className="accent-primary flex-shrink-0" />
+            onChange={onToggle} className="accent-brand flex-shrink-0" />
           <span className="w-9 h-9 flex-shrink-0 text-text"
             dangerouslySetInnerHTML={{ __html: art.svg }} />
           <span className="min-w-0">
@@ -419,7 +419,7 @@ function StockPanel({ template, editable, patch }: {
   editable: boolean
   patch: (p: Partial<LabelTemplate>) => void
 }) {
-  const input = 'w-full px-2.5 py-1.5 rounded-lg border border-border bg-surface text-sm text-text'
+  const input = 'w-full px-2.5 py-1.5 rounded-lg border border-surface-rule bg-surface text-sm text-text'
   const MARKETS: { value: LabelMarket; label: string }[] = [
     { value: 'local',  label: 'Local (South Africa)' },
     { value: 'export', label: 'Export (generic)' },
@@ -444,7 +444,7 @@ function StockPanel({ template, editable, patch }: {
       </Labelled>
 
       <label className="flex items-center gap-2 cursor-pointer">
-        <input type="checkbox" className="accent-primary" disabled={!editable}
+        <input type="checkbox" className="accent-brand" disabled={!editable}
           checked={template.organic} onChange={e => patch({ organic: e.target.checked })} />
         <span className="text-sm text-text">Organic product</span>
       </label>

@@ -160,7 +160,7 @@ export default function LabelTemplatePage() {
     return (
       <div className="p-6 space-y-3">
         <p className="text-sm text-text-muted">{error ?? 'Label not found'}</p>
-        <button onClick={() => router.push('/pasteuriser/labels')} className="text-sm text-primary">
+        <button onClick={() => router.push('/pasteuriser/labels')} className="text-sm text-brand">
           Back to labels
         </button>
       </div>
@@ -302,7 +302,7 @@ function Btn({ onClick, label, icon, disabled, primary, title }: {
   return (
     <button onClick={onClick} disabled={disabled} title={title}
       className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed ${
-        primary ? 'bg-primary text-white' : 'border border-border text-text-muted hover:text-text'
+        primary ? 'bg-brand text-white hover:bg-brand-mid transition-colors' : 'border border-surface-rule text-text-muted hover:text-text'
       }`}>
       {icon} {label}
     </button>
@@ -330,7 +330,7 @@ function ApprovedPanel({ row, template, canAssign, onDone }: {
     plannedBatchNo: '', plannedDate: '', notes: '',
   })
 
-  const input = 'w-full px-2.5 py-1.5 rounded-lg border border-border bg-surface text-sm text-text'
+  const input = 'w-full px-2.5 py-1.5 rounded-lg border border-surface-rule bg-surface text-sm text-text'
 
   async function submit() {
     setBusy(true)
@@ -354,7 +354,7 @@ function ApprovedPanel({ row, template, canAssign, onDone }: {
     <div className="card p-4 border-l-4 border-l-emerald-500 space-y-3">
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div className="flex gap-4 items-start">
-          <div className="rounded-lg bg-white p-1.5 border border-border hidden sm:block">
+          <div className="rounded-lg bg-white p-1.5 border border-surface-rule hidden sm:block">
             <LabelPreview template={template} scale={0.34} />
           </div>
           <div>
@@ -368,7 +368,7 @@ function ApprovedPanel({ row, template, canAssign, onDone }: {
         </div>
         {canAssign && !open && (
           <button onClick={() => setOpen(true)}
-            className="px-3 py-2 rounded-lg bg-primary text-white text-sm font-medium">
+            className="px-3 py-2 rounded-lg bg-brand text-white hover:bg-brand-mid transition-colors text-sm font-medium">
             Assign a PO
           </button>
         )}
@@ -414,11 +414,11 @@ function ApprovedPanel({ row, template, canAssign, onDone }: {
 
           <div className="flex gap-2 pt-1">
             <button onClick={submit} disabled={busy || !f.customer.trim() || !f.poNumber.trim()}
-              className="px-3 py-2 rounded-lg bg-primary text-white text-sm font-medium disabled:opacity-50">
+              className="px-3 py-2 rounded-lg bg-brand text-white hover:bg-brand-mid transition-colors text-sm font-medium disabled:opacity-50">
               Assign PO
             </button>
             <button onClick={() => setOpen(false)}
-              className="px-3 py-2 rounded-lg border border-border text-sm text-text-muted">Cancel</button>
+              className="px-3 py-2 rounded-lg border border-surface-rule text-sm text-text-muted">Cancel</button>
           </div>
         </div>
       )}
@@ -440,7 +440,7 @@ function HistoryPanel({ events }: { events: TemplateEventRow[] }) {
   return (
     <div className="space-y-2">
       <p className="text-[11px] uppercase tracking-wide font-semibold text-text-faint">History</p>
-      <div className="card divide-y divide-border">
+      <div className="card divide-y divide-surface-rule">
         {events.map(e => (
           <div key={e.id} className="px-3 py-2 flex items-baseline gap-3">
             <span className="text-xs font-medium text-text capitalize w-32 flex-shrink-0">
