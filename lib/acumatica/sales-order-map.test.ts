@@ -333,3 +333,57 @@ describe('salesOrderSelect', () => {
     expect(SELECT_HEADER.length + SELECT_LINE.length).toBeLessThan(30)
   })
 })
+
+
+describe('the three ways Acumatica represents a field', () => {
+  /**
+   * The live sync wrote the literal string "[object Object]" into ship_via and
+   * external_ref on all 147 rows, because an EMPTY Acumatica field is `{}` — an
+   * object with no `value` key — and the mapper stringified it.
+   *
+   * Not a crash, not a blank: plausible-looking nonsense in a column, which is
+   * the kind of thing that survives review and reaches a job card.
+   */
+  it('reads a wrapped scalar', () => {
+    expect(mapLine({ OrderNbr: v('1'), ShipVia: v('ROAD') }, {}, 0)?.ship_via).toBe('ROAD')
+  })
+
+  it('reads a bare scalar', () => {
+    expect(mapLine({ OrderNbr: '1', ShipVia: 'ROAD' }, {}, 0)?.ship_via).toBe('ROAD')
+  })
+
+  it('treats {} as EMPTY, not as "[object Object]"', () => {
+    const r = mapLine({ OrderNbr: v('1'), ShipVia: {}, ExternalRef: {} }, {}, 0)
+    expect(r?.ship_via).toBeNull()
+    expect(r?.external_ref).toBeNull()
+  })
+
+  it('never stringifies a nested object', () => {
+    const r = mapLine({ OrderNbr: v('1'), ShipVia: { value: { deep: 1 } } }, {}, 0)
+    expect(r?.ship_via).toBeNull()
+  })
+
+  it('does the same for numbers', () => {
+    const r = mapLine({ OrderNbr: v('1') }, { OrderQty: {}, OpenQty: {} }, 0)
+    expect(r?.order_qty).toBeNull()
+    expect(r?.open_qty).toBeNull()
+  })
+
+  it('and for dates', () => {
+    expect(mapLine({ OrderNbr: v('1'), Date: {} }, {}, 0)?.order_date).toBeNull()
+  })
+
+  it('no mapped string field can ever be "[object Object]"', () => {
+    // The invariant, over a record where every optional field is empty.
+    const empty: Record<string, unknown> = {}
+    for (const f of [...SELECT_HEADER]) empty[f] = {}
+    empty.OrderNbr = v('1')
+    const line: Record<string, unknown> = {}
+    for (const f of [...SELECT_LINE]) line[f] = {}
+    const r = mapLine(empty, line, 0)!
+    for (const [k, value] of Object.entries(r)) {
+      if (k === 'raw') continue
+      expect(String(value), `${k} stringified an object`).not.toContain('[object Object]')
+    }
+  })
+})

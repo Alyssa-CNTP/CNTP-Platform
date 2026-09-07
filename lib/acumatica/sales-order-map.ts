@@ -65,12 +65,31 @@
 export const OPEN_STATUSES = ['Open', 'Back Order', 'On Hold']
 
 function val(v: unknown): string | null {
-  // Acumatica wraps scalars as { value: ... }; some custom endpoints do not.
-  const raw = v && typeof v === 'object' && 'value' in (v as Record<string, unknown>)
-    ? (v as { value: unknown }).value
-    : v
-  if (raw === null || raw === undefined || raw === '') return null
-  return String(raw)
+  if (v === null || v === undefined) return null
+
+  if (typeof v === 'object') {
+    /**
+     * Acumatica has THREE representations for a field, and the third is the
+     * one that bit:
+     *
+     *   { value: 'BHW' }   a set field
+     *   'BHW'              a bare scalar, on some custom endpoints
+     *   { }                EMPTY — an object with no `value` key at all
+     *
+     * The first version fell through on the third case and did String({}),
+     * writing the literal text "[object Object]" into ship_via and
+     * external_ref for all 147 synced rows. It is not a crash and it is not
+     * blank; it is plausible-looking nonsense in a column, which is worse.
+     */
+    if (!('value' in (v as Record<string, unknown>))) return null
+    const inner = (v as { value: unknown }).value
+    if (inner === null || inner === undefined || inner === '') return null
+    // A nested object is not a scalar and must never be stringified either.
+    if (typeof inner === 'object') return null
+    return String(inner)
+  }
+
+  return v === '' ? null : String(v)
 }
 
 function num(v: unknown): number | null {
