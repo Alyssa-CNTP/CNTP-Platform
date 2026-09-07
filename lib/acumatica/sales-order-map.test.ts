@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest'
-import { mapLine, rowsFromPayload, customerNameMap } from './sales-order-map'
+import {
+  mapLine, rowsFromPayload, customerNameMap,
+  salesOrderSelect, SELECT_HEADER, SELECT_LINE,
+} from './sales-order-map'
 
 /**
  * The payload mapping, on synthetic records.
@@ -290,5 +293,43 @@ describe('customerNameMap', () => {
       null,
     ])
     expect([...m.entries()]).toEqual([['A', 'Alpha']])
+  })
+})
+
+
+describe('salesOrderSelect', () => {
+  /**
+   * The $select and the mapper must not drift. A field read by mapLine but
+   * missing from the select comes back undefined from Acumatica and the column
+   * goes null forever — silently, exactly like CustomerName did.
+   */
+  it('asks for every header field the mapper reads', () => {
+    for (const f of ['OrderType', 'OrderNbr', 'Status', 'CustomerID',
+                     'CustomerOrder', 'Date', 'RequestedOn', 'ExternalRef']) {
+      expect(SELECT_HEADER, `${f} is mapped but not selected`).toContain(f)
+    }
+  })
+
+  it('asks for every line field the mapper reads', () => {
+    for (const f of ['LineNbr', 'InventoryID', 'LineDescription', 'OrderQty',
+                     'OpenQty', 'Completed', 'UOM', 'WarehouseID']) {
+      expect(SELECT_LINE, `${f} is mapped but not selected`).toContain(f)
+    }
+  })
+
+  it('does NOT ask for CustomerName — it is not on the entity', () => {
+    expect(SELECT_HEADER).not.toContain('CustomerName')
+  })
+
+  it('prefixes line fields with Details/, which is how Acumatica scopes them', () => {
+    const sel = salesOrderSelect()
+    expect(sel).toContain('Details/InventoryID')
+    expect(sel).toContain('OrderNbr')
+    expect(sel).not.toContain('Details/OrderNbr')
+  })
+
+  it('stays far smaller than the ~105 fields an unselected record returns', () => {
+    // The unbounded, unselected query is what produced the 504.
+    expect(SELECT_HEADER.length + SELECT_LINE.length).toBeLessThan(30)
   })
 })
