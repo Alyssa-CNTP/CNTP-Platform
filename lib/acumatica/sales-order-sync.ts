@@ -268,14 +268,33 @@ export async function syncSalesOrders(): Promise<{ ok: boolean; count: number; m
    * land, because an order without a display name is far better than no order.
    */
   let names: Map<string, string> | undefined
+  let nameNote = ''
   try {
-    const customers = await acumaticaRest(
-      cfg, 'GET', `Customer?$select=CustomerID,CustomerName&$top=${PAGE_SIZE * 5}`,
-      undefined, DEFAULT_ENDPOINT,
-    )
+    let customers: unknown
+    try {
+      customers = await acumaticaRest(
+        cfg, 'GET', `Customer?$select=CustomerID,CustomerName&$top=${PAGE_SIZE * 5}`,
+        undefined, DEFAULT_ENDPOINT,
+      )
+    } catch {
+      // Same $select fallback as the orders — Acumatica's NRE may apply here too.
+      customers = await acumaticaRest(
+        cfg, 'GET', `Customer?$top=${PAGE_SIZE * 5}`, undefined, DEFAULT_ENDPOINT,
+      )
+    }
     names = customerNameMap(customers)
-  } catch {
+    /**
+     * Say how many resolved, and against how many ids are actually present.
+     *
+     * The first live run returned customer_name: null on every row with no
+     * indication why — the fetch had "succeeded", so the existing message said
+     * nothing. A count that reads 0/94 is immediately diagnosable; silence is
+     * not.
+     */
+    if (names.size === 0) nameNote = ' — WARNING: the Customer fetch returned no usable names'
+  } catch (e) {
     names = undefined
+    nameNote = ` — customer names unavailable (${e instanceof Error ? e.message.slice(0, 80) : 'fetch failed'})`
   }
 
   const rows = rowsFromPayload(data, names)
@@ -307,7 +326,7 @@ export async function syncSalesOrders(): Promise<{ ok: boolean; count: number; m
       `Synced ${rows.length} sales order lines from ${orders.length} orders ` +
       `over ${pages} page(s) in ${secs}s` +
       (usedSelect ? '' : ' [full records — Acumatica 500s on $select]') +
-      (names ? '' : ' (customer names unavailable — ids only)') +
+      (names?.size ? ` · ${names.size} customer names` : '') + nameNote +
       (truncated ? `. STOPPED AT THE ${MAX_PAGES}-PAGE CAP — there is more; narrow the filter.` : '.'),
   }
 }
