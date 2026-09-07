@@ -12,6 +12,7 @@ import {
 import { canRequestApproval, resolveLabel, type LabelTemplate } from '@/lib/core/labels'
 import { useAuth } from '@/lib/auth/context'
 import { customerOptions } from '@/lib/core/labels/library'
+import { ActionDialog, type DialogField } from '@/features/pasteuriser-labels/components/ActionDialog'
 import FeatureBoundary from '@/components/shared/FeatureBoundary'
 import { StatusPill } from '../page'
 
@@ -26,6 +27,32 @@ import { StatusPill } from '../page'
  * server-side. The buttons below reflect state; they do not enforce it
  * (ARCHITECTURE.md §6).
  */
+/**
+ * Field definitions live at module scope, not inline.
+ *
+ * ActionDialog resets its inputs whenever `fields` changes identity. A fresh
+ * array literal on every render would clear what the user is typing on each
+ * keystroke — the kind of bug that looks like a broken keyboard.
+ */
+const PROOF_FIELDS: DialogField[] = [
+  { key: 'note', label: 'Who is this proof going to?',
+    placeholder: 'Control Union, the customer, or both',
+    hint: 'Recorded on the history so it is clear who was asked.' },
+]
+
+const APPROVE_FIELDS: DialogField[] = [
+  { key: 'externalRef', label: 'Control Union reference',
+    placeholder: 'Letter or email reference',
+    hint: 'Their sign-off reference, so the approval can be traced back to it.' },
+  { key: 'customerRef', label: 'Customer approval reference',
+    placeholder: 'Their PO, email or approval number' },
+]
+
+const REJECT_FIELDS: DialogField[] = [
+  { key: 'note', label: 'What came back?', required: true, multiline: true,
+    placeholder: 'What has to change before this can be approved' },
+]
+
 export default function LabelTemplatePage() {
   const { id } = useParams<{ id: string }>()
   const router = useRouter()
@@ -43,6 +70,13 @@ export default function LabelTemplatePage() {
    */
   const [customer, setCustomer] = useState<string | null>(null)
   const [customerOpts, setCustomerOpts] = useState<string[]>([])
+
+  /**
+   * The approval steps used to ask via window.prompt(), one value at a time.
+   * `pending` holds which step is open; the dialog collects every value for
+   * that step at once so a reference can be reviewed before it is committed.
+   */
+  const [pending, setPending] = useState<null | 'issue_proof' | 'approve' | 'reject'>(null)
   const [events, setEvents] = useState<TemplateEventRow[]>([])
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
@@ -231,9 +265,7 @@ export default function LabelTemplatePage() {
             <Btn
               onClick={() => {
                 if (dirty) { setError('Save your changes before sending the proof for approval.'); return }
-                void transition('issue_proof', {
-                  note: window.prompt('Who is this proof going to? (Control Union, the customer, both)') ?? undefined,
-                })
+                setPending('issue_proof')
               }}
               disabled={busy || !compliant}
               title={compliant ? undefined : 'Fix the compliance problems first'}
@@ -242,14 +274,10 @@ export default function LabelTemplatePage() {
 
           {row.status === 'pending_approval' && can('can_approve_labels') && (
             <>
-              <Btn onClick={() => void transition('approve', {
-                externalRef: window.prompt('Control Union reference (letter/email ref, optional)') ?? undefined,
-                customerRef: window.prompt('Customer approval reference (optional)') ?? undefined,
-              })} disabled={busy} primary icon={<ThumbsUp size={15} />} label="Mark approved" />
-              <Btn onClick={() => {
-                const note = window.prompt('What came back? (required)')
-                if (note?.trim()) void transition('reject', { note })
-              }} disabled={busy} icon={<ThumbsDown size={15} />} label="Reject" />
+              <Btn onClick={() => setPending('approve')} disabled={busy}
+                primary icon={<ThumbsUp size={15} />} label="Mark approved" />
+              <Btn onClick={() => setPending('reject')} disabled={busy}
+                icon={<ThumbsDown size={15} />} label="Reject" />
             </>
           )}
 
@@ -269,9 +297,59 @@ export default function LabelTemplatePage() {
         </div>
       )}
 
+      {/* The approval questions, in-app. Rendered only while a step is open
+          and KEYED by that step, so switching steps mounts a fresh dialog
+          rather than syncing state in an effect (which is a cascading render,
+          and what the hooks lint objects to). */}
+      {pending === 'issue_proof' && (
+        <ActionDialog
+          key="issue_proof" open
+          title="Send this proof for approval"
+          message="The wording is frozen from here. Changing it later starts a new version rather than editing this one."
+          confirmLabel="Send for approval"
+          busy={busy}
+          fields={PROOF_FIELDS}
+          onCancel={() => setPending(null)}
+          onConfirm={v => { setPending(null); void transition('issue_proof', { note: v.note || undefined }) }}
+        />
+      )}
+
+      {pending === 'approve' && (
+        <ActionDialog
+          key="approve" open
+          title="Record the approval"
+          message="Both references are optional, and both are what a certifier asks for later. Record whichever came back."
+          confirmLabel="Mark approved"
+          busy={busy}
+          fields={APPROVE_FIELDS}
+          onCancel={() => setPending(null)}
+          onConfirm={v => {
+            setPending(null)
+            void transition('approve', {
+              externalRef: v.externalRef || undefined,
+              customerRef: v.customerRef || undefined,
+            })
+          }}
+        />
+      )}
+
+      {pending === 'reject' && (
+        <ActionDialog
+          key="reject" open
+          title="Reject this label"
+          message="The reason is shown on the label and carried into the next version, so write what has to change."
+          confirmLabel="Reject"
+          busy={busy}
+          fields={REJECT_FIELDS}
+          onCancel={() => setPending(null)}
+          onConfirm={v => { setPending(null); void transition('reject', { note: v.note }) }}
+        />
+      )}
+
       {row.status === 'approved' && (
         <FeatureBoundary name="PO assignment">
-          <ApprovedPanel row={row} template={draft} canAssign={can('can_assign_label_po')} onDone={load} />
+          <ApprovedPanel row={row} template={draft} canAssign={can('can_assign_label_po')}
+            customerOpts={customerOpts} onDone={load} />
         </FeatureBoundary>
       )}
 
@@ -315,17 +393,24 @@ function Btn({ onClick, label, icon, disabled, primary, title }: {
  * Only shown on an approved template, because a PO attached to unapproved
  * wording is a promise nobody can keep. The route re-checks that too.
  */
-function ApprovedPanel({ row, template, canAssign, onDone }: {
+function ApprovedPanel({ row, template, canAssign, customerOpts, onDone }: {
   row: LabelTemplateRow
   template: LabelTemplate
   canAssign: boolean
+  customerOpts: string[]
   onDone: () => void
 }) {
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
+  /**
+   * Customer defaults to the LABEL'S customer. A PO is being raised against
+   * this specific approved label, so anything else is almost certainly a
+   * mistake — and typing it free-hand was how a PO ended up under a spelling
+   * that matched no customer at all.
+   */
   const [f, setF] = useState({
-    customer: '', poNumber: '', product: '', itemNumber: '',
+    customer: row.customer ?? '', poNumber: '', product: '', itemNumber: '',
     netMass: '', grossMass: '', importer: '', orderedBags: '',
     plannedBatchNo: '', plannedDate: '', notes: '',
   })
@@ -343,7 +428,7 @@ function ApprovedPanel({ row, template, canAssign, onDone }: {
       const json = await res.json()
       if (!res.ok) throw new Error(json.error ?? 'Could not assign the PO')
       setOpen(false)
-      setF({ customer: '', poNumber: '', product: '', itemNumber: '', netMass: '', grossMass: '',
+      setF({ customer: row.customer ?? '', poNumber: '', product: '', itemNumber: '', netMass: '', grossMass: '',
              importer: '', orderedBags: '', plannedBatchNo: '', plannedDate: '', notes: '' })
       onDone()
     } catch (e) { setErr(errMessage(e)) }
@@ -378,8 +463,29 @@ function ApprovedPanel({ row, template, canAssign, onDone }: {
         <div className="space-y-2.5 pt-1">
           {err && <p className="text-xs text-red-700">{err}</p>}
           <div className="grid sm:grid-cols-2 gap-2">
-            <Field label="Customer *"><input className={input} value={f.customer}
-              onChange={e => setF({ ...f, customer: e.target.value })} /></Field>
+            <Field label="Customer *">
+              {customerOpts.length > 0 ? (
+                <select className={input} value={f.customer}
+                  onChange={e => setF({ ...f, customer: e.target.value })}>
+                  <option value="">Select a customer…</option>
+                  {customerOpts.map(c => <option key={c} value={c}>{c}</option>)}
+                  {/* A label assigned to a customer that is no longer offered
+                      must still be selectable, or reassigning it silently
+                      blanks the field. */}
+                  {f.customer && !customerOpts.includes(f.customer) && (
+                    <option value={f.customer}>{f.customer}</option>
+                  )}
+                </select>
+              ) : (
+                <>
+                  <input className={input} value={f.customer}
+                    onChange={e => setF({ ...f, customer: e.target.value })} />
+                  <p className="text-[10px] text-text-faint mt-1">
+                    No customers found — add one in the sales customer list, or type the name.
+                  </p>
+                </>
+              )}
+            </Field>
             <Field label="Customer PO number *"><input className={input} value={f.poNumber}
               placeholder="KTR 4417" onChange={e => setF({ ...f, poNumber: e.target.value })} /></Field>
             <Field label="Product as printed"><input className={input} value={f.product}
@@ -435,27 +541,93 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   )
 }
 
+/**
+ * The approval trail.
+ *
+ * Under FSSC an approval is documented information, so it has to say WHO, WHEN
+ * and carry their signature — not just "approved at 09:41". The name and
+ * signature are snapshots taken when the event was written (20260907_003), not
+ * a live join, so a rename or an offboarding cannot rewrite an approval after
+ * the fact.
+ */
+const EVENT_STYLE: Record<string, { label: string; dot: string }> = {
+  created:      { label: 'Created',            dot: 'bg-stone-300' },
+  proof_issued: { label: 'Sent for approval',  dot: 'bg-amber-400' },
+  approved:     { label: 'Approved',           dot: 'bg-emerald-500' },
+  rejected:     { label: 'Rejected',           dot: 'bg-red-500' },
+  superseded:   { label: 'Superseded',         dot: 'bg-stone-400' },
+  reopened:     { label: 'Reopened as draft',  dot: 'bg-sky-400' },
+}
+
 function HistoryPanel({ events }: { events: TemplateEventRow[] }) {
   if (events.length === 0) return null
   return (
     <div className="space-y-2">
-      <p className="text-[11px] uppercase tracking-wide font-semibold text-text-faint">History</p>
+      <p className="text-[11px] uppercase tracking-wide font-semibold text-text-faint">
+        Approval history
+      </p>
       <div className="card divide-y divide-surface-rule">
-        {events.map(e => (
-          <div key={e.id} className="px-3 py-2 flex items-baseline gap-3">
-            <span className="text-xs font-medium text-text capitalize w-32 flex-shrink-0">
-              {e.event.replace(/_/g, ' ')}
-            </span>
-            <span className="text-[11px] text-text-muted flex-1 min-w-0">
-              {e.note}
-              {e.external_ref && <span className="font-mono"> · {e.external_ref}</span>}
-            </span>
-            <span className="text-[10px] font-mono text-text-faint flex-shrink-0">
-              {new Date(e.created_at).toLocaleString('en-ZA', { timeZone: 'Africa/Johannesburg' })}
-            </span>
-          </div>
-        ))}
+        {events.map(e => {
+          const style = EVENT_STYLE[e.event] ?? { label: e.event.replace(/_/g, ' '), dot: 'bg-stone-300' }
+          const when = new Date(e.created_at)
+          return (
+            <div key={e.id} className="px-4 py-3 flex gap-3">
+              {/* A coloured dot rather than a coloured row: the history is
+                  scanned for "when was it approved", and one mark per row
+                  reads faster than five tinted bands. */}
+              <span className={`mt-1.5 w-2 h-2 rounded-full flex-shrink-0 ${style.dot}`} />
+
+              <div className="flex-1 min-w-0">
+                <div className="flex items-baseline gap-2 flex-wrap">
+                  <span className="text-[13px] font-semibold text-text">{style.label}</span>
+                  <span className="text-[11px] text-text-muted">
+                    {e.actor_name
+                      ? <>by <span className="text-text font-medium">{e.actor_name}</span></>
+                      : <span className="text-text-faint">actor not recorded</span>}
+                  </span>
+                </div>
+
+                <p className="text-[11px] font-mono text-text-faint mt-0.5">
+                  {when.toLocaleString('en-ZA', {
+                    timeZone: 'Africa/Johannesburg',
+                    dateStyle: 'medium', timeStyle: 'short',
+                  })} SAST
+                </p>
+
+                {e.note && <p className="text-[12px] text-text-muted mt-1">{e.note}</p>}
+                {e.external_ref && (
+                  <p className="text-[11px] mt-0.5">
+                    <span className="text-text-faint">Ref </span>
+                    <span className="font-mono text-text">{e.external_ref}</span>
+                  </p>
+                )}
+              </div>
+
+              {/* The signature. Absent is a real and legitimate state — the
+                  person has not set one up — and it says so rather than
+                  leaving a gap that reads like a missing record. */}
+              <div className="flex-shrink-0 w-28 text-right">
+                {e.actor_signature ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={e.actor_signature}
+                    alt={`Signature of ${e.actor_name ?? 'the approver'}`}
+                    className="h-10 ml-auto object-contain"
+                  />
+                ) : (
+                  <span className="text-[10px] text-text-faint">
+                    {e.actor_name ? 'no signature on file' : ''}
+                  </span>
+                )}
+              </div>
+            </div>
+          )
+        })}
       </div>
+      <p className="text-[10px] text-text-faint">
+        Names and signatures are recorded as they were at the time of each event.
+      </p>
     </div>
   )
 }
+
