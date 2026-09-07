@@ -29,7 +29,7 @@
 
 import { NextResponse }               from 'next/server'
 import { createServerSupabaseClient } from '@/lib/supabase/server'
-import { syncSalesOrders, probeSalesOrders } from '@/lib/acumatica/sales-order-sync'
+import { syncSalesOrders, probeSalesOrders, fetchOneOrder } from '@/lib/acumatica/sales-order-sync'
 
 export const dynamic = 'force-dynamic'
 
@@ -46,7 +46,20 @@ async function handle(req: Request) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  if (new URL(req.url).searchParams.get('probe')) {
+  const params = new URL(req.url).searchParams
+
+  /**
+   * ?order=BH-SO0000387 — one known order, unfiltered, mapped and raw.
+   * Distinguishes "no open orders" from "wrong status filter", which an empty
+   * filtered sync cannot.
+   */
+  const one = params.get('order')
+  if (one) {
+    const result = await fetchOneOrder(one)
+    return NextResponse.json(result, { status: result.ok ? 200 : 502 })
+  }
+
+  if (params.get('probe')) {
     const result = await probeSalesOrders()
     return NextResponse.json(result, { status: result.ok ? 200 : 502 })
   }
