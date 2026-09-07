@@ -152,29 +152,46 @@ export async function fetchTemplates(): Promise<LabelTemplateRow[]> {
 }
 
 /**
- * Customer names the quality module already knows.
+ * Customer names for the label editor's picker.
  *
- * Read from qms.customer_specs rather than a customers master table, because
- * there is no customers master table — checked on staging 2026-09-07:
- * public.customers, logistics.customers and sales.customers all absent, while
- * qms.customer_specs holds 45 spec rows across 10 real customers. Alyssa
- * confirmed that is the source to reference.
+ * Prefers sales.customers — the master introduced by 20260907_002, where `name`
+ * is UNIQUE and therefore actually canonical. Falls back to
+ * qms.customer_specs.customer, which is where customer identity lived before
+ * that table existed and is not unique (45 spec rows across 10 customers).
  *
- * DISTINCT is done here rather than in SQL because PostgREST has no DISTINCT —
- * asking for the column and de-duplicating in memory is 45 rows, not a scan.
+ * The fallback is not defensive clutter: it is what makes this code safe to
+ * merge before the migration is run, and what keeps the editor usable if the
+ * sales schema is unavailable. Quality being reachable while sales is not has
+ * happened — sales.customers was missing on staging for the whole life of this
+ * feature.
  *
- * Failure is NOT fatal. A label can still be assigned a customer that is
- * already in use on another label, and the picker falls back to those. Quality
- * being unavailable must not stop Sales designing a label.
+ * DISTINCT happens in memory because PostgREST has no DISTINCT. Both sources
+ * are tens of rows, not a scan.
+ *
+ * Failure returns [] rather than throwing. A label can still be assigned a
+ * customer already in use elsewhere in the library, and neither module being
+ * available must stop Sales designing a label.
  */
 export async function fetchKnownCustomers(): Promise<string[]> {
-  const { data, error } = await getSupabaseClient()
+  const master = await getSupabaseClient()
+    .schema('sales' as never)
+    .from('customers')
+    .select('name')
+    .eq('active', true)
+    .order('name')
+  if (!master.error) {
+    const names = ((master.data ?? []) as { name: string | null }[])
+      .map(r => r.name ?? '').filter(Boolean)
+    if (names.length) return names
+  }
+
+  const specs = await getSupabaseClient()
     .schema('qms' as never)
     .from('customer_specs')
     .select('customer')
-  if (error) return []
-  const names = (data ?? []) as { customer: string | null }[]
-  return names.map(r => r.customer ?? '').filter(Boolean)
+  if (specs.error) return []
+  return ((specs.data ?? []) as { customer: string | null }[])
+    .map(r => r.customer ?? '').filter(Boolean)
 }
 
 export async function fetchTemplate(id: string): Promise<LabelTemplateRow | null> {
