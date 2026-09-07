@@ -4,7 +4,18 @@
 #
 # Features do NOT need to touch core. If a feature needs something from core,
 # add it to core in its own reviewed commit, with tests.
+#
+# ── Why TWO owners, not one ─────────────────────────────────────────────────
+#
+# `main` requires an approving review from someone other than the last pusher.
+# With a single code owner that combination deadlocks: the owner pushes a change
+# to a protected path, CODEOWNERS demands an owner's review, and the only owner
+# is the person who pushed. Nothing merges, and the workaround is to weaken the
+# branch protection — which is worse than having no CODEOWNERS at all.
+#
+# Either owner satisfies the requirement, so listing both keeps the rule
+# enforceable rather than theatrical. Add a third before removing either.
 
-/lib/core/                @Alyssa-CNTP
-/ARCHITECTURE.md          @Alyssa-CNTP
-/supabase/migrations/     @Alyssa-CNTP
+/lib/core/                @Alyssa-CNTP @Gus-007
+/ARCHITECTURE.md          @Alyssa-CNTP @Gus-007
+/supabase/migrations/     @Alyssa-CNTP @Gus-007
