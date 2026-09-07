@@ -2,6 +2,21 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-05 — Gustav (Maintenance: checklist allocation reaches technicians, period locking, checklist history, run-hour service tracking)
+
+**Files changed:** `lib/maintenance/useMaintenanceData.ts`, `lib/maintenance/types.ts`, `app/(app)/maintenance/scheduled/page.tsx`, `app/(app)/maintenance/page.tsx`, `components/maintenance/TrendsPanel.tsx`, `components/maintenance/ServiceCard.tsx` (new), `supabase/migrations/20260905_010_generator_checklist_service_tracking.sql` (new, applied to staging)
+
+- **Weekly Generator / Diesel checklist trimmed to the two readings actually captured** — *Generator run hours* and *Generator fuel level*. The other three lines (flow meter, start capability, run for 20 min) were prompts, not measurements.
+- **FIXED: an allocated checklist never reached the technician.** Allocation was matched on the technician's NAME only, so it silently failed whenever the roster spelling and the person's profile name differed. Allocation now records `assigned_user_id` and the technician's view matches on that (name kept as a fallback for older rows). A technician signed in now sees exactly the weekly/monthly checklists allocated to them.
+- **Auto-allocate now spreads work across EVERY maintenance technician**, not just whoever is on duty — a checklist is a whole-period job, and rostering only the on-duty crew left most of the team idle and overloaded the rest.
+- **A period locks once allocated.** Auto-allocate is disabled for that week/month (re-running would reshuffle work people had already started); the maintenance manager can still move any individual checklist to someone else from its card — the override for sick leave.
+- **Checklist history by period.** Weekly now has a week picker alongside the monthly month picker, so you can go back to any past week or month and see the checklists as they were filled in, including who completed them and a partial-progress line for ones left incomplete.
+- **Readings captured on a checklist now reach the graphs.** IP Measurement, Generator / Diesel and Water Meters were only writing into the checklist's own task state, so the trend charts — which read `ip_readings` / `diesel_readings` / `water_readings` — never saw them. Saving a reading checklist now also writes the numbers into the matching register.
+- **Compressor and generator now show service status instead of a sparkline** — current meter reading and its date, hours run since the last service, and the **date the next service falls due**. The due date is the earlier of the hours projection and any calendar interval. The compressor's configured interval was wrong (350 hours) and is now **2000**; the generator was missing from the run-hours register entirely and is now tracked at **500 hours or 12 months, whichever comes first**. Shown on the maintenance dashboard, in Utilities & trends, and in the Annual / Calibration tab.
+
+---
+
+## 2026-09-05 — Alyssa (Feature flags never reached the browser)
 ## 2026-09-11 — Gustav (COA: glyphosate forced onto organic COAs, no way back down the sign-off chain, specs never refreshed)
 
 **Files changed:** `app/(app)/quality/coa/page.tsx`, `lib/quality/coa-gating.ts`, `lib/quality/coa-gating.test.ts`, `app/api/quality/coa-signoff/route.ts`
