@@ -146,6 +146,40 @@ export async function probeSalesOrders(): Promise<{
   }
 }
 
+/**
+ * One order, by number, unmapped and unfiltered.
+ *
+ * The status filter is the likeliest reason a sync comes back empty, and a
+ * filtered query cannot tell you "no open orders" apart from "wrong filter".
+ * Fetching a KNOWN order sidesteps both: if BH-SO0000387 comes back, the
+ * plumbing is fine and the filter is the problem.
+ *
+ * No $select — the same Acumatica NRE applies, and one order is small anyway.
+ */
+export async function fetchOneOrder(orderNbr: string): Promise<{
+  ok: boolean; message: string; order?: unknown; mapped?: unknown
+}> {
+  const cfg = getAcumaticaRestConfig()
+  if (!cfg) return { ok: false, message: 'Acumatica REST not configured.' }
+  try {
+    const data = await acumaticaRest(
+      cfg, 'GET',
+      `SalesOrder?$expand=Details&$filter=${encodeURIComponent(`OrderNbr eq '${orderNbr}'`)}&$top=1`,
+      undefined, DEFAULT_ENDPOINT,
+    )
+    const first = Array.isArray(data) ? data[0] : data
+    if (!first) return { ok: false, message: `No order found with OrderNbr '${orderNbr}'.` }
+    return {
+      ok: true,
+      message: `Found ${orderNbr}. 'mapped' is what the sync would store; 'order' is the raw record.`,
+      order: first,
+      mapped: rowsFromPayload(first),
+    }
+  } catch (e) {
+    return { ok: false, message: e instanceof Error ? e.message : 'Acumatica REST call failed.' }
+  }
+}
+
 export async function syncSalesOrders(): Promise<{ ok: boolean; count: number; message: string }> {
   const cfg = getAcumaticaRestConfig()
   if (!cfg) {
@@ -163,15 +197,49 @@ export async function syncSalesOrders(): Promise<{ ok: boolean; count: number; m
   const orders: unknown[] = []
   let pages = 0
   let truncated = false
+  let usedSelect = true
+
+  /**
+   * One page, trying the slim query first and falling back to the full record.
+   *
+   * $select is an OPTIMISATION here, not a requirement, because Acumatica 500s
+   * on it:
+   *
+   *   NullReferenceException at
+   *   PX.Objects.SO.GraphExtensions.SOOrderEntryExt.PurchaseSupplyBaseExt._(FieldDefaulting)
+   *
+   * That is a bug in their graph extension — omitting fields breaks the
+   * defaulting logic on SO lines — and no query shape we can write fixes it.
+   * The probe proved the same request WITHOUT $select returns a full record, so
+   * the fallback is known to work rather than hopeful.
+   *
+   * $top/$skip is what actually bounds the payload, and that still applies. The
+   * cost of falling back is a bigger record (~105 fields instead of 16), not an
+   * unbounded one.
+   */
+  async function fetchPage(skip: number): Promise<unknown[]> {
+    const base =
+      `SalesOrder?$expand=Details&$filter=${encodeURIComponent(filter)}` +
+      `&$top=${PAGE_SIZE}&$skip=${skip}`
+    if (usedSelect) {
+      try {
+        const slim = await acumaticaRest(
+          cfg!, 'GET', `${base}&$select=${encodeURIComponent(select)}`, undefined, DEFAULT_ENDPOINT,
+        )
+        return Array.isArray(slim) ? slim : slim ? [slim] : []
+      } catch {
+        // Stop retrying it: if it failed once it will fail on every page, and
+        // doubling the request count to rediscover that helps nobody.
+        usedSelect = false
+      }
+    }
+    const full = await acumaticaRest(cfg!, 'GET', base, undefined, DEFAULT_ENDPOINT)
+    return Array.isArray(full) ? full : full ? [full] : []
+  }
 
   try {
     for (let skip = 0; pages < MAX_PAGES; skip += PAGE_SIZE) {
-      const path =
-        `SalesOrder?$expand=Details&$select=${encodeURIComponent(select)}` +
-        `&$filter=${encodeURIComponent(filter)}` +
-        `&$top=${PAGE_SIZE}&$skip=${skip}`
-      const page = await acumaticaRest(cfg, 'GET', path, undefined, DEFAULT_ENDPOINT)
-      const batch = Array.isArray(page) ? page : page ? [page] : []
+      const batch = await fetchPage(skip)
       pages += 1
       orders.push(...batch)
       // A short page is the last page. Acumatica returns no total count, so
@@ -181,8 +249,6 @@ export async function syncSalesOrders(): Promise<{ ok: boolean; count: number; m
     }
   } catch (e) {
     const msg = e instanceof Error ? e.message : 'Acumatica REST call failed.'
-    // Pages already fetched are still worth keeping — a partial sync of real
-    // orders beats none, and the message says it was partial.
     if (orders.length === 0) return { ok: false, count: 0, message: msg }
     return {
       ok: false,
@@ -240,6 +306,7 @@ export async function syncSalesOrders(): Promise<{ ok: boolean; count: number; m
     message:
       `Synced ${rows.length} sales order lines from ${orders.length} orders ` +
       `over ${pages} page(s) in ${secs}s` +
+      (usedSelect ? '' : ' [full records — Acumatica 500s on $select]') +
       (names ? '' : ' (customer names unavailable — ids only)') +
       (truncated ? `. STOPPED AT THE ${MAX_PAGES}-PAGE CAP — there is more; narrow the filter.` : '.'),
   }
