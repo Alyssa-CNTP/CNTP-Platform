@@ -219,6 +219,16 @@ interface BatchSample {
   final_weight_1: string; final_weight_2: string; final_weight_3: string
   afternoon_qc?:  string
   has_sensorial:  boolean
+  /**
+   * Who tasted the sample. Deliberately separate from the sample's own
+   * `qc_name`: the person who cupped the tea is often not the person who typed
+   * the sieve and moisture values in, and the tasting is a subjective
+   * assessment that has to be attributable to the palate behind it. Same rule
+   * as the granule line's `assessed_by`, which has always carried a name.
+   * Optional on the type because records captured before this field existed
+   * have no value for it — never treat a blank as "the capturing QC tasted it".
+   */
+  sensorial_by?:  string
   aroma: string; flavour_profile: string; briskness: string; strength: string; cup_colour: string
   cup_clarity:    string
   sensorial_pass: string
@@ -256,6 +266,14 @@ interface Batch {
   allocated_at?:   string
   allocated_by?:   string
   approved_by?:    string
+  /**
+   * Free-form standing notes the Lab Manager can add on a run at any point,
+   * written into data_json by the Lab Manager screen (see saveLmNotes there).
+   * Distinct from final_reason, which is the required comment on a Fail or
+   * Concession decision. Declared here because this page renders it in two
+   * places and was reaching it through an untyped property until now.
+   */
+  lm_notes?:       string
   oos_flags?:      any[]
   // Append-only record of every "Reload Spec" against this batch — see
   // reloadSpecFor(). Declared here rather than reached through `as any` so the
@@ -406,6 +424,12 @@ function KpiCard({ label, value, color }: { label:string; value:string|number; c
 
 function PastSensorialPanel({ sample, onSave, onClose }: { sample:any; onSave:(d:any)=>void; onClose:()=>void }) {
   const [s, setS] = useState({
+    // Starts BLANK on a new tasting rather than pre-filled with the capturing
+    // QC. Pre-filling is what makes an attribution field lie: the default gets
+    // saved unread and the record then names someone who never tasted the tea.
+    // The chip next to the field fills the capturing QC in one tap for the
+    // common case where it genuinely is the same person.
+    sensorial_by:    sample.sensorial_by    || '',
     aroma:           sample.aroma           ?? '',
     flavour_profile: sample.flavour_profile ?? '',
     briskness:       sample.briskness       ?? '',
@@ -415,6 +439,9 @@ function PastSensorialPanel({ sample, onSave, onClose }: { sample:any; onSave:(d
     sensorial_pass:  sample.sensorial_pass  || 'Pass',
     sensorial_note:  sample.sensorial_note  || '',
   })
+  const [showErr, setShowErr] = useState(false)
+  const tastedBy = s.sensorial_by.trim()
+  const capturedBy = String(sample.qc_name || '').trim()
 
   const Score = ({ field, label }: { field:string; label:string }) => (
     <div className="flex flex-col items-center gap-1">
@@ -436,6 +463,21 @@ function PastSensorialPanel({ sample, onSave, onClose }: { sample:any; onSave:(d
       <div className="flex items-center justify-between mb-4">
         <span className="font-semibold text-[13px] text-ok">🍵 Sensorial Evaluation — {sample.time || 'sample'}</span>
         <button onClick={onClose} className="text-text-muted hover:text-text text-[18px] leading-none">×</button>
+      </div>
+      {/* Who tasted it — required, and not assumed to be the capturing QC. */}
+      <div className="mb-4">
+        <label className={`${lbl} ${showErr && !tastedBy ? 'text-err' : ''}`}>Tasted By (QC) *</label>
+        <div className="flex gap-2 items-center flex-wrap">
+          <input value={s.sensorial_by} onChange={e => setS(p => ({ ...p, sensorial_by: e.target.value }))}
+            placeholder="Name of the QC who tasted this sample"
+            className={`${inp} flex-1 min-w-[220px] ${showErr && !tastedBy ? 'border-err/60' : ''}`} />
+          {capturedBy && capturedBy !== tastedBy && (
+            <button type="button" onClick={() => setS(p => ({ ...p, sensorial_by: capturedBy }))}
+              className="px-3 py-1.5 rounded-lg border border-surface-rule bg-surface text-[11px] text-text-muted whitespace-nowrap"
+              title="Use the QC who captured this sample">↩ {capturedBy}</button>
+          )}
+        </div>
+        {showErr && !tastedBy && <div className="text-[10px] text-err mt-1">Enter the name of the QC who tasted the sample.</div>}
       </div>
       <div className="flex gap-5 flex-wrap justify-center mb-4">
         <Score field="aroma"           label="Rooibos Aroma" />
@@ -475,8 +517,14 @@ function PastSensorialPanel({ sample, onSave, onClose }: { sample:any; onSave:(d
       </div>
       <div className="flex justify-end gap-3">
         <button onClick={onClose} className="px-4 py-2 rounded-xl border border-surface-rule text-text-muted text-[12px]">Cancel</button>
-        <button onClick={() => onSave({ ...s, has_sensorial: true })}
-          className="px-5 py-2 rounded-xl bg-ok text-white text-[12px] font-semibold">💾 Save Sensorial</button>
+        <button
+          onClick={() => {
+            if (!tastedBy) { setShowErr(true); return }
+            onSave({ ...s, sensorial_by: tastedBy, has_sensorial: true })
+          }}
+          className="px-5 py-2 rounded-xl text-white text-[12px] font-semibold"
+          style={{ background: tastedBy ? 'var(--color-ok)' : '#9ca3af' }}
+          title={tastedBy ? '' : 'Enter the QC who tasted the sample first'}>💾 Save Sensorial</button>
       </div>
     </div>
   )
@@ -2278,7 +2326,15 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                                     ))}
                                     <td className="px-2 py-2.5 text-center">
                                       {s.has_sensorial ? (
-                                        <span className={`badge ${s.sensorial_pass==='Pass'?'badge-ok':'badge-err'} text-[10px]`}>{s.sensorial_pass}</span>
+                                        <>
+                                          <span className={`badge ${s.sensorial_pass==='Pass'?'badge-ok':'badge-err'} text-[10px]`}>{s.sensorial_pass}</span>
+                                          {/* Who tasted it, shown under the verdict. Blank on records
+                                              captured before the field existed — shown as "—" rather
+                                              than falling back to the capturing QC's name. */}
+                                          <div className="text-[9px] text-text-muted mt-0.5 truncate max-w-[90px]" title={s.sensorial_by ? `Tasted by ${s.sensorial_by}` : 'Taster not recorded'}>
+                                            {s.sensorial_by || '—'}
+                                          </div>
+                                        </>
                                       ) : (
                                         <button onClick={() => setSensorialFor(s.id)}
                                           className="px-2 py-1 rounded-lg border border-warn/40 bg-warn/8 text-warn text-[10px] font-semibold">+ Taste</button>
@@ -2644,7 +2700,10 @@ function RunDashboard({ isAdmin }: { isAdmin:boolean }) {
                                                 })}
                                                 <td className="px-3 py-2 text-center font-mono font-bold" style={{ color:tot>0?(Math.abs(tot-100)<2?'var(--color-ok)':'var(--color-err)'):'var(--color-text-faint)' }}>{tot>0?tot.toFixed(1)+'%':'—'}</td>
                                                 {['aroma','flavour_profile','briskness','strength'].map(f => <td key={f} className="px-2 py-2 text-center">{(s as any)[f]||'—'}</td>)}
-                                                <td className="px-3 py-2 text-center">{s.sensorial_pass?<span className={`badge ${s.sensorial_pass==='Pass'?'badge-ok':'badge-err'} text-[9px]`}>{s.sensorial_pass}</span>:'—'}</td>
+                                                <td className="px-3 py-2 text-center">
+                                                  {s.sensorial_pass?<span className={`badge ${s.sensorial_pass==='Pass'?'badge-ok':'badge-err'} text-[9px]`} title={s.sensorial_by ? `Tasted by ${s.sensorial_by}` : 'Taster not recorded'}>{s.sensorial_pass}</span>:'—'}
+                                                  {s.sensorial_by && <div className="text-[8px] text-text-muted mt-0.5">{s.sensorial_by}</div>}
+                                                </td>
                                               </tr>
                                             )
                                           })}
