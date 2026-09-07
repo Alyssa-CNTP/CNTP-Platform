@@ -21,13 +21,17 @@
 
 import { getAcumaticaRestConfig, acumaticaRest } from './rest'
 import supabaseAdmin from '@/lib/supabase/admin'
-import { rowsFromPayload, OPEN_STATUSES } from './sales-order-map'
+import { rowsFromPayload, customerNameMap, OPEN_STATUSES } from './sales-order-map'
 
 /**
  * Acumatica's built-in endpoint. The version is part of the URL and varies by
  * instance; 24.200.001 is the current-generation default. Overridable because
  * getting it wrong is a 404 that looks exactly like "the entity is missing".
  */
+// CONFIRMED against the tenant 2026-09-07: SalesOrder answers on
+// Default/24.200.001. The instance also exposes Default at 20.200.001,
+// 22.200.001, 23.200.001 and 25.200.001; 24 is used because it is the version
+// the probe was verified on, not because it is newest.
 const DEFAULT_ENDPOINT = process.env.ACUMATICA_DEFAULT_ENDPOINT ?? 'Default/24.200.001'
 
 /** Endpoints the probe tries, in order of how likely they are to work. */
@@ -138,7 +142,25 @@ export async function syncSalesOrders(): Promise<{ ok: boolean; count: number; m
     return { ok: false, count: 0, message: e instanceof Error ? e.message : 'Acumatica REST call failed.' }
   }
 
-  const rows = rowsFromPayload(data)
+  /**
+   * Customer names come from a SECOND call. SalesOrder carries CustomerID
+   * ("C-KUN001") and no name — verified against the live payload, and the whole
+   * point of this sync is that a person can find their customer's order.
+   *
+   * Best-effort: a failure here leaves customer_name null and the rows still
+   * land, because an order without a display name is far better than no order.
+   */
+  let names: Map<string, string> | undefined
+  try {
+    const customers = await acumaticaRest(
+      cfg, 'GET', 'Customer?$select=CustomerID,CustomerName', undefined, DEFAULT_ENDPOINT,
+    )
+    names = customerNameMap(customers)
+  } catch {
+    names = undefined
+  }
+
+  const rows = rowsFromPayload(data, names)
 
   // Unlike the lot sync, an empty fetch is NOT dangerous here — the upsert
   // deletes nothing, so there is no table to protect. It is still reported,

@@ -18,7 +18,30 @@
 // embeds the order number, so a locally-minted `JC-2026-0001` would produce
 // batch numbers matching nothing in the ERP.
 //
-// ── ⚠ THE FIELD NAMES BELOW ARE UNVERIFIED ──────────────────────────────────
+// ── Field names VERIFIED against the live tenant, 2026-09-07 ────────────────
+//
+// Probed Default/24.200.001. Most of the guessed names were right. Two were not,
+// and one of those was serious:
+//
+//   CustomerName  DOES NOT EXIST on the header. There is only CustomerID
+//                 ("C-KUN001"). Every row would have had a null customer, which
+//                 breaks the one thing this sync is for. The name now comes from
+//                 a separate Customer fetch, passed in as a map.
+//   OrderNbr      is "BH-BSO0000002" on the sampled record, not "26252" — that
+//                 sample is OrderType "BL" (a blanket order). Job card 26252 is
+//                 presumably an "SO". The number format therefore varies BY
+//                 ORDER TYPE, so order_type is part of the key and must be shown
+//                 wherever a number is.
+//
+// ── ⚠ THE UOM TRAP ──────────────────────────────────────────────────────────
+//
+// OrderQty is in the line's UOM, and the UOM on real lines is "BV18KG" — an
+// 18kg bulk vessel. OrderQty 3000 is 3000 BAGS, i.e. 54 000 kg, not 3000 kg.
+// The paper job card says the same thing from the other side: 18 000 kg total,
+// 18 kg per bag, 1000 bags.
+//
+// NEVER treat order_qty as a mass. Anything showing kg has to multiply by the
+// UOM's weight, and that conversion does not live here.
 //
 // This was written without Acumatica credentials in the environment — only
 // ACUMATICA_BASE_URL and ACUMATICA_COMPANY are set locally, so
@@ -102,6 +125,10 @@ export interface SalesOrderRow {
   order_qty: number | null
   uom: string | null
   warehouse_id: string | null
+  external_ref: string | null
+  open_qty: number | null
+  completed: boolean
+  ship_on: string | null
   raw: unknown
 }
 
@@ -114,7 +141,13 @@ type Rec = Record<string, unknown>
  * network call — which is the only way to test this until the endpoint is
  * reachable.
  */
-export function mapLine(order: Rec, line: Rec, index: number): SalesOrderRow | null {
+export function mapLine(
+  order: Rec,
+  line: Rec,
+  index: number,
+  /** CustomerID -> name. The header has no CustomerName; see the note above. */
+  customerNames?: ReadonlyMap<string, string>,
+): SalesOrderRow | null {
   const orderNbr = val(order.OrderNbr)
   // Without an order number the row has no identity and cannot be upserted.
   // Skipping is right: one malformed order must not fail the batch.
@@ -128,7 +161,11 @@ export function mapLine(order: Rec, line: Rec, index: number): SalesOrderRow | n
     line_nbr:       num(line.LineNbr) ?? index + 1,
     status:         val(order.Status),
     customer_id:    val(order.CustomerID),
-    customer_name:  val(order.CustomerName),
+    // Resolved, never read off the order — the field is not there.
+    customer_name:  (() => {
+      const id = val(order.CustomerID)
+      return id ? customerNames?.get(id) ?? null : null
+    })(),
     customer_order: val(order.CustomerOrder),
     order_date:     date(order.Date),
     requested_on:   date(order.RequestedOn),
@@ -139,12 +176,21 @@ export function mapLine(order: Rec, line: Rec, index: number): SalesOrderRow | n
     order_qty:      num(line.OrderQty) ?? num(line.Quantity),
     uom:            val(line.UOM),
     warehouse_id:   val(line.WarehouseID),
+    external_ref:   val(order.ExternalRef),
+    // Per LINE, not per order: one line of an order can be finished while
+    // another is still open, and a job card is raised against a line.
+    open_qty:       num(line.OpenQty),
+    completed:      val(line.Completed) === 'true',
+    ship_on:        date(line.ShipOn) ?? date(line.SchedOrderDate),
     raw:            line,
   }
 }
 
 /** Flatten an Acumatica SalesOrder payload into rows. Pure, so it is testable. */
-export function rowsFromPayload(data: unknown): SalesOrderRow[] {
+export function rowsFromPayload(
+  data: unknown,
+  customerNames?: ReadonlyMap<string, string>,
+): SalesOrderRow[] {
   const orders = (Array.isArray(data) ? data : [data]) as Rec[]
   const rows: SalesOrderRow[] = []
   for (const order of orders) {
@@ -153,15 +199,32 @@ export function rowsFromPayload(data: unknown): SalesOrderRow[] {
     if (!Array.isArray(details) || details.length === 0) {
       // A header with no lines is still worth recording: the job card picker
       // shows the order, and the line arrives on the next sync.
-      const r = mapLine(order, {}, 0)
+      const r = mapLine(order, {}, 0, customerNames)
       if (r) rows.push(r)
       continue
     }
     details.forEach((line, i) => {
-      const r = mapLine(order, line ?? {}, i)
+      const r = mapLine(order, line ?? {}, i, customerNames)
       if (r) rows.push(r)
     })
   }
   return rows
 }
 
+
+/**
+ * CustomerID -> CustomerName, from an Acumatica Customer payload.
+ *
+ * Separate call because SalesOrder carries only the id. Pure so the shape can
+ * be tested without a network call, same reason as the rest of this module.
+ */
+export function customerNameMap(data: unknown): Map<string, string> {
+  const out = new Map<string, string>()
+  for (const c of (Array.isArray(data) ? data : [data]) as Rec[]) {
+    if (!c || typeof c !== 'object') continue
+    const id = val(c.CustomerID)
+    const name = val(c.CustomerName)
+    if (id && name) out.set(id, name)
+  }
+  return out
+}

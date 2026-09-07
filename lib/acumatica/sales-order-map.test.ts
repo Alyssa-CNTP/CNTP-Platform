@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { mapLine, rowsFromPayload } from './sales-order-map'
+import { mapLine, rowsFromPayload, customerNameMap } from './sales-order-map'
 
 /**
  * The payload mapping, on synthetic records.
@@ -30,7 +30,7 @@ const KUNITARO_26252 = {
   OrderNbr:      v('26252'),
   Status:        v('Open'),
   CustomerID:    v('KUNITARO'),
-  CustomerName:  v('Kunitaro'),
+  // No CustomerName — the live header does not have one. Resolved via the map.
   CustomerOrder: v('KTR 1020'),
   Date:          v('2026-09-02T00:00:00+02:00'),
   RequestedOn:   v('2026-09-15T00:00:00+02:00'),
@@ -47,8 +47,11 @@ const KUNITARO_26252 = {
   ],
 }
 
+/** Stands in for the separate Customer fetch the sync performs. */
+const NAMES = new Map([['KUNITARO', 'Kunitaro'], ['LUPICIA', 'Lupicia']])
+
 describe('mapLine', () => {
-  const [row] = rowsFromPayload(KUNITARO_26252)
+  const [row] = rowsFromPayload(KUNITARO_26252, NAMES)
 
   it('reads the paper job card back out of the payload', () => {
     expect(row.order_nbr).toBe('26252')          // this IS the job card number
@@ -140,7 +143,7 @@ describe('rowsFromPayload', () => {
   it('keeps a header that has no lines yet', () => {
     // The job card picker should still show the order; the line arrives on the
     // next sync rather than the order being invisible until then.
-    const rows = rowsFromPayload({ OrderNbr: v('26253'), CustomerName: v('Lupicia') })
+    const rows = rowsFromPayload({ OrderNbr: v('26253'), CustomerID: v('LUPICIA') }, NAMES)
     expect(rows).toHaveLength(1)
     expect(rows[0].inventory_id).toBeNull()
     expect(rows[0].customer_name).toBe('Lupicia')
@@ -176,5 +179,116 @@ describe('rowsFromPayload', () => {
 
   it('returns nothing for an empty payload', () => {
     expect(rowsFromPayload([])).toEqual([])
+  })
+})
+
+
+/**
+ * The REAL payload, captured from Default/24.200.001 on 2026-09-07.
+ *
+ * Trimmed to the fields the mapper reads plus the ones that caught it out. This
+ * is the fixture that matters: everything above was written from a guess at the
+ * schema, and two of those guesses were wrong.
+ */
+const LIVE_BLANKET_ORDER = {
+  OrderType:     v('BL'),
+  OrderNbr:      v('BH-BSO0000002'),
+  Status:        v('Completed'),
+  CustomerID:    v('C-KUN001'),
+  // NOTE: there is NO CustomerName on the header. That was the bug.
+  CustomerOrder: v('2025 Contract Remainder'),
+  ExternalRef:   v('2025 Contract Remainder'),
+  Date:          v('2026-01-06T00:00:00+00:00'),
+  RequestedOn:   v('2026-01-06T00:00:00+00:00'),
+  Description:   v('2025 Contract Remainder'),
+  OrderedQty:    v(4480),
+  Details: [
+    {
+      LineNbr: v(1), InventoryID: v('30FPSFC-001A-O'),
+      LineDescription: v('Organic - Super Fine Cut'),
+      OrderQty: v(480), OpenQty: v(0), Completed: v(true),
+      UOM: v('BV18KG'), WarehouseID: v('BHW'),
+      ShipOn: v('2026-01-06T00:00:00+00:00'),
+    },
+    {
+      LineNbr: v(5), InventoryID: v('30FPSFC-KUN25-C'),
+      LineDescription: v('Super Fine Cut'),
+      OrderQty: v(3000), OpenQty: v(0), Completed: v(true),
+      UOM: v('BV18KG'), WarehouseID: v('BHW'),
+      ShipOn: v('2026-01-06T00:00:00+00:00'),
+    },
+  ],
+}
+
+describe('the live payload', () => {
+  it('has NO CustomerName — the header only carries an id', () => {
+    // Pinning the absence, because the first mapper read order.CustomerName and
+    // silently produced null for every row.
+    expect('CustomerName' in LIVE_BLANKET_ORDER).toBe(false)
+  })
+
+  it('resolves the customer name from a separate Customer fetch', () => {
+    const names = customerNameMap([
+      { CustomerID: v('C-KUN001'), CustomerName: v('Kunitaro') },
+      { CustomerID: v('C-LIP001'), CustomerName: v('Lipton and Infusion') },
+    ])
+    const [row] = rowsFromPayload(LIVE_BLANKET_ORDER, names)
+    expect(row.customer_id).toBe('C-KUN001')
+    expect(row.customer_name).toBe('Kunitaro')
+  })
+
+  it('leaves the name null rather than failing when the lookup is unavailable', () => {
+    // The Customer fetch is best-effort; an order with no display name beats no
+    // order at all.
+    const [row] = rowsFromPayload(LIVE_BLANKET_ORDER)
+    expect(row.customer_name).toBeNull()
+    expect(row.customer_id).toBe('C-KUN001')
+  })
+
+  it('keeps the order type, because the number format depends on it', () => {
+    // BH-BSO0000002 is a BL (blanket). Job card 26252 is presumably an SO, so
+    // the number alone does not identify an order.
+    const [row] = rowsFromPayload(LIVE_BLANKET_ORDER)
+    expect(row.order_type).toBe('BL')
+    expect(row.order_nbr).toBe('BH-BSO0000002')
+  })
+
+  it('keeps qty in the LINE UOM and never pretends it is kilograms', () => {
+    // UOM BV18KG is an 18kg bulk vessel: 3000 is 3000 BAGS = 54 000 kg.
+    const rows = rowsFromPayload(LIVE_BLANKET_ORDER)
+    const line = rows.find(r => r.inventory_id === '30FPSFC-KUN25-C')!
+    expect(line.order_qty).toBe(3000)
+    expect(line.uom).toBe('BV18KG')
+  })
+
+  it('reads per-line completion, not the order status', () => {
+    const rows = rowsFromPayload(LIVE_BLANKET_ORDER)
+    expect(rows.every(r => r.completed)).toBe(true)
+    expect(rows.every(r => r.open_qty === 0)).toBe(true)
+  })
+
+  it('expands both lines under one order number, keeping Acumatica LineNbr', () => {
+    // LineNbr is 1 and 5 — not contiguous. Using the array index would collide
+    // them with a re-synced order whose lines were renumbered.
+    const rows = rowsFromPayload(LIVE_BLANKET_ORDER)
+    expect(rows.map(r => r.line_nbr)).toEqual([1, 5])
+  })
+
+  it('does not shift the date, even on a +00:00 payload', () => {
+    const [row] = rowsFromPayload(LIVE_BLANKET_ORDER)
+    expect(row.order_date).toBe('2026-01-06')
+    expect(row.ship_on).toBe('2026-01-06')
+  })
+})
+
+describe('customerNameMap', () => {
+  it('skips entries missing either side', () => {
+    const m = customerNameMap([
+      { CustomerID: v('A'), CustomerName: v('Alpha') },
+      { CustomerID: v('B') },
+      { CustomerName: v('Orphan') },
+      null,
+    ])
+    expect([...m.entries()]).toEqual([['A', 'Alpha']])
   })
 })
