@@ -52,7 +52,11 @@ export function ServiceCard({ s, compact = false }: { s: ServiceStatus; compact?
             {s.cfg.service_interval_days ? ` or ${Math.round(s.cfg.service_interval_days / 30)} months` : ''}
           </div>
         </div>
-        <span className={`badge ${t.badge} shrink-0 whitespace-nowrap`}>{t.label}</span>
+        {/* No due date means there is nothing to judge — a machine whose service
+            history was never captured must not read as a green OK. */}
+        <span className={`badge ${s.due ? t.badge : 'badge-gray'} shrink-0 whitespace-nowrap`}>
+          {s.due ? t.label : 'NO SERVICE DATA'}
+        </span>
       </div>
 
       <div className="grid grid-cols-3 gap-2">
