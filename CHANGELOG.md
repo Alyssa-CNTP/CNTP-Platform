@@ -2,6 +2,30 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-05 — Alyssa (Feature flags never reached the browser)
+
+**Files changed:** `lib/config/flags.ts`, `lib/config/flags-inlining.test.ts` (new)
+
+Setting `NEXT_PUBLIC_FF_PASTEURISER_LABELS=true` on staging and rebuilding changed nothing. The cause is not the label feature — it is `flags.ts` itself, and it has been wrong since the file was written.
+
+`envFlag(name)` read `process.env[name]` with a **computed key**. Next inlines `process.env.NEXT_PUBLIC_FOO` at build time by matching the *static member access* in the source; it cannot replace a dynamic lookup, because the key is only known at runtime. In the client bundle `process` is a polyfill whose `env` is literally `{}` — so every flag compiled to `{}[name]` → `undefined` → **the fallback, forever, on every environment**.
+
+Confirmed against the deployed bundle before fixing:
+
+| | In the client chunks |
+|---|---|
+| `NEXT_PUBLIC_SUPABASE_URL` (static access) | name **absent**, value `https://qjqkpockmujecjgmdple.supabase.co` inlined |
+| every `NEXT_PUBLIC_FF_*` (dynamic access) | name **present** as a string argument, value never inlined |
+| the `process` polyfill | `.env={}` |
+
+So **all six flags were dark**: `supervisorAdjustments`, `ledgerAuthoritative`, `dbSerialSections`, `pasteuriserLabels`, `acumaticaResolver`, and `changeover`. Nothing reported a problem — a flag that silently reads its fallback looks exactly like a flag that is off on purpose. Worse, server-side the old form *worked* (Node has a real `process.env`), so an API route and a client component could disagree about the same flag.
+
+Fix: the helpers now take the **value**, not the name — `envFlag(process.env.NEXT_PUBLIC_FF_X, false)` — so each call site is a static access Next can inline. Verified in a fresh build: `pasteuriserLabels:r("true",!1)`, and the flag name no longer appears in any client chunk.
+
+**Nothing else changes behaviour.** Staging has only `NEXT_PUBLIC_FF_PASTEURISER_LABELS` set and production has no `FF_` vars at all, so every other flag keeps the fallback it was already returning. Note for the changeover promotion: `NEXT_PUBLIC_FF_CHANGEOVER=false` in production's env will now actually take effect, which is what its own comment always intended.
+
+`flags-inlining.test.ts` asserts the **source**, because a unit test cannot catch this by calling `flags` — under vitest Node has a real `process.env` and the broken form passes. Same tactic as `boundary-rule.test.ts`: verified to fail on the old form (3 of 6 tests) and pass on the new one.
+
 ## 2026-09-05 — Alyssa (Pasteuriser finished-product labels: design → approve → PO → print)
 
 **Files changed:** `lib/core/labels/` (new — `types.ts`, `resolve.ts`, `compliance.ts`, `index.ts`, `labels.test.ts`), `lib/core/serials.ts`, `features/pasteuriser-labels/` (new — `marks.ts`, `render-html.ts`, `render-pplb.ts`, `seed-templates.ts`, `db.ts`, `index.ts`, `render.test.ts`, `components/LabelPreview.tsx`, `components/TemplateEditor.tsx`), `app/(app)/pasteuriser/` (new — hub, `labels/`, `labels/[id]/`, `job-cards/`, `run/`, `history/`), `app/api/pasteuriser/` (new — `_db.ts`, `labels/route.ts`, `labels/[id]/transition/route.ts`, `labels/[id]/version/route.ts`, `assignments/route.ts`, `print/route.ts`), `app/(app)/job-cards/pasteuriser/page.tsx`, `app/(app)/layout.tsx`, `components/layout/Sidebar.tsx`, `lib/auth/permissions.ts`, `lib/config/flags.ts`, `lib/config/boundary-rule.test.ts`, `lib/config/hooks-rule.test.ts`, `supabase/migrations/20260905_001_pasteuriser_label_workflow.sql` (new)
