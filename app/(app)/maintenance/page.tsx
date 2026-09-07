@@ -12,13 +12,14 @@ import { deriveMaintRole } from '@/lib/maintenance/roles'
 import MaintenanceAnalytics from '@/components/maintenance/MaintenanceDashboard'
 import { EnergyWidget } from '@/components/maintenance/EnergyWidget'
 import { TrendsPanel } from '@/components/maintenance/TrendsPanel'
+import { ServiceCard } from '@/components/maintenance/ServiceCard'
 
 export default function MaintenanceDashboard() {
   const auth = useAuth()
   // View-only concern (which alerts to surface), so the oversight profiles count.
   const seesAll = deriveMaintRole(auth).seesAll
   const { loading, error, data, derived } = useMaintenanceContext()
-  const { duty, newCards, annualRows } = derived
+  const { duty, newCards, annualRows, compressorService, generatorService } = derived
   const dueSoon = annualRows.filter(a => a.days <= 60).length
 
   const cards = [
@@ -78,6 +79,18 @@ export default function MaintenanceDashboard() {
           </Link>
         ))}
       </div>
+
+      {/* Compressor & generator service status — the date the next service is due
+          and how many hours each has run since the last one. */}
+      {(compressorService || generatorService) && (
+        <div>
+          <h2 className="text-sm font-semibold text-text mb-2">Service due</h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {compressorService && <ServiceCard s={compressorService} />}
+            {generatorService && <ServiceCard s={generatorService} />}
+          </div>
+        </div>
+      )}
 
       {/* Utility trends — water / IP / diesel / compressor run-hours */}
       <TrendsPanel />

@@ -10,28 +10,27 @@ import { useState } from 'react'
 import { useMaintenanceContext } from '@/app/(app)/maintenance/layout'
 import { Spark } from './Spark'
 import { fmtD } from '@/lib/maintenance/helpers'
+import { ServiceCard } from './ServiceCard'
 
 const LB = 'text-[10px] font-semibold text-text-muted uppercase tracking-[0.07em] mb-1 block'
 const WINDOWS: [string, number][] = [['8w', 8], ['Quarter', 13], ['6 months', 26], ['Year', 52]]
 
 export function TrendsPanel() {
   const { loading, data, derived } = useMaintenanceContext()
-  const { waterReadings, dieselReadings, eqHours } = data
-  const { waterUsage, ipUsage } = derived
+  const { waterReadings } = data
+  const { waterUsage, ipUsage, compressorService, generatorService } = derived
   const [weeks, setWeeks] = useState(26)
 
   if (loading) return null
 
   const lastDate = (arr: { reading_date: string }[]) => fmtD(arr[arr.length - 1]?.reading_date ?? null)
-  const cmp = eqHours.filter(h => h.equipment === '500L Factory Compressor' && h.hours_since_service != null).slice(-weeks)
-  const diesel = dieselReadings.slice(-weeks)
 
   return (
     <div className="card p-4">
       <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
         <div>
           <h2 className="text-sm font-semibold text-text">Utilities &amp; trends</h2>
-          <p className="text-[11px] text-text-muted">Water, paraffin, diesel &amp; compressor run-hours. Tap a point for its value. Capture readings in Scheduled → Readings.</p>
+          <p className="text-[11px] text-text-muted">Water &amp; paraffin usage, plus compressor and generator service status. Tap a point for its value. Readings captured on the weekly checklists feed straight in.</p>
         </div>
         <div className="flex items-center gap-1.5 shrink-0">
           <span className="text-[11px] text-text-muted">Window:</span>
@@ -55,14 +54,11 @@ export function TrendsPanel() {
           <div className={LB}>IP (paraffin) usage (L)</div>
           <Spark pts={ipUsage.slice(-weeks)} color="#d97706" unit="L" digits={0} />
         </div>
-        <div>
-          <div className={LB}>Generator run hours / week</div>
-          <Spark pts={diesel.map(r => r.run_hours ?? 0)} dates={diesel.map(r => r.reading_date)} color="#dc2626" unit="hrs" />
-        </div>
-        <div>
-          <div className={LB}>Compressor hours since service</div>
-          <Spark pts={cmp.map(h => h.hours_since_service!)} dates={cmp.map(h => h.reading_date)} color="#7c3aed" unit="h" digits={0} />
-        </div>
+        {/* Compressor and generator are service-status, not trends — the useful
+            question is "how many hours since the last service and when is the
+            next one due", which a sparkline never answered. */}
+        {compressorService && <div><div className={LB}>Compressor service</div><ServiceCard s={compressorService} /></div>}
+        {generatorService && <div><div className={LB}>Generator service</div><ServiceCard s={generatorService} /></div>}
       </div>
     </div>
   )
