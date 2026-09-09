@@ -179,3 +179,90 @@ export function customerOptions(
   }
   return [...seen.values()].sort((a, b) => a.localeCompare(b))
 }
+
+// ── Account ownership ────────────────────────────────────────────────────────
+//
+// `sales.customers` records who owns each account. The library groups by
+// customer already; this layer says WHOSE each group is, and floats the
+// viewer's own accounts to the top.
+//
+// It is here rather than in the page because three screens need the same
+// answer — the library, the job-card picker and the approval queue — and a rep
+// seeing a different set of "my customers" depending on which one they opened
+// is the class of drift this module exists to prevent.
+
+export interface CustomerAccount {
+  /** Canonical spelling — `sales.customers.name`, the natural key. */
+  name: string
+  /** `production.employees.id`, or null when nobody owns the account yet. */
+  salesRepEmployeeId: string | null
+  /** Display name for the rep, when it has been resolved. */
+  salesRepName?: string | null
+}
+
+export interface OwnedCustomerGroup<T extends LibraryTemplate> extends CustomerGroup<T> {
+  salesRepEmployeeId: string | null
+  salesRepName: string | null
+  /** True when this account belongs to the person looking at the screen. */
+  mine: boolean
+}
+
+/**
+ * Annotate customer groups with their sales lead, and float the viewer's own
+ * accounts to the top.
+ *
+ * Matching is on the TRIMMED, LOWERCASED name, the same key
+ * `groupLibraryByCustomer` groups on. `label_templates.customer` is free text
+ * while `sales.customers.name` is a unique canonical spelling, so an exact
+ * comparison would silently drop ownership the first time someone typed
+ * "kunitaro" — and a rep whose customer quietly stops being theirs has no way
+ * to tell that from not owning it.
+ *
+ * Order within each half is preserved, so the alphabetical ordering
+ * `groupLibraryByCustomer` established still holds inside "mine" and inside
+ * the rest. The generic group carries no owner and can never be "mine", so it
+ * stays last exactly as before.
+ *
+ * `viewerEmployeeId` of null — someone with no Staff Directory link — gets
+ * every group in its original order and nothing marked mine, rather than
+ * everything marked mine, which is the safer way for an unresolved identity to
+ * fail.
+ */
+export function withOwnership<T extends LibraryTemplate>(
+  groups: readonly CustomerGroup<T>[],
+  accounts: readonly CustomerAccount[],
+  viewerEmployeeId: string | null,
+): OwnedCustomerGroup<T>[] {
+  const byName = new Map<string, CustomerAccount>()
+  for (const a of accounts) {
+    const k = groupKey(a.name)
+    if (k) byName.set(k, a)
+  }
+
+  const annotated = groups.map(g => {
+    const account = g.customer === null ? undefined : byName.get(groupKey(g.customer)!)
+    const salesRepEmployeeId = account?.salesRepEmployeeId ?? null
+    return {
+      ...g,
+      salesRepEmployeeId,
+      salesRepName: account?.salesRepName ?? null,
+      mine: !!viewerEmployeeId && salesRepEmployeeId === viewerEmployeeId,
+    }
+  })
+
+  // Stable partition, not a sort: a comparator returning 0 for two groups on
+  // the same side is not guaranteed to keep their relative order in every
+  // engine, and the alphabetical order underneath is the point.
+  return [...annotated.filter(g => g.mine), ...annotated.filter(g => !g.mine)]
+}
+
+/**
+ * The accounts nobody owns. Shown to whoever can assign, because an unassigned
+ * customer is invisible work — no rep sees it under "my customers", so nobody
+ * is prompted to approve its labels.
+ */
+export function unassignedAccounts(accounts: readonly CustomerAccount[]): CustomerAccount[] {
+  return accounts
+    .filter(a => !a.salesRepEmployeeId)
+    .sort((a, b) => a.name.localeCompare(b.name))
+}

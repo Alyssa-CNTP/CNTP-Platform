@@ -16,6 +16,7 @@
  */
 
 import { getSupabaseClient } from '@/lib/supabase/client'
+import type { CustomerAccount } from '@/lib/core/labels/library'
 import type {
   LabelCertification,
   LabelLine,
@@ -192,6 +193,105 @@ export async function fetchKnownCustomers(): Promise<string[]> {
   if (specs.error) return []
   return ((specs.data ?? []) as { customer: string | null }[])
     .map(r => r.customer ?? '').filter(Boolean)
+}
+
+/**
+ * The customer master, with who owns each account.
+ *
+ * Separate from `fetchKnownCustomers` on purpose: that one answers "what names
+ * may a label be assigned to" and falls back to the quality module when the
+ * master is empty, because a missing master must never stop Sales designing a
+ * label. This one answers "who owns the account", which has no such fallback —
+ * qms.customer_specs holds no rep, and inventing one would be worse than
+ * showing the account as unassigned, which is what it is.
+ *
+ * Rep names come from the Staff Directory in a second query rather than a
+ * PostgREST embed: sales.customers points at production.employees across a
+ * schema boundary, and the embed needs a relationship PostgREST cannot see
+ * from the `sales` profile.
+ */
+export async function fetchCustomerAccounts(): Promise<CustomerAccount[]> {
+  const { data, error } = await getSupabaseClient()
+    .schema('sales' as never)
+    .from('customers')
+    .select('name, sales_rep_employee_id')
+    .eq('active', true)
+    .order('name')
+  if (error) throw new Error(error.message)
+
+  const rows = (data ?? []) as { name: string | null; sales_rep_employee_id: string | null }[]
+  const ids = [...new Set(rows.map(r => r.sales_rep_employee_id).filter(Boolean) as string[])]
+  const names = ids.length ? await fetchEmployeeNames(ids) : new Map<string, string>()
+
+  return rows
+    .filter(r => !!r.name)
+    .map(r => ({
+      name: r.name as string,
+      salesRepEmployeeId: r.sales_rep_employee_id,
+      salesRepName: r.sales_rep_employee_id ? names.get(r.sales_rep_employee_id) ?? null : null,
+    }))
+}
+
+/** Staff Directory display names for a set of employee ids. */
+export async function fetchEmployeeNames(ids: readonly string[]): Promise<Map<string, string>> {
+  if (!ids.length) return new Map()
+  const { data, error } = await getSupabaseClient()
+    .schema('production' as never)
+    .from('employees')
+    .select('id, name, display_name')
+    .in('id', ids as string[])
+  if (error) return new Map()
+  const out = new Map<string, string>()
+  for (const e of (data ?? []) as { id: string; name: string | null; display_name: string | null }[]) {
+    out.set(e.id, e.display_name || e.name || 'Unknown')
+  }
+  return out
+}
+
+/** Everyone who can be given an account. Active Staff Directory people only. */
+export interface AssignableRep { id: string; name: string; jobTitle: string | null }
+
+export async function fetchAssignableReps(): Promise<AssignableRep[]> {
+  const { data, error } = await getSupabaseClient()
+    .schema('production' as never)
+    .from('employees')
+    .select('id, name, display_name, job_title, active')
+    .eq('active', true)
+    .order('name')
+  if (error) throw new Error(error.message)
+  return ((data ?? []) as { id: string; name: string | null; display_name: string | null; job_title: string | null }[])
+    .map(e => ({ id: e.id, name: e.display_name || e.name || 'Unknown', jobTitle: e.job_title }))
+}
+
+/**
+ * Give an account to a rep, or take it back with `null`.
+ *
+ * A direct write rather than an API route, unlike every workflow transition in
+ * this module. Ownership is not workflow state: there is no state machine to
+ * enforce, nothing is minted, and a wrong value is corrected by setting the
+ * right one. The header comment's rule is about transitions, and this is not
+ * one.
+ *
+ * Upsert on `name`, because a label can legitimately carry a customer the
+ * master has never held — `label_templates.customer` is free text seeded from
+ * the quality module. Assigning a rep to such a customer creates the master row
+ * rather than failing, which is the only behaviour that lets the library be
+ * tidied from the screen where the gap is visible.
+ */
+export async function setCustomerSalesRep(
+  customerName: string,
+  employeeId: string | null,
+): Promise<void> {
+  const name = customerName.trim()
+  if (!name) throw new Error('A customer name is required.')
+  const { error } = await getSupabaseClient()
+    .schema('sales' as never)
+    .from('customers')
+    .upsert(
+      { name, sales_rep_employee_id: employeeId, updated_at: new Date().toISOString() },
+      { onConflict: 'name' },
+    )
+  if (error) throw new Error(error.message)
 }
 
 export async function fetchTemplate(id: string): Promise<LabelTemplateRow | null> {

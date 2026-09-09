@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import {
   groupLibraryByCustomer, pickHeadline, customerOptions,
-  GENERIC_GROUP_LABEL, type LibraryTemplate,
+  withOwnership, unassignedAccounts,
+  GENERIC_GROUP_LABEL, type LibraryTemplate, type CustomerAccount,
 } from './library'
 
 const t = (
@@ -127,5 +128,101 @@ describe('customerOptions', () => {
     expect(customerOptions(['Tanganda', 'Alveus', 'Kunitaro'])).toEqual(
       ['Alveus', 'Kunitaro', 'Tanganda'],
     )
+  })
+})
+
+// ── Account ownership ────────────────────────────────────────────────────────
+
+const ALYSSA = 'b72f70cb-a721-4652-9c63-05f6b3ac1e7e'
+const GUSTAV = '0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0'
+
+const acct = (name: string, rep: string | null, repName?: string): CustomerAccount =>
+  ({ name, salesRepEmployeeId: rep, salesRepName: repName ?? null })
+
+// Alphabetical by label, generic last — what groupLibraryByCustomer produces.
+const library = () => groupLibraryByCustomer([
+  t('EU-ORG',  2, 'approved', 'Kunitaro',            'Rooibos Super Fine Cut'),
+  t('JAS',     1, 'approved', 'Lipton and Infusion', 'Rooibos Cut'),
+  t('NOP-USA', 1, 'approved', 'Alveus',              'Rooibos Coarse'),
+  t('GEN',     1, 'draft',    null,                  'Unbranded'),
+])
+
+describe('withOwnership', () => {
+  const accounts = [
+    acct('Kunitaro', ALYSSA, 'Alyssa Krishna'),
+    acct('Alveus', GUSTAV, 'Gustav'),
+    acct('Lipton and Infusion', null),
+  ]
+
+  it('floats the viewer\u2019s own accounts to the top', () => {
+    const g = withOwnership(library(), accounts, ALYSSA)
+    expect(g[0].label).toBe('Kunitaro')
+    expect(g[0].mine).toBe(true)
+    expect(g.slice(1).every(x => !x.mine)).toBe(true)
+  })
+
+  it('keeps alphabetical order inside each half', () => {
+    // Alveus and Lipton are both not-mine; they must stay A before L.
+    const rest = withOwnership(library(), accounts, ALYSSA).filter(g => !g.mine)
+    expect(rest.map(g => g.label)).toEqual(['Alveus', 'Lipton and Infusion', GENERIC_GROUP_LABEL])
+  })
+
+  it('matches the account name case-insensitively', () => {
+    // label_templates.customer is free text; sales.customers.name is canonical.
+    // An exact comparison would silently drop ownership on "kunitaro".
+    const groups = groupLibraryByCustomer([t('EU-ORG', 1, 'approved', 'kunitaro')])
+    const [g] = withOwnership(groups, [acct('Kunitaro', ALYSSA, 'Alyssa Krishna')], ALYSSA)
+    expect(g.mine).toBe(true)
+    expect(g.salesRepName).toBe('Alyssa Krishna')
+  })
+
+  it('marks NOTHING as mine when the viewer has no employee id', () => {
+    // An unresolved Staff Directory link must fail closed, not claim everything.
+    const g = withOwnership(library(), accounts, null)
+    expect(g.some(x => x.mine)).toBe(false)
+    expect(g.map(x => x.label)).toEqual(['Alveus', 'Kunitaro', 'Lipton and Infusion', GENERIC_GROUP_LABEL])
+  })
+
+  it('reports an unowned account as unowned rather than as someone else\u2019s', () => {
+    const g = withOwnership(library(), accounts, ALYSSA).find(x => x.label === 'Lipton and Infusion')!
+    expect(g.salesRepEmployeeId).toBeNull()
+    expect(g.mine).toBe(false)
+  })
+
+  it('leaves the generic group ownerless and last, even for the assigning rep', () => {
+    const g = withOwnership(library(), accounts, ALYSSA)
+    const generic = g[g.length - 1]
+    expect(generic.label).toBe(GENERIC_GROUP_LABEL)
+    expect(generic.customer).toBeNull()
+    expect(generic.salesRepEmployeeId).toBeNull()
+    expect(generic.mine).toBe(false)
+  })
+
+  it('carries a customer with no sales.customers row at all', () => {
+    // Seeded from qms.customer_specs, so a label can name a customer the
+    // master does not hold yet. It must still render, just unowned.
+    const g = withOwnership(library(), [], ALYSSA)
+    expect(g).toHaveLength(4)
+    expect(g.every(x => x.salesRepEmployeeId === null && !x.mine)).toBe(true)
+  })
+
+  it('never loses or duplicates a group', () => {
+    const before = library()
+    const after = withOwnership(before, accounts, ALYSSA)
+    expect(after).toHaveLength(before.length)
+    expect([...after].map(g => g.label).sort()).toEqual([...before].map(g => g.label).sort())
+  })
+})
+
+describe('unassignedAccounts', () => {
+  it('lists only the accounts nobody owns, alphabetically', () => {
+    const out = unassignedAccounts([
+      acct('Tanganda', null), acct('Kunitaro', ALYSSA), acct('Edelweiss', null),
+    ])
+    expect(out.map(a => a.name)).toEqual(['Edelweiss', 'Tanganda'])
+  })
+
+  it('is empty when every account has a rep', () => {
+    expect(unassignedAccounts([acct('Kunitaro', ALYSSA)])).toEqual([])
   })
 })
