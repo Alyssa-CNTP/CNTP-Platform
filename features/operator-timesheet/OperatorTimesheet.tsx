@@ -53,6 +53,19 @@ import { primaryAreaForSection, hasAreaMapping } from './areas'
 
 // ── formatting ───────────────────────────────────────────────────────────────
 
+/**
+ * A message from a thrown value, or null when there is nothing useful to show.
+ *
+ * `catch (e)` gives `unknown`, which is correct — a throw can be anything. This
+ * narrows it once, instead of every call site writing `catch (e: any)`, which
+ * is the `as any` habit ARCHITECTURE.md §1A is about wearing a smaller costume.
+ */
+function errMessage(e: unknown): string | null {
+  if (e instanceof Error && e.message) return e.message
+  if (typeof e === 'string' && e) return e
+  return null
+}
+
 const hhmm = (iso: string | null): string => {
   if (!iso) return ''
   try { return format(parseISO(iso), 'HH:mm') } catch { return '' }
@@ -229,9 +242,9 @@ export function OperatorTimesheet({
         const firstStop = rows.filter(isLive).map(r => r.startedAt).sort()[0] ?? null
         setStartIso(sheet?.shiftStart ?? firstStop)
         setEndIso(sheet?.shiftEnd ?? null)
-      } catch (e: any) {
+      } catch (e) {
         if (!alive) return
-        setLoadError(e?.message ?? 'Could not load your timesheet.')
+        setLoadError(errMessage(e) ?? 'Could not load your timesheet.')
       } finally {
         if (alive) setLoading(false)
       }
@@ -285,8 +298,8 @@ export function OperatorTimesheet({
     try {
       await saveStoppage(s, next)
       setSaveError(null)
-    } catch (e: any) {
-      setSaveError(e?.message ?? 'Could not save that stoppage.')
+    } catch (e) {
+      setSaveError(errMessage(e) ?? 'Could not save that stoppage.')
     }
   }, [])
 
@@ -350,8 +363,8 @@ export function OperatorTimesheet({
     try {
       await voidStoppage(id, operatorName, 'Removed by the operator')
       setSaveError(null)
-    } catch (e: any) {
-      setSaveError(e?.message ?? 'Could not remove that stoppage.')
+    } catch (e) {
+      setSaveError(errMessage(e) ?? 'Could not remove that stoppage.')
     }
   }, [operatorName])
 
@@ -451,8 +464,8 @@ export function OperatorTimesheet({
       setSaveError(null)
       setDisputeFor(null)
       setDisputeNote('')
-    } catch (e: any) {
-      setSaveError(e?.message ?? 'Could not record your signature.')
+    } catch (e) {
+      setSaveError(errMessage(e) ?? 'Could not record your signature.')
     } finally {
       setSigning(null)
     }
@@ -524,10 +537,10 @@ export function OperatorTimesheet({
       setSaveError(null)
       setConfirmed(true)
       cb.current.onConfirmedChange?.(true)
-    } catch (e: any) {
+    } catch (e) {
       // NOT confirmed. The previous version set confirmed in a `finally`, so a
       // failed write still showed a green tick over data that was never saved.
-      setSaveError(e?.message ?? 'Could not confirm your timesheet. Try again.')
+      setSaveError(errMessage(e) ?? 'Could not confirm your timesheet. Try again.')
     } finally {
       setConfirming(false)
     }
@@ -802,8 +815,8 @@ export function OperatorTimesheet({
               await saveTimesheetNote(s, note)
               savedNote.current = note
               setSaveError(null)
-            } catch (e: any) {
-              setSaveError(e?.message ?? 'Could not save your note.')
+            } catch (e) {
+              setSaveError(errMessage(e) ?? 'Could not save your note.')
             }
           }}
           placeholder="e.g. Tower ran slow all morning after the belt change…"
@@ -940,12 +953,6 @@ function StoppageRow({
   const open = isOpen(s)
   const mins = stoppageMinutes(s, now)
 
-  // Local mirror so typing a note is not a round trip per keystroke; the write
-  // happens on blur. The row itself is already persisted, so a note that never
-  // reaches blur is the only thing at risk — and the row is not lost with it.
-  const [noteDraft, setNoteDraft] = useState(s.notes ?? '')
-  useEffect(() => { setNoteDraft(s.notes ?? '') }, [s.notes])
-
   const fromCard = s.jobCardId != null
 
   return (
@@ -1033,10 +1040,22 @@ function StoppageRow({
         readOnly ? (
           s.notes ? <p className="text-[12px] text-text-muted break-words">{s.notes}</p> : null
         ) : (
+          // UNCONTROLLED, deliberately. The write happens on blur so typing is
+          // not a round trip per keystroke, and the row itself is already
+          // persisted — so the only thing at risk is a note that never reaches
+          // blur, not the stoppage. Mirroring `s.notes` into state and syncing
+          // it in an effect is the "derive state from props" trap: it cascades
+          // a render on every external change. The key carries the persisted
+          // note, so a note set from elsewhere (logging from a job card) still
+          // lands, and typing cannot remount mid-word because `s.notes` does
+          // not move until blur.
           <input
-            type="text" value={noteDraft}
-            onChange={e => setNoteDraft(e.target.value)}
-            onBlur={() => { if (noteDraft !== (s.notes ?? '')) onPatch({ notes: noteDraft || null }) }}
+            key={`${s.id}:${s.notes ?? ''}`}
+            type="text" defaultValue={s.notes ?? ''}
+            onBlur={e => {
+              const v = e.target.value
+              if (v !== (s.notes ?? '')) onPatch({ notes: v || null })
+            }}
             placeholder={
               s.kind === 'breakdown' ? 'What broke, and what stopped?'
                 : s.kind === 'maintenance' ? 'What was worked on?'

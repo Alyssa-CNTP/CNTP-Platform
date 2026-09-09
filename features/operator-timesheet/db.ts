@@ -15,7 +15,55 @@ import {
   scheduledStoppages, toSnapshotBreaks, workedMinutes,
   type Stoppage, type StoppageKind, type StoppageSource, type SupervisorVerdict,
 } from '@/lib/core/timesheet/stoppages'
+import type { SupabaseClient } from '@supabase/supabase-js'
 import { areasForSection } from './areas'
+import type { Database } from '@/lib/supabase/database.types'
+
+// ── Typed edges ──────────────────────────────────────────────────────────────
+//
+// Two conversions are genuinely unavoidable here, so each happens ONCE, behind
+// a name, instead of being sprinkled through the file as `as any`:
+//
+//   * `maint()` — database.types.ts describes only the `production` schema, so
+//     a `maintenance` read has to go through an untyped client. Narrowing to
+//     the bare `SupabaseClient` says exactly that, and says it in one place.
+//
+//   * `stoppageWrite` / `timesheetWrite` — Supabase's generated Insert type
+//     demands every non-defaulted column, so a PARTIAL write (a supervisor
+//     signing, without restating the operator's times) cannot satisfy it.
+//     `Partial<Row>` is what these writes actually are.
+//
+// Neither uses `any`, which matters beyond style: the payload helpers still
+// check every column name against the real row, and they earned that
+// immediately — the first compile caught `breaks` and `derived_data` being
+// handed objects the `jsonb` columns' type does not accept.
+
+type StoppageRow    = Database['production']['Tables']['timesheet_stoppages']['Row']
+type StoppageInsert = Database['production']['Tables']['timesheet_stoppages']['Insert']
+type TimesheetRow    = Database['production']['Tables']['prod_timesheets']['Row']
+type TimesheetInsert = Database['production']['Tables']['prod_timesheets']['Insert']
+
+// Not `as any`: the input stays `Partial<Row>`, so a misspelled or non-existent
+// column is still a type error at the call site — which is the whole point, and
+// what a bare `as any` on the payload gives up.
+const stoppageWrite  = (w: Partial<StoppageRow>)  => w as unknown as StoppageInsert
+const timesheetWrite = (w: Partial<TimesheetRow>) => w as unknown as TimesheetInsert
+
+/** The `maintenance` schema, read through an untyped client — see above. */
+const maint = () => (getDb() as unknown as SupabaseClient).schema('maintenance')
+
+/**
+ * A value bound for a `jsonb` column.
+ *
+ * `Json` in database.types.ts is a recursive union, and an interface carrying
+ * OPTIONAL properties does not structurally satisfy it even when it serialises
+ * perfectly — `{ notes?: string }` is not assignable, because `undefined` is
+ * not `Json`. The conversion is real (both callers pass plain data), so it is
+ * asserted here once rather than at each column. `undefined` fields are dropped
+ * by JSON.stringify on the way out, which is the behaviour both callers want.
+ */
+type JsonValue = TimesheetRow['breaks']
+const asJson = (v: unknown): JsonValue => v as JsonValue
 
 // ── Row ⇄ Stoppage ───────────────────────────────────────────────────────────
 
@@ -24,7 +72,7 @@ const COLS =
   'supervisor_verdict,supervisor_name,supervisor_employee_id,supervisor_signed_at,' +
   'supervisor_note,notified_at'
 
-function toStoppage(r: any): Stoppage {
+function toStoppage(r: StoppageRow): Stoppage {
   return {
     id:        String(r.id),
     kind:      r.kind as StoppageKind,
@@ -95,7 +143,7 @@ export async function loadStoppages(
     .eq('operator_name', operatorName)
     .order('started_at', { ascending: true })
   if (error) throw new Error(`Could not read stoppages: ${error.message}`)
-  return ((data as any[]) ?? []).map(toStoppage)
+  return ((data as StoppageRow[] | null) ?? []).map(toStoppage)
 }
 
 // ── Write ────────────────────────────────────────────────────────────────────
@@ -109,7 +157,7 @@ export async function loadStoppages(
  * a reload or a re-render can no longer lose it.
  */
 export async function saveStoppage(scope: StoppageScope, s: Stoppage): Promise<void> {
-  const { error } = await table().upsert({
+  const { error } = await table().upsert(stoppageWrite({
     id:          s.id,
     ...scopeCols(scope),
     kind:        s.kind,
@@ -135,7 +183,7 @@ export async function saveStoppage(scope: StoppageScope, s: Stoppage): Promise<v
     supervisor_note:        s.attestation?.note ?? null,
     notified_at: s.notifiedAt,
     updated_at:  new Date().toISOString(),
-  } as any, { onConflict: 'id' })
+  }), { onConflict: 'id' })
   if (error) throw new Error(`Could not save the stoppage: ${error.message}`)
 }
 
@@ -158,14 +206,14 @@ export async function attestStoppage(args: {
   employeeId:   string | null
   note:         string | null
 }): Promise<void> {
-  const { error } = await table().update({
+  const { error } = await table().update(stoppageWrite({
     supervisor_verdict:     args.verdict,
     supervisor_name:        args.supervisorName,
     supervisor_employee_id: args.employeeId,
     supervisor_signed_at:   new Date().toISOString(),
     supervisor_note:        args.note?.trim() || null,
     updated_at:             new Date().toISOString(),
-  } as any).eq('id', args.stoppageId)
+  })).eq('id', args.stoppageId)
   if (error) throw new Error(`Could not record the signature: ${error.message}`)
 }
 
@@ -178,7 +226,7 @@ export async function attestStoppage(args: {
  */
 export async function markNotified(stoppageId: string, at: string): Promise<void> {
   const { error } = await table()
-    .update({ notified_at: at, updated_at: new Date().toISOString() } as any)
+    .update(stoppageWrite({ notified_at: at, updated_at: new Date().toISOString() }))
     .eq('id', stoppageId)
   if (error) throw new Error(`Could not record the notification: ${error.message}`)
 }
@@ -235,12 +283,12 @@ export async function voidStoppage(
   voidedBy: string,
   reason?: string,
 ): Promise<void> {
-  const { error } = await table().update({
+  const { error } = await table().update(stoppageWrite({
     voided_at:   new Date().toISOString(),
     voided_by:   voidedBy,
     void_reason: reason?.trim() || null,
     updated_at:  new Date().toISOString(),
-  } as any).eq('id', id)
+  })).eq('id', id)
   if (error) throw new Error(`Could not remove the stoppage: ${error.message}`)
 }
 
@@ -279,13 +327,13 @@ export async function seedScheduledStoppages(
   if (seeded.length === 0) return existing
 
   const { error } = await table().upsert(
-    seeded.map(s => ({
+    seeded.map(s => stoppageWrite({
       id: s.id,
       ...scopeCols(scope),
       kind: s.kind, started_at: s.startedAt, ended_at: s.endedAt,
       notes: null, machine: null, area: null, job_card_id: null,
       source: s.source, voided_at: null,
-    })) as any,
+    })),
     { onConflict: 'id' },
   )
   // A failed seed is not fatal — the operator can add the breaks by hand, and
@@ -318,7 +366,8 @@ export async function loadTimesheet(
     .eq('session_id', sessionId).eq('operator_name', operatorName).maybeSingle()
   if (error) throw new Error(`Could not read the timesheet: ${error.message}`)
   if (!data) return null
-  const r = data as any
+  const r = data as Pick<TimesheetRow,
+    'shift_start' | 'shift_end' | 'notes' | 'confirmed' | 'confirmed_at' | 'worked_minutes'>
   return {
     shiftStart: r.shift_start ?? null,
     shiftEnd:   r.shift_end ?? null,
@@ -339,11 +388,11 @@ export async function loadTimesheet(
  * cannot mark a sheet as signed off.
  */
 export async function saveTimesheetNote(scope: StoppageScope, note: string): Promise<void> {
-  const { error } = await getDb().schema('production').from('prod_timesheets').upsert({
+  const { error } = await getDb().schema('production').from('prod_timesheets').upsert(timesheetWrite({
     ...scopeCols(scope),
     notes:      note.trim() || null,
     updated_at: new Date().toISOString(),
-  } as any, { onConflict: 'session_id,operator_name' })
+  }), { onConflict: 'session_id,operator_name' })
   if (error) throw new Error(`Could not save your note: ${error.message}`)
 }
 
@@ -373,24 +422,45 @@ export async function confirmTimesheet(args: ConfirmArgs): Promise<void> {
   const breaks = toSnapshotBreaks(args.stoppages, endFallback)
   const worked = workedMinutes(args.shiftStart, args.shiftEnd, args.stoppages)
 
-  const { error } = await getDb().schema('production').from('prod_timesheets').upsert({
+  const { error } = await getDb().schema('production').from('prod_timesheets').upsert(timesheetWrite({
     ...scopeCols(args),
     shift_start:    args.shiftStart,
     shift_end:      args.shiftEnd,
-    breaks,
+    breaks:         asJson(breaks),
     notes:          args.notes?.trim() || null,
     worked_minutes: worked,
-    derived_data:   { source: 'stoppage_ledger', stoppages: args.stoppages },
+    derived_data:   asJson({ source: 'stoppage_ledger', stoppages: args.stoppages }),
     confirmed:      true,
     confirmed_by:   args.operatorName,
     confirmed_at:   new Date().toISOString(),
     updated_at:     new Date().toISOString(),
-  } as any, { onConflict: 'session_id,operator_name' })
+  }), { onConflict: 'session_id,operator_name' })
 
   if (error) throw new Error(`Could not save the timesheet: ${error.message}`)
 }
 
 // ── Maintenance job cards for this line ──────────────────────────────────────
+
+/**
+ * The job-card columns this feature reads. Declared here rather than imported
+ * from lib/maintenance/types, and narrower than that module's `JobCard` on
+ * purpose: this is the read contract of ONE query, so a column dropped from the
+ * select is a type error rather than a silent `undefined` at runtime.
+ */
+interface JobCardRow {
+  id:           number
+  card_no:      string | null
+  area:         string | null
+  machine:      string | null
+  description:  string | null
+  workflow:     string | null
+  status:       string | null
+  raised_at:    string
+  started_at:   string | null
+  completed_at: string | null
+  raised_by:    string | null
+  assigned_to:  string | null
+}
 
 export interface LineJobCard {
   id:          number
@@ -430,10 +500,11 @@ export async function loadLineMachines(sectionId: string): Promise<string[]> {
   const areas = areasForSection(sectionId)
   if (areas.length === 0) return []
   try {
-    const { data, error } = await getDb().schema('maintenance' as any).from('machines')
+    const { data, error } = await maint().from('machines')
       .select('name,area').in('area', areas).eq('active', true).order('name')
     if (error) throw new Error(error.message)
-    const names = ((data as any[]) ?? []).map(m => String(m.name)).filter(Boolean)
+    const rows = (data as { name: string | null }[] | null) ?? []
+    const names = rows.map(m => String(m.name ?? '')).filter(Boolean)
     return [...new Set(names)]
   } catch (e) {
     console.warn('[operator-timesheet] machine register unavailable:', e)
@@ -459,7 +530,7 @@ export async function loadLineJobCards(
   const areas = areasForSection(sectionId)
   if (areas.length === 0) return []
 
-  const { data, error } = await getDb().schema('maintenance' as any).from('job_cards')
+  const { data, error } = await maint().from('job_cards')
     .select('id,card_no,area,machine,description,workflow,status,raised_at,started_at,completed_at,raised_by,assigned_to')
     .in('area', areas)
     // Raised during the shift, OR raised earlier and still not closed — a
@@ -470,7 +541,7 @@ export async function loadLineJobCards(
 
   if (error) throw new Error(`Could not read maintenance job cards: ${error.message}`)
 
-  return ((data as any[]) ?? []).map(c => ({
+  return ((data as JobCardRow[] | null) ?? []).map(c => ({
     id:          Number(c.id),
     cardNo:      c.card_no ?? String(c.id),
     area:        c.area ?? '',

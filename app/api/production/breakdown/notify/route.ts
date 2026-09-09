@@ -110,8 +110,9 @@ export async function POST(req: NextRequest) {
       notified: recipients.length,
       notifiedAt: new Date().toISOString(),
     })
-  } catch (err: any) {
+  } catch (err: unknown) {
     console.error('[api/production/breakdown/notify POST]', err)
-    return NextResponse.json({ error: err?.message ?? 'Internal server error' }, { status: 500 })
+    const message = err instanceof Error ? err.message : 'Internal server error'
+    return NextResponse.json({ error: message }, { status: 500 })
   }
 }
