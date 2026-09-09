@@ -7,7 +7,7 @@ import { usePathname } from 'next/navigation'
 import { useAuth }     from '@/lib/auth/context'
 import {
   LayoutDashboard, ClipboardList, ChartNoAxesCombined, BarChart2, Home,
-  Users, Radio, Info, Tag, LogOut, Beaker, Leaf,
+  Users, Users2, Radio, Info, Tag, LogOut, Beaker, Leaf,
   TrendingUp, Globe, FlaskConical,
   Microscope, FileText, BookOpen, Layers, Settings,
   FolderKanban, GitPullRequest, Inbox, Send, Shield, MessageSquare, KanbanSquare,
@@ -108,6 +108,10 @@ export const NAV: NavItem[] = [
 
   // ── Sales ──
   { href: '/sales',                     label: 'Sales Dashboard',            icon: TrendingUp,      group: 'Sales', departments: ['Sales','Management'], permission: 'can_access_sales' },
+  // Accounts — the OPERATIONAL customer view (orders, labels, specs, who owns
+  // the account). Distinct from the Customers tab on /sales, which is the
+  // commercial one: tiers, GP% and targets against plan.
+  { href: '/sales/customers',           label: 'Accounts',                   icon: Users2,          group: 'Sales', departments: ['Sales','Management'], permission: 'can_access_sales' },
   { href: '/intelligence/expansion',    label: 'Expansion',                  icon: Globe,           group: 'Sales', departments: ['Sales','Management','Marketing'], permission: 'can_access_intelligence' as PermissionKey },
   { href: '/intelligence/global-wits',  label: 'Global Wits',                icon: FileSpreadsheet, group: 'Sales', departments: ['Sales','Management','Marketing'], permission: 'can_access_intelligence' as PermissionKey },
   { href: '/intelligence/leads',        label: 'Lead Pipeline',              icon: KanbanSquare,    group: 'Sales', departments: ['Sales','Management','Marketing'], permission: 'can_access_intelligence' as PermissionKey },

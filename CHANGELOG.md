@@ -2,6 +2,49 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-09 — Alyssa (Sales: the customer account dashboard)
+
+**Files changed:** `lib/core/sales/accounts.ts` (new), `lib/core/sales/accounts.test.ts` (new), `lib/sales/customer-accounts.ts` (new), `app/(app)/sales/customers/page.tsx` (new), `app/(app)/sales/customers/[name]/page.tsx` (new), `components/layout/Sidebar.tsx`, `supabase/migrations/20260909_001_customers_acumatica_link.sql` (new)
+
+`/sales/customers` was already in `ROUTE_GUARDS` and the page-title map as **Accounts** — anticipated and never built. It exists now: every customer, who owns the account, and what is open against them in Acumatica. **Read-only against the ERP; nothing is ever pushed back.**
+
+Distinct from the Customers tab on `/sales`, which is the commercial view — tiers, GP%, targets against plan. This is the operational one, and it is what the pasteuriser workflow reads a customer from.
+
+### The names cannot be matched, so they are not
+
+Measured against the 149 synced order lines:
+
+| sales.customers.name | acumatica.sales_orders.customer_name |
+|---|---|
+| Kunitaro | Kunitaro Co.  Ltd |
+| Lipton and Infusion | Lipton Teas and Infusions Manufacturing SA |
+| Afri Tea and Coffee's | Afri Tea and Coffee Blenders (1963) Ltd |
+| **OTG** | **Ostfriesische Tee Gesellschaft GmbH & Co KG** |
+
+The first three could be coaxed into matching with enough normalisation. **OTG cannot** — it is an initialism sharing no token with its Acumatica name. Neither can Entyce, which trades as National Brands Limited. Any matcher loose enough for those two produces a wrong match somewhere else, and a wrong match here puts one customer's orders on another customer's page.
+
+So `20260909_001` adds `sales.customers.acumatica_customer_id` — the ERP's own key, stable across a rename, already on every order row. Seven links are seeded from the data; **Entyce is deliberately not**, because "National Brands is probably Entyce" is not a basis for attributing 16 orders. Alveus and Lupicia have no synced orders to link to. All three are linked in the app, on the page where the gap is visible.
+
+### A blanket order is never production
+
+`JOB_CARD_ORDER_TYPE = 'SO'` lives in core with the reasoning attached. Blanket orders are shown, on their own panel, so a rep can see what an SO was released against — and never counted. Kunitaro's `BH-BSO0000014` is 30 000 units, 540 tonnes, against a paper job card of 18 000 kg; counting it as work to do would put that figure on a dashboard.
+
+`summariseOrders()` also keeps **On Hold** separate from Open (87 of the 149 lines are on hold — real demand, not releasable), and buckets the order types it was not written for (RM, TR) rather than dropping them, so the summary cannot read as complete while under-reporting the book. **20 tests.**
+
+### The sales lead picker, corrected
+
+The picker now lists the **Sales department**, as asked — but from `shared.app_roles`, not `production.employees`. The latter holds *factory* departments (production, qc, store, cleaning, admin, hs, maintenance) and has no sales value at all; filtering on it would have produced a silently empty picker.
+
+A Sales person with no `employee_id` is **shown and disabled with the reason**, not omitted — `sales.customers.sales_rep_employee_id` points at `production.employees`, so they genuinely cannot hold an account until someone links their login to a Staff Directory person. Omitting them makes a fixable situation invisible. The current holder always stays in the list, so an assignment never becomes uneditable because someone moved department.
+
+### Degrades before the migration
+
+`acumatica_customer_id` is selected separately and best-effort: PostgREST 400s an entire query for one unknown column, so selecting it inline would blank this page on any database `20260909_001` has not reached — including production before promotion. Unlinked reads as **"Not linked"**, which the page states explicitly, because "no Acumatica link" and "no open orders" look identical otherwise.
+
+Typecheck **29**, identical to baseline. Boundary lint clean, hooks gate clean, **384 core tests**, build clean.
+
+---
+
 ## 2026-09-09 — Alyssa (Labels: who owns each customer account)
 
 **Files changed:** `lib/core/labels/library.ts`, `lib/core/labels/library.test.ts`, `features/pasteuriser-labels/db.ts`, `features/pasteuriser-labels/index.ts`, `app/(app)/pasteuriser/labels/page.tsx`
