@@ -2,6 +2,38 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-09 — Alyssa (A stoppage that notified nobody said it had notified maintenance)
+
+**Files changed:** `features/operator-timesheet/db.ts`, `features/operator-timesheet/OperatorTimesheet.tsx`, `features/operator-timesheet/StoppageQuickLog.tsx`, `app/api/production/stoppage/notify/route.ts`
+
+Found while checking what the notification path depends on, after the timesheet
+migrations went in.
+
+`reportStoppage()` returned a **boolean**, and the notify route answers `ok`
+even when it finds nobody to tell — deliberately, so the row gets stamped and
+the app stops retrying a send that can never succeed. The caller read `ok` as
+success and showed the operator **"Maintenance knows"** when nobody had been
+told.
+
+That is the silent no-op class this codebase keeps re-inventing, landed on the
+one screen where the consequence is a stopped machine nobody comes to.
+
+**Zero is a real answer and now travels.** The route returns the recipient count
+and a `reason`; `reportStoppage()` returns `number | null` (null = the call
+failed, still retried); and both screens say plainly that nobody was reached and
+that the operator should go and tell someone in person.
+
+The stamp behaviour is unchanged and still right — there is nobody to retry TO,
+and a line that is down does not need a render loop hammering an empty recipient
+list. What changed is only whether the operator is told the truth about it.
+
+**Worth checking regardless of this fix:** the recipients come from
+`shared.app_roles`, and if no active user holds `maintenance_manager` /
+`production_supervisor` / IT, every breakdown notification reaches nobody. That
+is a data question, not a code one.
+
+---
+
 ## 2026-09-09 — Alyssa (Timesheet: back on Sign-off, every stoppage covered, and a way to actually call a supervisor)
 
 **Files changed:** `lib/core/timesheet/stoppages.ts`, `lib/core/timesheet/stoppages.test.ts`, `features/operator-timesheet/` (`OperatorTimesheet.tsx`, `StoppageQuickLog.tsx` (new), `prompts.ts`, `prompts.test.ts`, `areas.ts`, `areas.test.ts`, `db.ts`, `index.ts`), `app/api/production/stoppage/notify/route.ts` (renamed from `breakdown/`), `app/api/production/stoppage/call-supervisor/route.ts` (new), `supabase/migrations/20260909_004_stoppage_coverage_and_supervisor_call.sql` (new), `app/(app)/production/capture/[section]/page.tsx`, `lib/production/shift-report.ts`, `lib/production/shift-report-builder.ts`, `app/(app)/supervisor/report/page.tsx`, `lib/supabase/database.types.ts`, `docs/capture-phases.md`

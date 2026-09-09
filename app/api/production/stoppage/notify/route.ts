@@ -103,11 +103,20 @@ export async function POST(req: NextRequest) {
     const recipients = await resolveRecipients([...new Set([...owner, ...supervisors])])
 
     if (recipients.length === 0) {
-      // Nobody to tell is not something the operator can act on, but it IS
-      // worth finding in the logs when a manager says they were never informed.
-      console.warn(`[api/production/stoppage/notify] no recipients configured for team "${team}"`)
+      // `ok: true` with `notified: 0`, on purpose. The caller stamps
+      // `notified_at` from this and stops asking — there is nobody to retry TO,
+      // and a line that is down does not need a render loop hammering an empty
+      // recipient list.
+      //
+      // But the COUNT is what the operator is shown, so it has to be honest.
+      // Answering `ok` alone is how the screen came to say "maintenance knows"
+      // when nobody had been told — on the one screen where the consequence is
+      // a stopped machine nobody comes to.
+      console.warn(`[api/production/stoppage/notify] no recipients for team "${team}" — NOBODY was told`)
       return NextResponse.json({
-        ok: true, notified: 0, team, notifiedAt: new Date().toISOString(),
+        ok: true, notified: 0, team,
+        reason: 'no_recipients_configured',
+        notifiedAt: new Date().toISOString(),
       })
     }
 
