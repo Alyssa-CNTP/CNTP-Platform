@@ -2,6 +2,140 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-09 — Alyssa (Operator timesheet: stoppages become a ledger)
+
+**Files changed:** `lib/core/timesheet/stoppages.ts` (new), `lib/core/timesheet/stoppages.test.ts` (new), `features/operator-timesheet/` (new — `OperatorTimesheet.tsx`, `db.ts`, `prompts.ts`, `areas.ts`, `index.ts`, `prompts.test.ts`, `areas.test.ts`), `app/api/production/breakdown/notify/route.ts` (new), `supabase/migrations/20260909_002_timesheet_stoppages.sql` (new), `app/(app)/production/capture/[section]/page.tsx`, `components/production/capture/TimesheetConfirm.tsx`, `lib/production/shift-report.ts`, `lib/production/shift-report-builder.ts`, `app/(app)/supervisor/report/page.tsx`, `lib/config/flags.ts`, `lib/supabase/database.types.ts`, `docs/capture-phases.md`, `components/production/TimesheetTab.tsx` (deleted)
+
+The floor's report was "operators' start and end times are fine, but the other stoppages
+don't save." That is exactly what was happening, and the reason nobody could find it is
+that the sheet never looked broken.
+
+### The bug
+
+`TimesheetConfirm`'s load effect depended on `operatorName` — and the capture page passes
+it the **sign-off name input**. So every keystroke in that field re-ran the loader, which
+called `setBreaks(d.breaks)` and reset the list to the standard tea/lunch schedule. Start
+and end re-derived to the same values, so they came back looking correct while every
+breakdown, changeover and "other" stoppage the operator had logged was silently gone.
+
+Three more defects in the same 320 lines:
+
+- `confirm()` set `confirmed: true` in a **`finally`**, so a failed write still showed a
+  green "Confirmed" tick over data that never reached the database.
+- `if (!sessionId) return` with the Confirm button enabled — tapping it did nothing and
+  said nothing.
+- Overlapping breaks each subtracted from worked-time **independently**. A breakdown
+  running 12:30–14:00 through a 13:00–13:30 lunch subtracted the lunch twice. That was
+  shorting operators' hours, not just a display error.
+
+All four are fixed in the old component too, because it is now the rollback path behind
+`flags.operatorTimesheet` and **a rollback must not be a rollback to data loss**.
+
+### Stoppages are now an append-only ledger
+
+`production.timesheet_stoppages`, written as things happen: per-row upsert on a stable
+client-minted uuid, and removal is a **void, never a delete** (ARCHITECTURE.md §4/§6).
+A stoppage exists in the database from the moment it is logged, so a reload mid-shift
+shows the same sheet — and that is what makes everything below possible. It was impossible
+before for one reason: data that only exists at sign-off cannot prompt anyone, cannot be
+matched to something happening now, and cannot become a KPI.
+
+`prod_timesheets.breaks` is still written at confirm as a **derived snapshot**, because the
+shift report, the production order detail and supervisor analytics all read it. The ledger
+is authoritative; nothing should query the snapshot for a machine or a job card.
+
+### Deep clean and breakdown are first-class kinds
+
+They were not in the old `BreakType` union at all — an operator had to file both as
+`other` with a free-text note, which is why neither could ever reach a KPI. Seven kinds
+now, with metadata deciding which need a description, which need a machine, and which
+count as downtime. **A Tuesday deep clean is not downtime**; folding planned cleaning in
+would make every Tuesday morning read as a breakdown.
+
+The deep-clean prompt appears on Tuesday mornings only and is an **offer, never a
+requirement** — a week where the clean happened on Wednesday must not leave operators
+unable to submit. That is the hidden-field validation trap from PRs #722/#752/#756.
+
+### The tracker is smart both ways
+
+`features/operator-timesheet/areas.ts` is the join nothing had before: capture's
+`section_id` to maintenance's `area`. The two vocabularies genuinely disagree — capture
+says "Granule Line", maintenance says "Granules - RB"; `smallblender` is "Unit 3 Blender";
+maintenance spells the Pasteuriser with a z. A drift-guard test asserts every mapped name
+exists in `AREAS`, because a near-miss returns nothing at all, silently.
+
+With that, cards on the line are polled every 45s and:
+
+- a live breakdown card nobody has logged **offers to log the stoppage**, starting from
+  when maintenance says the machine stopped, not from when the operator saw the prompt;
+- a linked card maintenance has **completed** offers to close the operator's stoppage at
+  that time;
+- anything still running is flagged at sign-off.
+
+Declining sticks for the shift. An area can hold machines that were not stopping this
+line, so re-asking every poll is how a prompt becomes something operators tap through
+blind.
+
+### A breakdown is signed, and maintenance is told
+
+Requested mid-build, and it changes what a breakdown is: the one stoppage kind that moves
+a number somebody is measured on, so the one kind that is not self-certifying.
+
+- **The supervisor signs it.** "Verify & Sign" against their Staff Directory signature,
+  the same identity job cards use. `disputed` is a stored verdict, not the absence of one
+  — otherwise an unsigned breakdown is ambiguous between "disputed" and "nobody has
+  looked", and the KPI cannot tell either. A disputed breakdown is excluded from downtime;
+  an **unsigned one still counts**, because downtime is real until someone says otherwise
+  and suppressing it would let a KPI be improved by nobody doing the paperwork.
+- Editing an attested breakdown's window **clears the signature**. A signature standing
+  over times the supervisor never saw is worse than none, because the KPI treats it as
+  verified.
+- **The maintenance manager is notified**, urgent, via `notify()` — in-app, email and
+  WhatsApp. De-duplicated on a `notified_at` stamp written only *after* the send is
+  accepted: stamping first would suppress the retry when it actually failed, and a manager
+  who gets the same breakdown six times stops reading them. The route is
+  notification-only and never writes a job card — that lifecycle belongs to maintenance.
+
+Only supervisors/IT/admin can sign. Operators see the pending panel and a "waiting for a
+supervisor" line, and **it never blocks their submission** — an operator at 01h00 with no
+supervisor on the floor must still be able to sign off.
+
+### Its own tab, and it reaches the production record
+
+The timesheet moved out of Sign-off into **its own step**, between Cleaning and Overview,
+because it is used *throughout* the shift. Living inside Sign-off is the structural reason
+stoppages were only ever recorded once the shift was already over. The tab carries a dot
+when a breakdown is waiting on a signature, and Sign-off now reports the timesheet's state
+rather than mounting the widget — which is what removed the name-input dependency at the
+root.
+
+The shift report gains **Operator stoppages** (with the operator's note, the machine, the
+linked card and who signed) and **Downtime by machine** — the per-machine figure the
+request asked for, independent of line or operator, with unsigned minutes shown separately
+so a total is never quietly presented as verified. The operator's shift note now saves on
+blur and appears in the report's notes; before, it lived in React state until sign-off and
+reached no report at all.
+
+`production.v_machine_downtime` is the same aggregate in SQL for live dashboards. It
+measures an open stoppage to `now()`; the shift report measures to the end of the shift
+window, which is why the report aggregates rather than reading the view.
+
+### Housekeeping
+
+`components/production/TimesheetTab.tsx` deleted — a second, unreferenced timesheet UI
+writing to `public.timesheet_events`, a table with no migration in this repo. Two timesheet
+implementations is exactly the confusion ARCHITECTURE.md §1A is about.
+
+**74 new tests** (54 core + 20 feature), 852 passing overall. `lint:boundaries` green,
+type-clean, production build clean.
+
+### Migration pending
+
+`20260909_002_timesheet_stoppages.sql` has **not been run** on staging or production. Until
+it is, the Timesheet tab shows a visible read error and capture carries on — the failure is
+contained, not silent. The optional backfill in the migration is commented and cannot
+attribute historic rows to a machine; they never carried one.
+
 ## 2026-09-09 — Alyssa (Sales: the customer account dashboard)
 
 **Files changed:** `lib/core/sales/accounts.ts` (new), `lib/core/sales/accounts.test.ts` (new), `lib/sales/customer-accounts.ts` (new), `app/(app)/sales/customers/page.tsx` (new), `app/(app)/sales/customers/[name]/page.tsx` (new), `components/layout/Sidebar.tsx`, `supabase/migrations/20260909_001_customers_acumatica_link.sql` (new)

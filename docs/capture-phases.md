@@ -6,7 +6,7 @@ status table in the same commit as the work.
 
 ---
 
-## Status — 2026-09-04
+## Status — 2026-09-09
 
 | Phase | State | Outstanding |
 |---|---|---|
@@ -14,7 +14,8 @@ status table in the same commit as the work.
 | **1** Populate core | **Done** | `n()`, `metrics`, `serials`, mass-balance, variant identity, `lookupSerial` all extracted — see the `n()` note below |
 | **1B** Serialization | **Built and provisioned; one env var from live** | Code wired in all four output sections (Sieving, Refining, Granule, Blender — Pasteuriser is out of the scheme by design, §5). **The migration IS applied on staging** — verified read-only 2026-09-04: `production.bag_serial_counters` returns `42501 permission denied`, which only an EXISTING table raises; a missing one gives `42P01`. So the only thing left is `NEXT_PUBLIC_FF_DB_SERIAL_ALLOCATION=sieving` in staging's env. Until then the race is still live. |
 | **2** Typed contracts | **Done, still regressing** | Duck-typing gone, `assertNever` in place. But `as any` in `[section]/page.tsx` is **62** as of 2026-09-04, measured — the "61" written here on 09-02 was already wrong. Trend: 58 on 08-25, 59 on 08-26, 62 now. It has gone **up** through the whole clean-up. The five section data types still live in component files — deliberately, now: core declares the shapes it reads instead (see the boundary note below), so this is no longer blocking anything. |
-| **3** Feature boundary | **Done** | Guardrails in place, proven by tests, mounted, **and the first capture feature actually moved** — `features/changeover/` (2026-09-04). `features/acumatica-items` was built out of sequence; the changeover is the first one done to the plan. |
+| **3** Feature boundary | **Done** | Guardrails in place, proven by tests, mounted, and two capture features moved to the plan — `features/changeover/` (2026-09-04) and `features/operator-timesheet/` (2026-09-09). `features/acumatica-items` was built out of sequence. |
+| **4a** Stoppage ledger | **Built, migration pending** | Done ahead of Phase 4 proper because it was a live data-loss bug, not a refactor — see below. `production.timesheet_stoppages` is append-only with per-row upsert and void-not-delete, i.e. the Phase 4 pattern, applied to timesheets rather than to bags. Migration `20260909_002_timesheet_stoppages.sql` **not yet run on staging or production**. |
 | **4** Ledger foundation | Not started | `lib/core/ledger/` absent; `scan_events` unextended; `live/capture/page.tsx` still bulk-deletes the ledger |
 | **5** Reconciliation | Not started | |
 | **6** Adjustment page | Not started | flag `supervisorAdjustments` exists, page does not |
@@ -43,6 +44,39 @@ event handlers, the scanner and anything browser-only are untested. This is a cr
 detector for the render pass, not an integration test, and it does not replace the
 Playwright suite — which still cannot run in CI, because the app signs in through
 Microsoft SSO and that must not be scripted with stored credentials.
+
+### The operator timesheet — 2026-09-09
+
+Taken out of phase order deliberately. This was not an extraction; it was a live bug
+losing data on the floor every shift, and the fix needed the ledger shape anyway.
+
+**What was wrong.** `TimesheetConfirm`'s load effect depended on `operatorName`, and the
+capture page passes it the sign-off name **input**. So every keystroke in that field
+re-ran the loader, which reset the stoppage list to the standard tea/lunch schedule.
+Start and end re-derived to the same values, so the sheet looked correct while every
+stoppage the operator had logged was gone. The floor reported it as "start and end are
+fine, the other stoppages don't save" — which is exactly what was happening, and the
+reason it read as a mystery is that the sheet never looked broken.
+
+Three more in the same file, all fixed:
+
+* `confirm()` set `confirmed: true` in a `finally`, so a failed write still showed a
+  green tick over data that never reached the database.
+* `if (!sessionId) return` with the button enabled — tapping did nothing and said nothing.
+* Overlapping breaks each subtracted from worked-time independently, so a breakdown
+  running through lunch subtracted the lunch twice. `mergeIntervals()` in core fixes it,
+  and that one was shorting operators' hours, not just a display bug.
+
+**What replaced it.** Stoppages are now an append-only ledger written as they happen, so
+a stoppage exists in the database from the moment it is logged — which is also what makes
+the rest possible: `deep_clean` and `breakdown` as first-class kinds, the maintenance
+job-card link and prompts, the supervisor attestation, per-machine downtime, and the
+operator's note reaching the shift report.
+
+**Still to do:** run the migration on staging, then production. The KPI view
+`production.v_machine_downtime` and the shift report's "Downtime by machine" section only
+know about stoppages logged after that. The commented backfill in the migration is
+optional and cannot attribute historic rows to a machine — they never carried one.
 
 ### The changeover — decided 2026-09-04
 

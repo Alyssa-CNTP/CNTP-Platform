@@ -181,6 +181,8 @@ function ShiftReportInner() {
           <Throughput report={report} />
           <MachineConfig report={report} />
           <Changeovers report={report} />
+          <Stoppages report={report} />
+          <MachineDowntime report={report} />
           <Breakdowns report={report} />
           <Checks report={report} />
           <Waste report={report} />
@@ -578,6 +580,100 @@ function Changeovers({ report }: { report: ShiftReport }) {
   )
 }
 
+/**
+ * Every stoppage the operators logged — the production-side record of what the
+ * lines were not producing during, and the operator's own explanation.
+ *
+ * Separate from "Maintenance & downtime" below, which lists maintenance JOB
+ * CARDS. The two are different records and sometimes of the same event: a card
+ * exists whether or not an operator noticed, a stoppage exists whether or not a
+ * card was raised, and `Card` links them where both do.
+ *
+ * `report.stoppages` is optional — a report frozen before the stoppage ledger
+ * shipped has none, and must still render.
+ */
+function Stoppages({ report }: { report: ShiftReport }) {
+  const rows = report.stoppages ?? []
+  if (rows.length === 0) return null
+  const downtime = rows.filter(s => s.downtime)
+  const unsigned = rows.filter(s => s.kind === 'breakdown' && !s.verdict).length
+  return (
+    <Section title="Operator stoppages" icon={Clock} count={rows.length}
+      hint={downtime.length
+        ? `${hoursLabel(downtime.reduce((t, s) => t + s.minutes, 0))} of it machine downtime${unsigned ? ` · ${unsigned} unsigned` : ''}`
+        : undefined}>
+      <Table head={['Time', 'Line', 'Who', 'Reason', 'Machine', 'For', 'Note', 'Signed']}>
+        {rows.map(s => (
+          <tr key={s.id}>
+            <Td mono>
+              {sastTime(s.startedAt)}
+              {s.endedAt ? `–${sastTime(s.endedAt)}` : <span className="text-warn"> →</span>}
+            </Td>
+            <Td>{s.sectionName}</Td>
+            <Td>{s.operatorName}</Td>
+            <Td className={s.downtime ? 'text-err font-semibold' : undefined}>
+              {s.kindLabel}
+              {s.jobCardId != null && (
+                <span className="block text-[9px] font-normal text-text-muted">card #{s.jobCardId}</span>
+              )}
+            </Td>
+            <Td>{s.machine ?? '—'}</Td>
+            <Td mono right className="font-semibold">
+              {hoursLabel(s.minutes)}
+              {!s.endedAt && <span className="block text-[9px] font-normal text-text-muted">to shift end</span>}
+            </Td>
+            <Td>{s.notes ?? '—'}</Td>
+            <Td>
+              {s.kind !== 'breakdown' ? <span className="text-text-muted">n/a</span>
+                : s.verdict === 'confirmed' ? <span className="text-ok">{s.attestedBy}</span>
+                : s.verdict === 'disputed' ? <span className="text-err">disputed · {s.attestedBy}</span>
+                : <span className="text-warn">awaiting supervisor</span>}
+            </Td>
+          </tr>
+        ))}
+      </Table>
+    </Section>
+  )
+}
+
+/**
+ * Downtime per machine — the machine's own record, not its line's.
+ *
+ * This is the figure for judging one machine over time: how often it stopped
+ * and for how long, independent of which line it sits on or who was running it.
+ * Disputed breakdowns are already excluded upstream; `unsigned` says how much
+ * of the total nobody has confirmed yet, so the number is never quietly
+ * presented as verified when it is not.
+ */
+function MachineDowntime({ report }: { report: ShiftReport }) {
+  const rows = report.machineDowntime ?? []
+  if (rows.length === 0) return null
+  return (
+    <Section title="Downtime by machine" icon={Wrench} count={rows.length}
+      hint="Breakdown and maintenance stoppages only — planned cleaning is not downtime">
+      <Table head={['Machine', 'Line', 'Stoppages', 'Downtime', 'Unsigned', 'Job cards']}>
+        {rows.map(m => (
+          <tr key={`${m.sectionId}-${m.machine}`}>
+            <Td className="font-semibold">{m.machine}</Td>
+            <Td>{m.sectionName}</Td>
+            <Td mono right>
+              {m.events}
+              {m.stillOpen > 0 && <span className="block text-[9px] font-normal text-warn">{m.stillOpen} still open</span>}
+            </Td>
+            <Td mono right className="font-semibold text-err">{hoursLabel(m.minutes)}</Td>
+            <Td mono right className={m.unattestedMinutes > 0 ? 'text-warn' : 'text-text-muted'}>
+              {m.unattestedMinutes > 0 ? hoursLabel(m.unattestedMinutes) : '—'}
+            </Td>
+            <Td mono className="text-text-muted">
+              {m.jobCardIds.length ? m.jobCardIds.join(', ') : '—'}
+            </Td>
+          </tr>
+        ))}
+      </Table>
+    </Section>
+  )
+}
+
 function Breakdowns({ report }: { report: ShiftReport }) {
   const bd = report.breakdowns.filter(b => b.workflow === 'breakdown')
   const planned = report.breakdowns.filter(b => b.workflow === 'planned')
@@ -705,13 +801,19 @@ function Waste({ report }: { report: ShiftReport }) {
 
 function Notes({ report }: { report: ShiftReport }) {
   return (
-    <Section title="Handover notes & line messages" icon={MessageSquare} count={report.notes.length}>
+    <Section title="Operator notes, handovers & line messages" icon={MessageSquare} count={report.notes.length}>
       {report.notes.length === 0 ? <Empty>Nothing was written on the lines this shift.</Empty> : (
         <div className="space-y-2">
           {report.notes.map((n, i) => (
             <div key={i} className="flex items-start gap-2.5 px-3 py-2 rounded-xl border border-surface-rule bg-surface">
-              <span className={`font-mono text-[9px] font-semibold uppercase px-1.5 py-0.5 rounded shrink-0 mt-0.5 ${n.kind === 'handover' ? 'bg-info/10 text-info' : 'bg-stone-100 text-stone-500'}`}>
-                {n.kind === 'handover' ? 'Handover' : 'Message'}
+              {/* `timesheet` is the operator's own note about the shift, saved
+                  with their timesheet. It used to live in React state until
+                  sign-off and reached no report at all. */}
+              <span className={`font-mono text-[9px] font-semibold uppercase px-1.5 py-0.5 rounded shrink-0 mt-0.5 ${
+                n.kind === 'handover' ? 'bg-info/10 text-info'
+                  : n.kind === 'timesheet' ? 'bg-brand/10 text-brand'
+                  : 'bg-stone-100 text-stone-500'}`}>
+                {n.kind === 'handover' ? 'Handover' : n.kind === 'timesheet' ? 'Operator' : 'Message'}
               </span>
               <div className="min-w-0">
                 <p className="text-[12px] text-text whitespace-pre-wrap">{n.body}</p>

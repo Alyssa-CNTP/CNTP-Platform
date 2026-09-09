@@ -149,6 +149,29 @@ export const flags = {
    * docs/capture-phases.md, promotion order step 4.
    */
   changeover: envFlag(process.env.NEXT_PUBLIC_FF_CHANGEOVER, true),
+
+  /**
+   * The live operator timesheet (features/operator-timesheet) — a stoppage
+   * ledger written as things happen, replacing the sign-off-time form in
+   * `TimesheetConfirm`.
+   *
+   * DEFAULTS TO TRUE, for the same reason `changeover` does and one more.
+   *
+   * The old component is not merely older, it is LOSING DATA: its load effect
+   * keys on the operator-name input, so typing a name resets the sheet to the
+   * standard tea/lunch schedule and discards every stoppage the operator
+   * logged. Defaulting this off would leave the floor on the broken path and
+   * make fixing it an environment change somebody has to remember — which is
+   * how the flag-inlining bug above stayed invisible for a whole release.
+   *
+   * Turning it OFF is still a one-line rollback to the old component, which is
+   * what a flag is for. What it must not be is the default.
+   *
+   * REQUIRES migration 20260909_002_timesheet_stoppages.sql. With the flag on
+   * and the migration unapplied the timesheet shows a read error and capture
+   * carries on — the failure is visible and contained, not silent.
+   */
+  operatorTimesheet: envFlag(process.env.NEXT_PUBLIC_FF_OPERATOR_TIMESHEET, true),
 } as const
 
 export type FeatureFlag = keyof typeof flags
