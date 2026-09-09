@@ -138,6 +138,9 @@ export function StoppageQuickLog({
       // operator on it would leave them at a stopped machine watching a
       // spinner.
       if (meta.notify) {
+        // Fire and forget for the SAVE — but not for the truth. If the route
+        // reaches nobody, the operator is told so, because the only thing that
+        // will get the line looked at then is them going and saying it.
         void reportStoppage({
           stoppageId:   stoppage.id,
           sectionId,
@@ -146,6 +149,10 @@ export function StoppageQuickLog({
           description:  stoppage.notes ?? '',
           operatorName,
           startedAt:    stoppage.startedAt,
+        }).then(notified => {
+          if (notified === 0) {
+            setDone('Logged — but NOBODY was notified. Go and tell maintenance or your supervisor in person.')
+          }
         })
       }
       setDone(

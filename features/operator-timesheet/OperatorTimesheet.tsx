@@ -206,6 +206,16 @@ export function OperatorTimesheet({
   const [signing, setSigning]     = useState<string | null>(null)
   const [disputeFor, setDisputeFor] = useState<string | null>(null)
   const [calling, setCalling]     = useState<string | null>(null)
+  /**
+   * Stoppages whose notification reached NOBODY — no maintenance manager, no IT
+   * user, nobody holding the role for that team.
+   *
+   * Session-scoped rather than a column, deliberately: the operator is standing
+   * at the machine when it happens and the action needed is immediate (go and
+   * tell someone). The stoppage itself is on the record either way, and the
+   * shift report still shows it.
+   */
+  const [reachedNobody, setReachedNobody] = useState<ReadonlySet<string>>(new Set())
   const [disputeNote, setDisputeNote] = useState('')
 
   // A ticking clock so an OPEN stoppage's minutes climb on screen instead of
@@ -415,13 +425,21 @@ export function OperatorTimesheet({
         description:  s.notes ?? '',
         operatorName,
         startedAt:    s.startedAt,
-      }).then(ok => {
-        if (ok) {
-          setStoppages(prev => prev.map(x =>
-            x.id === s.id ? { ...x, notifiedAt: new Date().toISOString() } : x))
+      }).then(notified => {
+        // null = the call failed. Leave `notifiedAt` unset so the next render
+        // retries, which is what we want when the service is briefly down.
+        if (notified === null) { notifying.current.delete(s.id); return }
+
+        setStoppages(prev => prev.map(x =>
+          x.id === s.id ? { ...x, notifiedAt: new Date().toISOString() } : x))
+
+        // Reached NOBODY. The row is stamped so we stop retrying — there is no
+        // one to retry to — but the operator must not be told "maintenance
+        // knows". Nobody is configured for that team, so the only thing that
+        // will get the line looked at is them going and saying so.
+        if (notified === 0) {
+          setReachedNobody(prev => new Set([...prev, s.id]))
         }
-        // Released either way: on failure the next render retries, which is the
-        // behaviour we want when the notification service is briefly down.
         notifying.current.delete(s.id)
       })
     }
@@ -653,6 +671,16 @@ export function OperatorTimesheet({
       {saveError && (
         <Banner tone="err" icon={AlertTriangle}>
           {saveError} Your entries are still on this screen — tell your supervisor before you leave.
+        </Banner>
+      )}
+      {/* Nobody was reached. Not an error — the stoppage saved — but the thing
+          the operator most needs to know, because the line stays down until
+          somebody hears about it and the app has just failed to be that. */}
+      {reachedNobody.size > 0 && (
+        <Banner tone="err" icon={AlertTriangle}>
+          <strong>Nobody was notified.</strong> The stoppage is saved, but no one is set up
+          to receive it — go and tell maintenance or your supervisor in person, and let IT
+          know the notification list is empty.
         </Banner>
       )}
       {!sessionId && (

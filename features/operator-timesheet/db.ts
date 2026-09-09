@@ -293,10 +293,20 @@ export async function markNotified(stoppageId: string, at: string): Promise<void
  * users' notification rows with the service-role client, which a browser
  * session cannot and must not be able to do.
  *
- * Returns true when the row was stamped. A failure is deliberately quiet at the
- * call site: the stoppage is already saved, and an operator mid-shift cannot
- * act on "the notification service is down". It retries on the next render,
- * because `notified_at` is still null.
+ * Returns HOW MANY people were actually reached, or null if the call failed.
+ *
+ * The count matters, and returning a bare boolean was a bug. The route answers
+ * `ok` even when it finds nobody to tell — deliberately, so the row gets
+ * stamped and the app stops retrying a send that can never succeed — and the
+ * caller then told the operator "maintenance knows" when nobody had been told.
+ * Zero is a real answer and has to travel, or this is the silent no-op class in
+ * feedback_silent_noop_latches all over again, on the one screen where the
+ * consequence is a machine nobody comes to fix.
+ *
+ * A failure (null) is deliberately quiet at the call site: the stoppage is
+ * already saved, and an operator mid-shift cannot act on "the notification
+ * service is down". It retries on the next render, because `notified_at` is
+ * still null.
  */
 export async function reportStoppage(args: {
   stoppageId:   string
@@ -306,7 +316,7 @@ export async function reportStoppage(args: {
   description:  string
   operatorName: string
   startedAt:    string
-}): Promise<boolean> {
+}): Promise<number | null> {
   try {
     const res = await fetch('/api/production/stoppage/notify', {
       method: 'POST',
@@ -316,10 +326,10 @@ export async function reportStoppage(args: {
     if (!res.ok) throw new Error(`notify route returned ${res.status}`)
     const body = await res.json().catch(() => ({}))
     await markNotified(args.stoppageId, body.notifiedAt ?? new Date().toISOString())
-    return true
+    return Number(body.notified ?? 0)
   } catch (e) {
     console.warn('[operator-timesheet] stoppage notification failed, will retry:', e)
-    return false
+    return null
   }
 }
 
