@@ -32,6 +32,13 @@ the commit that added it.
 | `changeover.ts` | inert | `main` removed the changeover button; not applicable until it returns |
 | `labels/**` | inert | the pasteuriser label feature does not exist on `main` at all |
 
+`components/production/capture/core-conformance.ts` is the one file on the
+components side of the boundary: a compile-time proof that each section's real
+data type still matches the shape core reads. It compiles clean on `main` with
+zero new type errors, which is the useful finding — **main's capture components
+have not drifted from the shapes core declares**, even though the two branches
+forked a month ago. It will start failing the moment one of them does.
+
 ## Two things to read before wiring anything
 
 ### `capture-rows/` was characterised against staging's capture page
