@@ -2,6 +2,42 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-09 — Alyssa (Labels: who owns each customer account)
+
+**Files changed:** `lib/core/labels/library.ts`, `lib/core/labels/library.test.ts`, `features/pasteuriser-labels/db.ts`, `features/pasteuriser-labels/index.ts`, `app/(app)/pasteuriser/labels/page.tsx`
+
+`sales.customers.sales_rep_employee_id` has existed since migration `20260907_002` and **nothing in the app read it.** The migration even assigns Alyssa to Kunitaro and Lipton and Infusion — invisibly, with no way to see the assignment or change it. That is why the approve → PO flow could not be walked as a customer's sales lead.
+
+### The rule is in core, because three screens need the same answer
+
+`withOwnership()` annotates the customer groups the library already builds with their sales lead, and floats the viewer's own accounts to the top. `unassignedAccounts()` returns the ones nobody owns. The library, the job-card picker and the approval queue all need to agree on "my customers"; a rep seeing a different set depending on which screen they opened is the drift `lib/core` exists to prevent.
+
+Two decisions worth knowing:
+
+- **Matching is on the trimmed, lowercased name** — the same key `groupLibraryByCustomer` groups on. `label_templates.customer` is free text while `sales.customers.name` is a unique canonical spelling, so an exact comparison would silently drop ownership the first time someone typed `kunitaro`, and a rep whose customer quietly stops being theirs cannot tell that from never having owned it.
+- **A viewer with no Staff Directory link gets nothing marked mine**, not everything. An unresolved identity has to fail closed.
+
+**9 new tests, 27 in the file.** Including that the generic *Any customer* group stays ownerless and last, that a customer with no `sales.customers` row at all still renders (seeded from `qms.customer_specs`, so a label can name a customer the master has not caught up with), and that no group is ever lost or duplicated. The partition is stable rather than a sort, so the alphabetical order underneath survives inside each half.
+
+### On the screen
+
+Each customer heading carries its lead, own accounts sort first behind a **Mine** marker, and a holder of `can_assign_label_po` can change it inline. Below the list, the accounts nobody owns — invisible work, because no rep sees them under their own customers and nothing prompts anyone to get their labels approved.
+
+- **Deliberately not a sixth label permission.** Account ownership is a sales-management act, and `can_assign_label_po` is the key sales already holds for binding work to a customer. A new key means four more registrations (union, registry, route guard, nav) for a control on a page the same people already reach.
+- **Ownership loads separately from the library and never blocks it.** A failed or empty customer master renders every group as unassigned — honest — rather than refusing to list labels because nobody has been given an account.
+- **The Staff Directory loads on first use of a picker**, not on page load. Most viewers cannot assign and do not need every employee fetched at them.
+- An id with no matching active employee reads as **Unknown (offboarded?)** rather than blank — that is a real state, someone who left still holding an account.
+
+### Data layer
+
+`fetchCustomerAccounts`, `fetchAssignableReps`, `setCustomerSalesRep` in the feature's `db.ts`. The rep name is a second query rather than a PostgREST embed: `sales.customers` points at `production.employees` across a schema boundary and the embed needs a relationship PostgREST cannot see from the `sales` profile. `setCustomerSalesRep` upserts on `name`, so a customer the master has never held can still be given a lead from the screen where the gap is visible.
+
+`setCustomerSalesRep` writes directly rather than through an API route, unlike every workflow transition in this module. Ownership is not workflow state — there is no state machine to enforce, nothing is minted, and a wrong value is corrected by setting the right one.
+
+No migration. Reuses `useMyEmployee` for the `auth.users.id → employees.id` link rather than adding a fourth copy of that chain.
+
+---
+
 ## 2026-09-07 — Gustav (Pasteuriser tasting records who tasted the sample)
 
 **Files changed:** `app/(app)/quality/pasteuriser/page.tsx`, `lib/utils/exportExcel.ts`, `.github/workflows/ci.yml`
