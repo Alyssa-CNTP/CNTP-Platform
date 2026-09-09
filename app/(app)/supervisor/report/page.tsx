@@ -181,6 +181,8 @@ function ShiftReportInner() {
           <Throughput report={report} />
           <MachineConfig report={report} />
           <Changeovers report={report} />
+          <Stoppages report={report} />
+          <LineDowntime report={report} />
           <Breakdowns report={report} />
           <Checks report={report} />
           <Waste report={report} />
@@ -578,6 +580,120 @@ function Changeovers({ report }: { report: ShiftReport }) {
   )
 }
 
+/**
+ * Every stoppage the operators logged — the production-side record of what the
+ * lines were not producing during, and the operator's own explanation.
+ *
+ * Separate from "Maintenance & downtime" below, which lists maintenance JOB
+ * CARDS. The two are different records and sometimes of the same event: a card
+ * exists whether or not an operator noticed, a stoppage exists whether or not a
+ * card was raised, and `Card` links them where both do.
+ *
+ * `report.stoppages` is optional — a report frozen before the stoppage ledger
+ * shipped has none, and must still render.
+ */
+function Stoppages({ report }: { report: ShiftReport }) {
+  const rows = report.stoppages ?? []
+  if (rows.length === 0) return null
+  const downtime = rows.filter(s => s.downtime)
+  const unsigned = rows.filter(s => s.kind === 'breakdown' && !s.verdict).length
+  return (
+    <Section title="Operator stoppages" icon={Clock} count={rows.length}
+      hint={downtime.length
+        ? `${hoursLabel(downtime.reduce((t, s) => t + s.minutes, 0))} of it machine downtime${unsigned ? ` · ${unsigned} unsigned` : ''}`
+        : undefined}>
+      <Table head={['Time', 'Line', 'Who', 'Reason', 'For', 'Note', 'Signed off']}>
+        {rows.map(s => (
+          <tr key={s.id}>
+            <Td mono>
+              {sastTime(s.startedAt)}
+              {s.endedAt ? `–${sastTime(s.endedAt)}` : <span className="text-warn"> →</span>}
+            </Td>
+            <Td>{s.sectionName}</Td>
+            <Td>{s.operatorName}</Td>
+            <Td className={s.downtime ? 'text-err font-semibold' : undefined}>
+              {s.kindLabel}
+              {s.jobCardId != null && (
+                <span className="block text-[9px] font-normal text-text-muted">card #{s.jobCardId}</span>
+              )}
+            </Td>
+            <Td mono right className="font-semibold">
+              {hoursLabel(s.minutes)}
+              {!s.endedAt && <span className="block text-[9px] font-normal text-text-muted">to shift end</span>}
+            </Td>
+            <Td>{s.notes ?? '—'}</Td>
+            {/* An unsigned breakdown reads differently depending on whether
+                anyone was ever ASKED. "Nobody called" is the operator's to fix;
+                "asked 3x, still unsigned" is the supervisor's. A report that
+                shows both as "awaiting supervisor" blames the wrong person. */}
+            <Td>
+              {s.kind !== 'breakdown' ? <span className="text-text-muted">n/a</span>
+                : s.verdict === 'confirmed' ? <span className="text-ok">{s.attestedBy}</span>
+                : s.verdict === 'disputed' ? <span className="text-err">disputed · {s.attestedBy}</span>
+                : s.supervisorRequestedAt
+                  ? <span className="text-err">
+                      called {sastTime(s.supervisorRequestedAt)} — not signed
+                    </span>
+                  : <span className="text-warn">nobody called</span>}
+            </Td>
+          </tr>
+        ))}
+      </Table>
+    </Section>
+  )
+}
+
+/**
+ * Downtime per LINE, split by cause.
+ *
+ * Keyed on the line rather than a machine because the operator is never asked
+ * which machine stopped — the section is the production order they already have
+ * open. What replaces the machine column is the cause breakdown, which is the
+ * more useful cut anyway: two hours lost to `no_material` is a different
+ * problem, with a different owner, from two hours lost to `breakdown`.
+ *
+ * `unsigned` is shown separately so a total is never quietly presented as
+ * verified when nobody has signed it.
+ */
+function LineDowntime({ report }: { report: ShiftReport }) {
+  const rows = report.lineDowntime ?? []
+  if (rows.length === 0) return null
+  const total = rows.reduce((t, r) => t + r.minutes, 0)
+  return (
+    <Section title="Downtime by line" icon={Wrench} count={rows.length}
+      hint={`${hoursLabel(total)} of production time lost — breaks and the deep clean are not counted`}>
+      <Table head={['Line', 'Area', 'Stoppages', 'Downtime', 'Unsigned', 'What stopped it']}>
+        {rows.map(r => (
+          <tr key={r.sectionId}>
+            <Td className="font-semibold">{r.sectionName}</Td>
+            <Td className="text-text-muted">{r.area ?? '—'}</Td>
+            <Td mono right>
+              {r.events}
+              {r.stillOpen > 0 && <span className="block text-[9px] font-normal text-warn">{r.stillOpen} still open</span>}
+            </Td>
+            <Td mono right className="font-semibold text-err">{hoursLabel(r.minutes)}</Td>
+            <Td mono right className={r.unattestedMinutes > 0 ? 'text-warn' : 'text-text-muted'}>
+              {r.unattestedMinutes > 0 ? hoursLabel(r.unattestedMinutes) : '—'}
+            </Td>
+            <Td>
+              <div className="flex flex-wrap gap-1">
+                {r.byKind.map(k => (
+                  <span key={k.kind}
+                    className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-surface border border-surface-rule">
+                    {k.label}
+                    <span className="font-mono text-text-muted">{hoursLabel(k.minutes)}</span>
+                    {k.events > 1 && <span className="font-mono text-text-faint">×{k.events}</span>}
+                  </span>
+                ))}
+              </div>
+            </Td>
+          </tr>
+        ))}
+      </Table>
+    </Section>
+  )
+}
+
 function Breakdowns({ report }: { report: ShiftReport }) {
   const bd = report.breakdowns.filter(b => b.workflow === 'breakdown')
   const planned = report.breakdowns.filter(b => b.workflow === 'planned')
@@ -705,13 +821,19 @@ function Waste({ report }: { report: ShiftReport }) {
 
 function Notes({ report }: { report: ShiftReport }) {
   return (
-    <Section title="Handover notes & line messages" icon={MessageSquare} count={report.notes.length}>
+    <Section title="Operator notes, handovers & line messages" icon={MessageSquare} count={report.notes.length}>
       {report.notes.length === 0 ? <Empty>Nothing was written on the lines this shift.</Empty> : (
         <div className="space-y-2">
           {report.notes.map((n, i) => (
             <div key={i} className="flex items-start gap-2.5 px-3 py-2 rounded-xl border border-surface-rule bg-surface">
-              <span className={`font-mono text-[9px] font-semibold uppercase px-1.5 py-0.5 rounded shrink-0 mt-0.5 ${n.kind === 'handover' ? 'bg-info/10 text-info' : 'bg-stone-100 text-stone-500'}`}>
-                {n.kind === 'handover' ? 'Handover' : 'Message'}
+              {/* `timesheet` is the operator's own note about the shift, saved
+                  with their timesheet. It used to live in React state until
+                  sign-off and reached no report at all. */}
+              <span className={`font-mono text-[9px] font-semibold uppercase px-1.5 py-0.5 rounded shrink-0 mt-0.5 ${
+                n.kind === 'handover' ? 'bg-info/10 text-info'
+                  : n.kind === 'timesheet' ? 'bg-brand/10 text-brand'
+                  : 'bg-stone-100 text-stone-500'}`}>
+                {n.kind === 'handover' ? 'Handover' : n.kind === 'timesheet' ? 'Operator' : 'Message'}
               </span>
               <div className="min-w-0">
                 <p className="text-[12px] text-text whitespace-pre-wrap">{n.body}</p>

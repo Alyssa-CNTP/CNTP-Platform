@@ -227,12 +227,82 @@ export interface WasteLine {
 }
 
 export interface ReportNote {
-  kind: 'handover' | 'message'
+  /** `timesheet` — the operator's own note about the shift, saved with their
+   *  timesheet. Added when stoppages moved to their own ledger: an operator's
+   *  note used to sit in React state until sign-off and never reached any
+   *  report at all. */
+  kind: 'handover' | 'message' | 'timesheet'
   sectionId: string | null
   sectionName: string
   author: string
   body: string
   at: string
+}
+
+/**
+ * One stoppage from `production.timesheet_stoppages` — what the line was NOT
+ * producing during, and why.
+ *
+ * Distinct from `BreakdownLine`, which is a maintenance JOB CARD. The two are
+ * different records of (sometimes) the same event and must not be merged: a
+ * card exists whether or not an operator noticed, and a stoppage exists whether
+ * or not a card was raised. `jobCardId` is the link where there is one.
+ *
+ * Optional on `ShiftReport` so a payload frozen before this shipped keeps
+ * rendering (see the note at the top of this file).
+ */
+export interface StoppageLine {
+  id: string
+  sectionId: string
+  sectionName: string
+  operatorName: string
+  /** See lib/core/timesheet/stoppages.ts for the full set. */
+  kind: string
+  kindLabel: string
+  startedAt: string
+  endedAt: string | null       // null = was still running at the end of the shift
+  minutes: number
+  notes: string | null
+  machine: string | null
+  jobCardId: number | null
+  /** Whether this counts as machine downtime (breakdown / maintenance only). */
+  downtime: boolean
+  /** A supervisor's verdict on a breakdown. null = nobody has signed it yet. */
+  verdict: 'confirmed' | 'disputed' | null
+  attestedBy: string | null
+  /** When the operator last asked a supervisor to come and confirm it. Null
+   *  means they never did — which is a different problem from asking and being
+   *  ignored, and the report has to be able to tell them apart. */
+  supervisorRequestedAt: string | null
+}
+
+/**
+ * Downtime for one LINE on this shift, from the stoppage ledger.
+ *
+ * Keyed on the line, not on a machine, because the operator is never asked
+ * which machine stopped — the section is the production order they have open,
+ * so it is known, and asking again is a question with a wrong answer available.
+ * `area` is the maintenance module's own name for the same physical place, so
+ * a downtime figure and a job card can be talked about in the same words.
+ *
+ * Disputed breakdowns are excluded; unsigned ones are counted and reported
+ * separately in `unattestedMinutes`, so a reader can see how much of the total
+ * nobody has confirmed yet.
+ */
+export interface LineDowntimeLine {
+  sectionId: string
+  sectionName: string
+  /** The maintenance area, when the section maps to one. */
+  area: string | null
+  events: number
+  minutes: number
+  unattestedMinutes: number
+  stillOpen: number
+  /** Minutes per stoppage kind — what actually stopped this line, and for how
+   *  long. A line losing two hours to `no_material` is a different problem from
+   *  one losing two hours to `breakdown`, and a single total hides that. */
+  byKind: { kind: string; label: string; minutes: number; events: number }[]
+  jobCardIds: number[]
 }
 
 export interface OutstandingItem {
@@ -275,6 +345,11 @@ export interface ShiftReport {
   machineConfig: MachineConfigLine[]
   changeovers: Changeover[]
   breakdowns: BreakdownLine[]
+  /** Every stoppage the operators logged. Optional — a payload frozen before
+   *  the stoppage ledger existed has none, and must still render. */
+  stoppages?: StoppageLine[]
+  /** Per-line downtime, broken down by cause. Optional, same reason. */
+  lineDowntime?: LineDowntimeLine[]
   checks: ChecksLine[]
   waste: WasteLine[]
   notes: ReportNote[]

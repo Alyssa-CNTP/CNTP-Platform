@@ -106,7 +106,21 @@ export function TimesheetConfirm({
     }
     load()
     return () => { alive = false }
-  }, [sessionId, operatorName, operatorId])
+    // Keyed on the SESSION only.
+    //
+    // This used to also depend on `operatorName` — which the capture page feeds
+    // from the sign-off name INPUT. So every keystroke re-ran this loader,
+    // which called `setBreaks(d.breaks)` and reset the sheet to the standard
+    // tea/lunch schedule. Start and end re-derived to the same values, so the
+    // sheet looked correct while every stoppage the operator had logged was
+    // silently gone: exactly the floor's report that "the other stoppages don't
+    // save".
+    //
+    // This component is now the ROLLBACK path behind flags.operatorTimesheet —
+    // features/operator-timesheet replaces it. The fix is kept here anyway,
+    // because a rollback must not be a rollback to data loss.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId])
 
   const worked = workedMinutes(startIso, endIso, breaks)
 
@@ -156,11 +170,15 @@ export function TimesheetConfirm({
           await sendMessage({ channel: sectionId, body, authorId: operatorId, authorName: operatorName, authorRole: null, date, shift, urgent: true })
         }
       }
-    } catch {
-      setSaveWarn(true)
-    } finally {
+      setSaveWarn(false)
       setConfirmed(true)
       onConfirmedChange?.(true)
+    } catch {
+      // NOT confirmed. This used to sit in a `finally`, so a failed write still
+      // flipped the sheet to "Confirmed" with a green tick over data that never
+      // reached the database — and the operator moved on believing it had.
+      setSaveWarn(true)
+    } finally {
       setSaving(false)
     }
   }
@@ -184,9 +202,6 @@ export function TimesheetConfirm({
             <CheckCircle2 size={13} /> Confirmed
           </span>
         </div>
-        {saveWarn && (
-          <p className="text-[11px] text-warn flex items-center gap-1.5"><Info size={12} /> Couldn't save the timesheet — your sign-off still went through. Mention it to your supervisor.</p>
-        )}
         <div className="grid grid-cols-3 gap-3 text-center">
           <div><div className="font-mono font-bold text-[16px] text-text">{startTime || '—'}</div><div className="text-[10px] text-text-muted">start</div></div>
           <div><div className="font-mono font-bold text-[16px] text-text">{endTime || '—'}</div><div className="text-[10px] text-text-muted">end</div></div>
@@ -308,6 +323,16 @@ export function TimesheetConfirm({
         <div className="flex items-start gap-2 px-3 py-2.5 bg-err/5 border border-err/20 rounded-xl text-[12px] text-err">
           <AlertTriangle size={14} className="shrink-0 mt-0.5" />
           <span>Maintenance stoppages require a description before you can confirm.</span>
+        </div>
+      )}
+
+      {/* Shown in the EDITING view, not the confirmed one: a failed save no
+          longer flips the sheet to confirmed, so the operator stays here with
+          their entries intact and can try again. */}
+      {saveWarn && (
+        <div className="flex items-start gap-2 px-3 py-2.5 bg-err/5 border border-err/20 rounded-xl text-[12px] text-err">
+          <AlertTriangle size={14} className="shrink-0 mt-0.5" />
+          <span>Couldn’t save your timesheet. Your entries are still here — try Confirm again, and tell your supervisor if it keeps failing.</span>
         </div>
       )}
 

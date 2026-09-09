@@ -263,9 +263,14 @@ export interface Database {
           shift:          string | null
           shift_start:    string | null
           shift_end:      string | null
-          breaks:         Json    // [{type:'tea'|'lunch',start,end}]
+          // A DERIVED SNAPSHOT of production.timesheet_stoppages, written at
+          // confirm. The ledger is authoritative; this exists because the shift
+          // report, the production order detail and supervisor analytics all
+          // read it. Never write it as a second source of truth.
+          breaks:         Json    // TimesheetBreakSnapshot[] — see lib/core/timesheet/stoppages.ts
           worked_minutes: number | null
           derived_data:   Json
+          notes:          string | null   // the operator's note about the shift
           confirmed:      boolean
           confirmed_by:   string | null
           confirmed_at:   string | null
@@ -277,6 +282,61 @@ export interface Database {
           'id' | 'created_at' | 'updated_at'
         > & { id?: string }
         Update: Partial<Database['production']['Tables']['prod_timesheets']['Insert']>
+      }
+
+      // ── timesheet_stoppages ─────────────────────────────────
+      // Append-only ledger of everything a shift was NOT producing during:
+      // tea, lunch, the Tuesday deep clean, breakdowns, maintenance,
+      // changeovers. Nothing is deleted — a mis-logged stoppage is voided.
+      // See supabase/migrations/20260909_002_timesheet_stoppages.sql.
+      timesheet_stoppages: {
+        Row: {
+          id:            string
+          session_id:    string
+          operator_id:   string | null
+          operator_name: string
+          section_id:    string
+          date:          string
+          shift:         string
+          // Covers non-mechanical causes too — a line stopped by the system
+          // being down produced as little as one stopped by a bearing.
+          // `changeover` is RETIRED: still stored (historic rows, backfill),
+          // never offered. See lib/core/timesheet/stoppages.ts.
+          kind:          'tea' | 'lunch' | 'deep_clean'
+                       | 'breakdown' | 'maintenance'
+                       | 'power' | 'it_system' | 'no_material' | 'quality_hold'
+                       | 'other'
+                       | 'changeover'
+          started_at:    string
+          ended_at:      string | null   // null = still running
+          notes:         string | null
+          machine:       string | null
+          area:          string | null
+          job_card_id:   number | null   // maintenance.job_cards.id — no cross-schema FK
+          source:        'operator' | 'standard' | 'maintenance'
+          // Supervisor attestation. Breakdowns only; null verdict = unsigned.
+          supervisor_verdict:     'confirmed' | 'disputed' | null
+          supervisor_name:        string | null
+          supervisor_user_id:     string | null
+          supervisor_employee_id: string | null
+          supervisor_signed_at:   string | null
+          supervisor_note:        string | null
+          notified_at:   string | null   // the owning team was told
+          // The operator calling for a signature. NULL = never asked, which is
+          // a different problem from asked-and-ignored.
+          supervisor_requested_at:  string | null
+          supervisor_request_count: number
+          voided_at:     string | null
+          voided_by:     string | null
+          void_reason:   string | null
+          created_at:    string
+          updated_at:    string
+        }
+        Insert: Omit<
+          Database['production']['Tables']['timesheet_stoppages']['Row'],
+          'id' | 'created_at' | 'updated_at'
+        > & { id?: string }
+        Update: Partial<Database['production']['Tables']['timesheet_stoppages']['Insert']>
       }
 
       // ── line_messages ───────────────────────────────────────

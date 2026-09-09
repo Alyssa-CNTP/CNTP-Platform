@@ -16,9 +16,11 @@ import type {
   ShiftReport, LineReport, OutputLine, ThroughputLine, MachineConfigLine,
   MachineSetting, Changeover, BreakdownLine, ChecksLine, CheckFailure,
   WasteLine, ReportNote, OutstandingItem, RosteredPerson, PresentPerson,
-  AbsentPerson, ShiftReportAuditEntry,
+  AbsentPerson, ShiftReportAuditEntry, StoppageLine, LineDowntimeLine,
 } from '@/lib/production/shift-report'
 import type { Shift } from '@/lib/supabase/database.types'
+import { STOPPAGE_META, type StoppageKind } from '@/lib/core/timesheet/stoppages'
+import { primaryAreaForSection } from '@/features/operator-timesheet'
 
 const num = (v: unknown): number => {
   if (v === null || v === undefined || v === '') return 0
@@ -102,10 +104,94 @@ export async function buildShiftReport(date: string, shift: Shift): Promise<Shif
 
   // ── Timesheets — who was actually on the floor, and for how long ──────────
   const { data: tsRaw, error: tsErr } = await prod().from('prod_timesheets')
-    .select('operator_name,section_id,date,shift,shift_start,shift_end,breaks,worked_minutes,confirmed')
+    .select('operator_name,section_id,date,shift,shift_start,shift_end,breaks,worked_minutes,confirmed,notes')
     .eq('date', date).in('shift', shiftVals)
   if (tsErr) gaps.push(`Timesheets could not be read: ${tsErr.message}`)
   const timesheets = ((tsRaw as any[]) ?? [])
+
+  // ── Stoppages — the append-only ledger behind the timesheets ──────────────
+  //
+  // Read SEPARATELY from prod_timesheets.breaks, which is only a snapshot
+  // written at confirm. The ledger is what carries the machine, the linked job
+  // card, the supervisor's signature and anything still running — and it exists
+  // for a shift whose operators have not signed off yet, which the snapshot
+  // does not. See supabase/migrations/20260909_002_timesheet_stoppages.sql.
+  const stoppages: StoppageLine[] = []
+  {
+    const { data: stopRaw, error: stopErr } = await prod().from('timesheet_stoppages')
+      .select('id,section_id,operator_name,kind,started_at,ended_at,notes,machine,job_card_id,' +
+              'supervisor_verdict,supervisor_name,supervisor_requested_at,voided_at')
+      .eq('date', date).in('shift', shiftVals).is('voided_at', null)
+      .order('started_at', { ascending: true })
+    // A missing table is the pre-migration state, not a broken report. Named in
+    // `gaps` so "no stoppages" is never confused with "we could not read them".
+    if (stopErr) gaps.push(`Operator stoppages could not be read: ${stopErr.message}`)
+    for (const r of ((stopRaw as any[]) ?? [])) {
+      const meta = STOPPAGE_META[r.kind as StoppageKind]
+      stoppages.push({
+        id: String(r.id),
+        sectionId: r.section_id ?? '',
+        sectionName: r.section_id ? sectionMeta(r.section_id).name : 'Unassigned',
+        operatorName: r.operator_name ?? 'Operator',
+        kind: r.kind,
+        kindLabel: meta?.label ?? String(r.kind),
+        startedAt: r.started_at,
+        endedAt: r.ended_at ?? null,
+        // An open stoppage is measured to the end of the shift window, not to
+        // now — otherwise a stoppage nobody closed reports a week of downtime
+        // against one shift, the same trap the job-card downtime avoids below.
+        minutes: minutesBetween(r.started_at, r.ended_at ?? window.to) ?? 0,
+        notes: (r.notes && String(r.notes).trim()) || null,
+        machine: r.machine ?? null,
+        jobCardId: r.job_card_id == null ? null : Number(r.job_card_id),
+        downtime: !!meta?.downtime,
+        verdict: r.supervisor_verdict ?? null,
+        attestedBy: r.supervisor_verdict ? (r.supervisor_name ?? 'Supervisor') : null,
+        supervisorRequestedAt: r.supervisor_requested_at ?? null,
+      })
+    }
+  }
+
+  // ── Per-line downtime, broken down by cause ──────────────────────────────
+  //
+  // Aggregated here rather than read from production.v_line_downtime because
+  // the view measures an open stoppage to now() (right for a live dashboard)
+  // while a shift report must measure it to the end of the shift window. Same
+  // rules otherwise: downtime kinds only, and never a disputed one.
+  //
+  // Keyed on the LINE. The operator is never asked which machine stopped — the
+  // section is the production order they have open — so a per-machine figure
+  // would be a column of nulls. What replaces it is `byKind`: two hours lost to
+  // `no_material` is a different problem from two hours lost to `breakdown`,
+  // and one total hides that.
+  const lineDowntime: LineDowntimeLine[] = (() => {
+    const byLine = new Map<string, LineDowntimeLine>()
+    for (const s of stoppages) {
+      if (!s.downtime) continue
+      if (s.verdict === 'disputed') continue
+      let row = byLine.get(s.sectionId)
+      if (!row) {
+        row = {
+          sectionId: s.sectionId, sectionName: s.sectionName,
+          area: primaryAreaForSection(s.sectionId),
+          events: 0, minutes: 0, unattestedMinutes: 0, stillOpen: 0,
+          byKind: [], jobCardIds: [],
+        }
+        byLine.set(s.sectionId, row)
+      }
+      row.events += 1
+      row.minutes += s.minutes
+      if (s.kind === 'breakdown' && !s.verdict) row.unattestedMinutes += s.minutes
+      if (!s.endedAt) row.stillOpen += 1
+      if (s.jobCardId != null && !row.jobCardIds.includes(s.jobCardId)) row.jobCardIds.push(s.jobCardId)
+
+      const k = row.byKind.find(x => x.kind === s.kind)
+      if (k) { k.minutes += s.minutes; k.events += 1 }
+      else row.byKind.push({ kind: s.kind, label: s.kindLabel, minutes: s.minutes, events: 1 })
+    }
+    for (const row of byLine.values()) row.byKind.sort((a, b) => b.minutes - a.minutes)
+    return [...byLine.values()].sort((a, b) => b.minutes - a.minutes)
+  })()
 
   // ── Roster — who was SUPPOSED to be here ─────────────────────────────────
   // roster_entries store 'day' | 'night'; the capture flow's morning maps to
@@ -418,18 +504,23 @@ export async function buildShiftReport(date: string, shift: Shift): Promise<Shif
   }
 
   // Changeovers an operator logged on their own timesheet.
-  for (const t of timesheets) {
-    for (const b of (Array.isArray(t.breaks) ? t.breaks : [])) {
-      if (b?.type !== 'changeover' || !b?.start) continue
-      changeovers.push({
-        sectionId: t.section_id ?? '',
-        sectionName: t.section_id ? sectionMeta(t.section_id).name : 'Unassigned',
-        at: b.start,
-        personName: t.operator_name ?? null,
-        source: 'timesheet',
-        detail: b.end ? `Off the line for ${minutesBetween(b.start, b.end)} min` : 'Section change-over logged',
-      })
-    }
+  //
+  // Read from the STOPPAGE LEDGER, not from prod_timesheets.breaks. The
+  // snapshot only exists once an operator has confirmed their sheet, so a
+  // changeover on a shift still in progress — or one whose operator never
+  // signed off — was invisible here.
+  for (const s of stoppages) {
+    if (s.kind !== 'changeover' || !s.startedAt) continue
+    changeovers.push({
+      sectionId: s.sectionId,
+      sectionName: s.sectionName,
+      at: s.startedAt,
+      personName: s.operatorName,
+      source: 'timesheet',
+      detail: s.notes
+        ? `${s.notes}${s.endedAt ? ` — ${s.minutes} min` : ''}`
+        : s.endedAt ? `Off the line for ${s.minutes} min` : 'Section change-over logged',
+    })
   }
   changeovers.sort((a, b) => a.at.localeCompare(b.at))
 
@@ -491,6 +582,21 @@ export async function buildShiftReport(date: string, shift: Shift): Promise<Shif
       at: l.submittedAt ?? `${date}T12:00:00.000Z`,
     })
   }
+  // The operator's own note about the shift, saved with their timesheet. Until
+  // the stoppage ledger this lived in React state until sign-off and reached no
+  // report at all.
+  for (const t of timesheets) {
+    const body = (t.notes ?? '').trim()
+    if (!body) continue
+    notes.push({
+      kind: 'timesheet',
+      sectionId: t.section_id ?? null,
+      sectionName: t.section_id ? sectionMeta(t.section_id).name : 'Unassigned',
+      author: t.operator_name ?? 'Operator',
+      body,
+      at: t.shift_end ?? `${date}T12:00:00.000Z`,
+    })
+  }
   {
     const { data: msgs } = await prod().from('line_messages')
       .select('section_id,author_name,body,created_at')
@@ -527,9 +633,33 @@ export async function buildShiftReport(date: string, shift: Shift): Promise<Shif
     sessionsSignedOff: lines.filter(l => l.status === 'approved').length,
     sessionsOutstanding: outstanding.length,
     balanceFlags: lines.filter(l => l.withinTolerance === false).length,
-    breakdowns: breakdowns.filter(b => b.workflow === 'breakdown').length,
-    downtimeMinutes: breakdowns.filter(b => b.workflow === 'breakdown')
-      .reduce((t, b) => t + (b.downtimeMinutes ?? 0), 0),
+    // Breakdowns and downtime now come from BOTH records, de-duplicated.
+    //
+    // A breakdown reaches the platform two ways: a maintenance job card, and an
+    // operator logging a stoppage on their timesheet. Counting only cards
+    // (which is what this did) missed every breakdown nobody raised a card for.
+    // Counting both naively double-counts the ones that have each.
+    //
+    // So: where a stoppage is LINKED to a card, the stoppage wins — it measures
+    // when the LINE was down, which is the figure a production KPI wants, while
+    // the card measures when maintenance was engaged. Cards with no stoppage
+    // against them still count, because the line was down whether or not the
+    // operator got round to logging it.
+    ...(() => {
+      const linkedCards = new Set(
+        stoppages.filter(s => s.jobCardId != null).map(s => s.jobCardId as number),
+      )
+      const opBreakdowns = stoppages.filter(s => s.kind === 'breakdown' && s.verdict !== 'disputed')
+      const cardBreakdowns = breakdowns.filter(
+        b => b.workflow === 'breakdown' && !linkedCards.has(b.cardId),
+      )
+      return {
+        breakdowns: opBreakdowns.length + cardBreakdowns.length,
+        downtimeMinutes:
+          opBreakdowns.reduce((t, s) => t + s.minutes, 0) +
+          cardBreakdowns.reduce((t, b) => t + (b.downtimeMinutes ?? 0), 0),
+      }
+    })(),
     peopleRostered: rostered.length,
     peoplePresent: present.length,
     peopleAbsent: absent.length,
@@ -583,6 +713,7 @@ export async function buildShiftReport(date: string, shift: Shift): Promise<Shif
       totalWorkedMinutes: present.reduce((t, p) => t + p.workedMinutes, 0),
     },
     lines, outputs, throughput, machineConfig, changeovers, breakdowns,
+    stoppages, lineDowntime,
     checks, waste, notes, outstanding, record, gaps,
   }
 }
