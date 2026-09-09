@@ -2,6 +2,122 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-09 — Alyssa (Timesheet: back on Sign-off, every stoppage covered, and a way to actually call a supervisor)
+
+**Files changed:** `lib/core/timesheet/stoppages.ts`, `lib/core/timesheet/stoppages.test.ts`, `features/operator-timesheet/` (`OperatorTimesheet.tsx`, `StoppageQuickLog.tsx` (new), `prompts.ts`, `prompts.test.ts`, `areas.ts`, `areas.test.ts`, `db.ts`, `index.ts`), `app/api/production/stoppage/notify/route.ts` (renamed from `breakdown/`), `app/api/production/stoppage/call-supervisor/route.ts` (new), `supabase/migrations/20260909_004_stoppage_coverage_and_supervisor_call.sql` (new), `app/(app)/production/capture/[section]/page.tsx`, `lib/production/shift-report.ts`, `lib/production/shift-report-builder.ts`, `app/(app)/supervisor/report/page.tsx`, `lib/supabase/database.types.ts`, `docs/capture-phases.md`
+
+Follow-up to #948, all from floor feedback on the deployed version.
+
+### The timesheet goes back on Sign-off
+
+It briefly had a step of its own. The practical answer is the other way round:
+the timesheet runs all shift but is only ever *finalised* at the end, which is
+what Sign-off is, and a seventh step is one more thing to walk past.
+
+Being back inside Sign-off is exactly where the original bug lived — the sheet
+sat next to the operator-name input whose value re-derived it on every
+keystroke — so the fix now has to hold **structurally**, not by being careful:
+the loader is keyed on the session and reads its identity from a ref, and the
+mount passes the session's operator name, never the input's. There is a comment
+at the mount saying so.
+
+**There is no latency cost.** It was lazily mounted either way, and this change
+removes the only background work the feature had.
+
+### The capture screen pays nothing for it
+
+Polling `maintenance.job_cards` every 45 seconds is gone, along with the machine
+register read and the untyped client that reaching another schema needed. The
+feature now touches **one schema and no timers.**
+
+What replaces it for mid-shift use is a **"Stopped" button in the capture
+header** → a dialog that reads nothing until it is opened, writes one row, and
+closes. A stoppage's start time is only accurate if it is recorded when the
+machine stops; that is the one thing that genuinely cannot wait for Sign-off.
+
+### The operator says when the machine stopped
+
+The polling had the direction backwards. A job card's `started_at` is when
+*maintenance* was engaged — always later than the stoppage, sometimes by hours —
+and using it meant maintenance's clock decided when the line went down. The
+operator stops the machine, so the operator is the source. The flow runs outward
+now: **operator logs it → the owning team is told → the operator calls a
+supervisor to sign it.**
+
+### There is now a way to call a supervisor
+
+The screen said "awaiting supervisor confirmation" and offered **no way to ask
+anybody** — a sheet sat unsigned until a supervisor happened to walk past the
+tablet. There is a button now, and it is **repeatable**, because being ignored is
+the case it exists for. A repeat ask escalates: the title says how many times,
+and it goes urgent instead of just email.
+
+`supervisor_requested_at` and `supervisor_request_count` are recorded, which
+lets the shift report distinguish **"nobody called"** (the operator's to fix)
+from **"called 15:42 — not signed"** (the supervisor's). Both read as "awaiting
+supervisor" if you only look at the verdict, and a report that conflates them
+blames the operator every time, because they are the one whose sheet is
+incomplete. `attestationState()` in core owns that rule.
+
+### Every cause of a stopped line, not just the mechanical ones
+
+Four things that stop a rooibos line had nowhere to go and were arriving as
+`other` with a note — which is exactly how breakdowns and deep cleans used to
+arrive, and exactly why neither could be analysed:
+
+**Power failure · System / IT down · Waiting for material · Quality hold.**
+
+Each routes to the team that can act, decided in core from the kind and applied
+**server-side** — the browser does not choose who it pages. IT for a system
+outage, not maintenance: paging a fitter for a network problem wastes the one
+person who could have fixed it.
+
+`other` is deliberately **not** downtime and pages nobody. It is the bucket for
+whatever the list failed to anticipate, so it cannot be trusted to mean the line
+was down — a recurring `other` in the shift reports is the signal to add a kind.
+
+### Changeover removed
+
+Retired pending a rebuild, and **retired is not deleted**: it stays in the type,
+the metadata and the DB CHECK because rows already carry it (historic
+`prod_timesheets.breaks`, and the optional backfill). Dropping it would make
+`STOPPAGE_META[kind]` come back undefined on a live capture screen. A row
+carrying it still renders and stays selectable; it cannot be chosen fresh.
+
+### The section is never asked for
+
+It is the production order the operator has open. The machine picker is gone —
+it was offering the whole maintenance register, including "Braai" — and the
+operator now only adds a **note**, with a prompt written per kind ("Whole
+factory, or just this line?" beats a generic "What happened?").
+
+Downtime therefore keys on the **line**, not a machine: `v_line_downtime`
+replaces `v_machine_downtime`, and the shift report's section is **"Downtime by
+line"**, split by cause. Two hours lost to `no_material` is a different problem,
+with a different owner, from two hours lost to `breakdown` — one total hides
+that. The `machine` column stays on the table, nullable, for if the floor ever
+wants machine-level attribution back.
+
+### Feeding the shift report
+
+Already added in #948 and now carrying the new fields: **Operator stoppages**
+(with who was called and whether they signed) and **Downtime by line**. Also
+fixed: the time inputs were clipping to `15:3` — the picker icon needed the
+room.
+
+**105 tests over this feature**, 881 passing overall. Lint back to 3021 exactly,
+type errors at baseline, production build clean.
+
+### Migrations pending
+
+Run **`20260909_002` first, then `20260909_004`.** 004 widens the kind CHECK,
+adds the supervisor-call columns and creates `v_line_downtime`; it needs 002's
+table to exist. `v_machine_downtime` is left in place rather than dropped —
+commented as superseded — because dropping a view something unknown selects from
+is a worse failure than an extra view nobody reads.
+
+---
+
 ## 2026-09-09 — Alyssa (Operator timesheet: stoppages become a ledger)
 
 **Files changed:** `lib/core/timesheet/stoppages.ts` (new), `lib/core/timesheet/stoppages.test.ts` (new), `features/operator-timesheet/` (new — `OperatorTimesheet.tsx`, `db.ts`, `prompts.ts`, `areas.ts`, `index.ts`, `prompts.test.ts`, `areas.test.ts`), `app/api/production/breakdown/notify/route.ts` (new), `supabase/migrations/20260909_002_timesheet_stoppages.sql` (new), `app/(app)/production/capture/[section]/page.tsx`, `components/production/capture/TimesheetConfirm.tsx`, `lib/production/shift-report.ts`, `lib/production/shift-report-builder.ts`, `app/(app)/supervisor/report/page.tsx`, `lib/config/flags.ts`, `lib/supabase/database.types.ts`, `docs/capture-phases.md`, `components/production/TimesheetTab.tsx` (deleted)

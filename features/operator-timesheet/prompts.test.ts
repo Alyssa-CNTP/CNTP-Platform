@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { derivePrompts, panelCards, type PromptInput, type PromptKind } from './prompts'
-import type { LineJobCard } from './db'
+import { derivePrompts, type PromptInput, type PromptKind } from './prompts'
 import type { Stoppage, StoppageKind } from '@/lib/core/timesheet/stoppages'
 
 // 2026-09-08 is a Tuesday — the deep-clean day.
@@ -8,142 +7,92 @@ const TUE = '2026-09-08'
 const WED = '2026-09-09'
 const iso = (hhmm: string, day = TUE) => `${day}T${hhmm}:00.000Z`
 
-function card(over: Partial<LineJobCard> = {}): LineJobCard {
+function stoppage(over: Partial<Stoppage> = {}): Stoppage {
   return {
-    id: 1, cardNo: 'JC-001', area: 'Sieving Tower', machine: 'Tower Motor',
-    description: 'Feed belt snapped', workflow: 'breakdown', status: 'in_progress',
-    raisedAt: iso('09:00'), startedAt: iso('09:05'), completedAt: null,
-    raisedBy: 'Gustav', assignedTo: 'Shane',
+    id: 's1', kind: 'breakdown' as StoppageKind,
+    startedAt: iso('09:00'), endedAt: null, notes: 'belt snapped',
+    machine: null, area: 'Sieving Tower', jobCardId: null,
+    source: 'operator', voidedAt: null,
+    attestation: null, notifiedAt: null,
+    supervisorRequestedAt: null, supervisorRequestCount: 0,
     ...over,
   }
 }
 
-function stoppage(over: Partial<Stoppage> = {}): Stoppage {
-  return {
-    id: 's1', kind: 'breakdown' as StoppageKind,
-    startedAt: iso('09:00'), endedAt: null, notes: 'belt',
-    machine: null, area: null, jobCardId: null,
-    source: 'operator', voidedAt: null,
-    attestation: null, notifiedAt: null,
-    ...over,
-  }
+const signed = {
+  verdict: 'confirmed' as const, supervisorName: 'Gustav',
+  employeeId: 'E-42', signedAt: iso('11:00'), note: null,
 }
 
 function input(over: Partial<PromptInput> = {}): PromptInput {
   return {
-    cards: [], stoppages: [], date: WED, shift: 'morning',
-    dismissedCardIds: new Set<number>(),
+    stoppages: [], date: WED, shift: 'morning',
     dismissedKinds: new Set<PromptKind>(),
     atSignOff: false,
     ...over,
   }
 }
 
-describe('derivePrompts — a live maintenance card', () => {
-  it('offers to log a stoppage for an open breakdown on this line', () => {
-    const p = derivePrompts(input({ cards: [card()] }))
+describe('derivePrompts — the supervisor confirmation', () => {
+  it('asks the operator to get a breakdown signed', () => {
+    const p = derivePrompts(input({ stoppages: [stoppage()] }))
     expect(p).toHaveLength(1)
-    expect(p[0].kind).toBe('log_breakdown')
+    expect(p[0].kind).toBe('confirm_with_supervisor')
     expect(p[0].urgency).toBe('high')
-    expect(p[0].title).toContain('Tower Motor')
-    expect(p[0].detail).toContain('JC-001')
-    expect(p[0].card?.id).toBe(1)
+    expect(p[0].stoppageId).toBe('s1')
   })
 
-  it('falls back to the area when the card names no machine', () => {
-    const p = derivePrompts(input({ cards: [card({ machine: null })] }))
-    expect(p[0].title).toContain('Sieving Tower')
+  it('says maintenance has been told once the notification went out', () => {
+    const unsent = derivePrompts(input({ stoppages: [stoppage()] }))
+    expect(unsent[0].detail).toMatch(/being told/i)
+    const sent = derivePrompts(input({ stoppages: [stoppage({ notifiedAt: iso('09:01') })] }))
+    expect(sent[0].detail).toMatch(/has been told/i)
   })
 
-  it('ranks planned maintenance below a breakdown', () => {
-    const p = derivePrompts(input({
-      cards: [card({ id: 2, workflow: 'planned', description: 'Greasing' }), card({ id: 1 })],
-    }))
-    expect(p.map(x => x.card?.id)).toEqual([1, 2])
-    expect(p[0].urgency).toBe('high')
-    expect(p[1].urgency).toBe('normal')
-  })
-
-  it('does not offer a card that is already on the sheet', () => {
-    const p = derivePrompts(input({
-      cards: [card()],
-      stoppages: [stoppage({ jobCardId: 1 })],
-    }))
-    expect(p).toEqual([])
-  })
-
-  it('offers the card again if the linked stoppage was voided', () => {
-    // The operator removed it by mistake; the machine is still down.
-    const p = derivePrompts(input({
-      cards: [card()],
-      stoppages: [stoppage({ jobCardId: 1, voidedAt: iso('09:30') })],
-    }))
-    expect(p.map(x => x.kind)).toEqual(['log_breakdown'])
-  })
-
-  it('does not offer a closed card', () => {
-    for (const status of ['complete', 'cancelled']) {
-      expect(derivePrompts(input({ cards: [card({ status })] }))).toEqual([])
+  it('stops asking once a supervisor has signed either way', () => {
+    for (const verdict of ['confirmed', 'disputed'] as const) {
+      const p = derivePrompts(input({
+        stoppages: [stoppage({ attestation: { ...signed, verdict } })],
+      }))
+      expect(p, verdict).toEqual([])
     }
   })
 
-  it('stays dismissed once the operator says it is not their line', () => {
-    // An area can hold machines that were not stopping this line. Re-asking
-    // every poll is how a prompt becomes something operators tap through blind.
-    const p = derivePrompts(input({ cards: [card()], dismissedCardIds: new Set([1]) }))
-    expect(p).toEqual([])
-  })
-})
-
-describe('derivePrompts — closing a stoppage when the card is done', () => {
-  const done = card({ status: 'complete', completedAt: iso('10:30') })
-
-  it('offers to close an open stoppage at the card completion time', () => {
+  it('is NOT dismissable — it is the state of the sheet, not a suggestion', () => {
+    // There is no dismissed key for it, so passing every kind changes nothing.
     const p = derivePrompts(input({
-      cards: [done],
-      stoppages: [stoppage({ jobCardId: 1 })],
+      stoppages: [stoppage()],
+      dismissedKinds: new Set<PromptKind>(['confirm_with_supervisor', 'log_deep_clean', 'still_open']),
     }))
-    expect(p).toHaveLength(1)
-    expect(p[0].kind).toBe('close_stoppage')
-    expect(p[0].closeAt).toBe(iso('10:30'))
-    expect(p[0].stoppageId).toBe('s1')
-    expect(p[0].urgency).toBe('high')
+    expect(p.map(x => x.kind)).toEqual(['confirm_with_supervisor'])
   })
 
-  it('says nothing when the stoppage is already closed', () => {
-    const p = derivePrompts(input({
-      cards: [done],
-      stoppages: [stoppage({ jobCardId: 1, endedAt: iso('10:25') })],
-    }))
+  it('stops asking for a voided breakdown', () => {
+    const p = derivePrompts(input({ stoppages: [stoppage({ voidedAt: iso('09:30') })] }))
     expect(p).toEqual([])
   })
 
-  it('says nothing while the card is still open', () => {
-    const p = derivePrompts(input({
-      cards: [card({ status: 'in_progress' })],
-      stoppages: [stoppage({ jobCardId: 1 })],
-    }))
-    expect(p).toEqual([])
+  it('asks for a breakdown that is still running, not only a closed one', () => {
+    // A supervisor can confirm the line is down before it comes back up.
+    expect(derivePrompts(input({ stoppages: [stoppage({ endedAt: null })] }))).toHaveLength(1)
+    expect(derivePrompts(input({ stoppages: [stoppage({ endedAt: iso('10:00') })] }))).toHaveLength(1)
   })
 
-  it('does not ask the operator to guess when the card has no completion time', () => {
-    // A card marked complete with no timestamp gives nothing to close at.
-    const p = derivePrompts(input({
-      cards: [card({ status: 'complete', completedAt: null })],
-      stoppages: [stoppage({ jobCardId: 1 })],
-    }))
-    expect(p).toEqual([])
+  it('asks for no other kind', () => {
+    // Only breakdown is attested. Asking for a supervisor on a tea break would
+    // make the signature a reflex.
+    for (const kind of ['tea', 'lunch', 'deep_clean', 'maintenance', 'power',
+                        'it_system', 'no_material', 'quality_hold', 'other'] as StoppageKind[]) {
+      const p = derivePrompts(input({ stoppages: [stoppage({ kind })] }))
+      expect(p.filter(x => x.kind === 'confirm_with_supervisor'), kind).toEqual([])
+    }
   })
 
-  it('re-keys when maintenance revises the completion time', () => {
-    // The key carries completedAt so a revised time reaches the operator
-    // instead of being suppressed as "already seen".
-    const a = derivePrompts(input({ cards: [done], stoppages: [stoppage({ jobCardId: 1 })] }))
-    const b = derivePrompts(input({
-      cards: [card({ status: 'complete', completedAt: iso('11:00') })],
-      stoppages: [stoppage({ jobCardId: 1 })],
+  it('asks once per unsigned breakdown', () => {
+    const p = derivePrompts(input({
+      stoppages: [stoppage({ id: 'a' }), stoppage({ id: 'b', startedAt: iso('11:00') })],
     }))
-    expect(a[0].key).not.toBe(b[0].key)
+    expect(p.map(x => x.stoppageId)).toEqual(['a', 'b'])
   })
 })
 
@@ -175,6 +124,8 @@ describe('derivePrompts — the Tuesday deep clean', () => {
   })
 
   it('stays dismissed when the operator says there was no deep clean', () => {
+    // A week where the clean happened on Wednesday must not nag all shift, and
+    // must never block the submission.
     const p = derivePrompts(input({
       date: TUE, shift: 'morning',
       dismissedKinds: new Set<PromptKind>(['log_deep_clean']),
@@ -185,64 +136,59 @@ describe('derivePrompts — the Tuesday deep clean', () => {
 
 describe('derivePrompts — still running at sign-off', () => {
   it('is silent about an open stoppage mid-shift', () => {
-    const p = derivePrompts(input({ stoppages: [stoppage()], atSignOff: false }))
+    const p = derivePrompts(input({ stoppages: [stoppage({ kind: 'lunch' })], atSignOff: false }))
     expect(p).toEqual([])
   })
 
-  it('flags an open stoppage at sign-off', () => {
-    const p = derivePrompts(input({ stoppages: [stoppage()], atSignOff: true }))
+  it('flags an open stoppage at sign-off, naming the kind', () => {
+    const p = derivePrompts(input({ stoppages: [stoppage({ kind: 'it_system' })], atSignOff: true }))
     expect(p.map(x => x.kind)).toEqual(['still_open'])
+    expect(p[0].title).toContain('System / IT down')
     expect(p[0].stoppageId).toBe('s1')
   })
 
-  it('does not double up with a close_stoppage prompt for the same stoppage', () => {
+  it('says nothing about a closed stoppage', () => {
     const p = derivePrompts(input({
-      cards: [card({ status: 'complete', completedAt: iso('10:30') })],
-      stoppages: [stoppage({ jobCardId: 1 })],
-      atSignOff: true,
+      stoppages: [stoppage({ kind: 'lunch', endedAt: iso('13:30') })], atSignOff: true,
     }))
-    expect(p.map(x => x.kind)).toEqual(['close_stoppage'])
+    expect(p).toEqual([])
   })
 
   it('ignores a voided open stoppage', () => {
     const p = derivePrompts(input({
-      stoppages: [stoppage({ voidedAt: iso('10:00') })], atSignOff: true,
+      stoppages: [stoppage({ kind: 'lunch', voidedAt: iso('10:00') })], atSignOff: true,
     }))
     expect(p).toEqual([])
   })
+
+  it('sits alongside the confirmation prompt for the same breakdown', () => {
+    // Two different asks: sign it, and close it. Both are true.
+    const p = derivePrompts(input({ stoppages: [stoppage()], atSignOff: true }))
+    expect(p.map(x => x.kind)).toEqual(['confirm_with_supervisor', 'still_open'])
+  })
 })
 
-describe('derivePrompts — determinism', () => {
-  it('returns identical prompts for identical input, so polling does not flicker', () => {
-    const i = input({ cards: [card(), card({ id: 2, workflow: 'planned' })], date: TUE })
+describe('derivePrompts — determinism and order', () => {
+  it('returns identical prompts for identical input, so nothing flickers', () => {
+    const i = input({ stoppages: [stoppage()], date: TUE, atSignOff: true })
     expect(derivePrompts(i)).toEqual(derivePrompts(i))
   })
 
-  it('orders by urgency then key, not by input order', () => {
-    const a = derivePrompts(input({
-      cards: [card({ id: 7, workflow: 'planned' }), card({ id: 3 })], date: TUE,
+  it('puts the high-urgency ask first regardless of input order', () => {
+    const p = derivePrompts(input({
+      date: TUE, shift: 'morning',
+      stoppages: [stoppage({ kind: 'lunch', id: 'z' }), stoppage({ id: 'a' })],
+      atSignOff: true,
     }))
-    expect(a[0].urgency).toBe('high')
-    expect(a.map(p => p.key)).toEqual([
-      'log_breakdown:3', 'log_breakdown:7', 'log_deep_clean',
-    ])
-  })
-})
-
-describe('panelCards', () => {
-  it('puts open cards first, then newest first within each group', () => {
-    const rows = [
-      card({ id: 1, status: 'complete', raisedAt: iso('11:00') }),
-      card({ id: 2, status: 'in_progress', raisedAt: iso('08:00') }),
-      card({ id: 3, status: 'raised', raisedAt: iso('10:00') }),
-      card({ id: 4, status: 'cancelled', raisedAt: iso('07:00') }),
-    ]
-    expect(panelCards(rows).map(c => c.id)).toEqual([3, 2, 1, 4])
+    expect(p[0].urgency).toBe('high')
+    expect(p[0].kind).toBe('confirm_with_supervisor')
   })
 
-  it('does not mutate its input', () => {
-    const rows = [card({ id: 1, status: 'complete' }), card({ id: 2 })]
-    panelCards(rows)
-    expect(rows.map(c => c.id)).toEqual([1, 2])
+  it('reads nothing from the maintenance schema', () => {
+    // Guard against the polling design coming back: the input carries stoppages
+    // and the date only. If a `cards` field reappears here, so has the latency
+    // and the backwards direction it brought with it.
+    const keys = Object.keys(input()).sort()
+    expect(keys).toEqual(['atSignOff', 'date', 'dismissedKinds', 'shift', 'stoppages'])
   })
 })

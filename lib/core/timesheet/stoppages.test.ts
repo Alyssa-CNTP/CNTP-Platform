@@ -1,10 +1,11 @@
 import { describe, it, expect } from 'vitest'
 import {
-  STOPPAGE_KINDS, STOPPAGE_META, DOWNTIME_KINDS, isStoppageKind,
+  STOPPAGE_KINDS, RETIRED_STOPPAGE_KINDS, ALL_STOPPAGE_KINDS,
+  STOPPAGE_META, DOWNTIME_KINDS, isStoppageKind, isRetiredKind, notifyTeamFor,
   isLive, isOpen, stoppageMinutes, mergeIntervals, stoppageMinutesInWindow,
   workedMinutes, downtimeMinutes, scheduledStoppages, deepCleanDue,
   toSnapshotBreaks, validateStoppages,
-  needsAttestation, pendingAttestations, pendingNotifications,
+  needsAttestation, pendingAttestations, pendingNotifications, attestationState,
   type Attestation, type Stoppage, type StoppageKind,
 } from './stoppages'
 
@@ -26,6 +27,7 @@ function st(
     machine: null, area: null, jobCardId: null,
     source: 'operator', voidedAt: null,
     attestation: null, notifiedAt: null,
+    supervisorRequestedAt: null, supervisorRequestCount: 0,
     ...extra,
   }
 }
@@ -40,49 +42,107 @@ const signed = (verdict: 'confirmed' | 'disputed'): Attestation => ({
 // ── kinds ────────────────────────────────────────────────────────────────────
 
 describe('stoppage kinds', () => {
-  it('covers every kind the request named', () => {
-    // Deep clean and breakdown are the two the old BreakType union was missing;
-    // an operator had to file both as 'other' with a free-text note, which is
+  it('covers the mechanical causes the old union was missing', () => {
+    // Deep clean and breakdown were both absent from the old BreakType union;
+    // an operator had to file them as 'other' with a free-text note, which is
     // why neither could ever reach a KPI.
     expect(STOPPAGE_KINDS).toContain('deep_clean')
     expect(STOPPAGE_KINDS).toContain('breakdown')
     expect(STOPPAGE_KINDS).toContain('maintenance')
   })
 
+  it('covers the NON-mechanical causes too', () => {
+    // A line stopped by the system being down produced exactly as little as one
+    // stopped by a bearing. Leaving these off does not shorten the list — it
+    // routes every one of them into 'other', where nothing can analyse them.
+    expect(STOPPAGE_KINDS).toContain('it_system')
+    expect(STOPPAGE_KINDS).toContain('power')
+    expect(STOPPAGE_KINDS).toContain('no_material')
+    expect(STOPPAGE_KINDS).toContain('quality_hold')
+  })
+
+  it('no longer offers changeover, but still renders it', () => {
+    // Retired pending a rebuild. Rows already carry it (historic breaks, and
+    // anything the backfill imports), so dropping it from the type would leave
+    // STOPPAGE_META[kind] undefined on a live capture screen.
+    expect(STOPPAGE_KINDS).not.toContain('changeover')
+    expect(RETIRED_STOPPAGE_KINDS).toContain('changeover')
+    expect(ALL_STOPPAGE_KINDS).toContain('changeover')
+    expect(STOPPAGE_META.changeover).toBeDefined()
+    expect(isRetiredKind('changeover')).toBe(true)
+    expect(isRetiredKind('breakdown')).toBe(false)
+  })
+
   it('has metadata for every kind — no unhandled kind can be added silently', () => {
-    for (const k of STOPPAGE_KINDS) {
+    for (const k of ALL_STOPPAGE_KINDS) {
       expect(STOPPAGE_META[k], k).toBeDefined()
       expect(STOPPAGE_META[k].label.length).toBeGreaterThan(0)
     }
-    expect(Object.keys(STOPPAGE_META).sort()).toEqual([...STOPPAGE_KINDS].sort())
+    expect(Object.keys(STOPPAGE_META).sort()).toEqual([...ALL_STOPPAGE_KINDS].sort())
   })
 
-  it('counts only unplanned kinds as machine downtime', () => {
-    // A Tuesday deep clean is not a machine fault. Folding planned cleaning
-    // into downtime would make every Tuesday morning read as a breakdown.
-    expect([...DOWNTIME_KINDS].sort()).toEqual(['breakdown', 'maintenance'])
-    expect(STOPPAGE_META.deep_clean.downtime).toBe(false)
+  it('counts every unplanned production stop as downtime, and no break', () => {
+    expect([...DOWNTIME_KINDS].sort()).toEqual([
+      'breakdown', 'it_system', 'maintenance', 'no_material', 'power', 'quality_hold',
+    ])
+    // Breaks are what the shift is designed around; counting them would make
+    // every shift look 10% broken.
     expect(STOPPAGE_META.tea.downtime).toBe(false)
+    expect(STOPPAGE_META.lunch.downtime).toBe(false)
+    // A Tuesday deep clean is not a fault.
+    expect(STOPPAGE_META.deep_clean.downtime).toBe(false)
+    // Planned maintenance IS planned AND IS downtime — two different questions,
+    // and this is the case that proves they are not the same field.
+    expect(STOPPAGE_META.maintenance.planned).toBe(true)
+    expect(STOPPAGE_META.maintenance.downtime).toBe(true)
+  })
+
+  it('does not treat the catch-all as downtime', () => {
+    // 'other' is the bucket for whatever the list failed to anticipate, so it
+    // cannot be trusted to mean the line was down. A recurring 'other' in the
+    // shift reports is the signal to add a kind, not to reclassify this one.
+    expect(STOPPAGE_META.other.downtime).toBe(false)
+    expect(STOPPAGE_META.other.notify).toBeNull()
   })
 
   it('requires a description exactly where one is meaningful', () => {
-    expect(STOPPAGE_META.breakdown.needsNotes).toBe(true)
-    expect(STOPPAGE_META.maintenance.needsNotes).toBe(true)
-    // Tea and lunch are scheduled and pre-filled — demanding a note there is
-    // the hidden-field validation trap that blocks a sign-off nobody can clear.
+    const needs = ['breakdown', 'maintenance', 'power', 'it_system',
+                   'no_material', 'quality_hold', 'other'] as const
+    for (const k of needs) expect(STOPPAGE_META[k].needsNotes, k).toBe(true)
+    // Tea, lunch and the deep clean are scheduled and pre-filled — demanding a
+    // note there is the hidden-field validation trap that blocks a sign-off
+    // nobody can clear.
     expect(STOPPAGE_META.tea.needsNotes).toBe(false)
     expect(STOPPAGE_META.lunch.needsNotes).toBe(false)
     expect(STOPPAGE_META.deep_clean.needsNotes).toBe(false)
   })
 
-  it('asks for a machine on the kinds a per-machine KPI needs one for', () => {
-    expect(STOPPAGE_META.breakdown.needsMachine).toBe(true)
-    expect(STOPPAGE_META.maintenance.needsMachine).toBe(true)
-    expect(STOPPAGE_META.tea.needsMachine).toBe(false)
+  it('routes each notification to the team that can actually act', () => {
+    expect(STOPPAGE_META.breakdown.notify).toBe('maintenance')
+    expect(STOPPAGE_META.power.notify).toBe('maintenance')
+    // IT, not maintenance: paging a fitter for a network outage wastes the one
+    // person who could have fixed it.
+    expect(STOPPAGE_META.it_system.notify).toBe('it')
+    // Nothing to fix — an upstream line or the store has to move.
+    expect(STOPPAGE_META.no_material.notify).toBe('supervisor')
+    expect(STOPPAGE_META.quality_hold.notify).toBe('supervisor')
+    // Breaks are not news. Notifying on them is how the notifications that
+    // matter get ignored.
+    expect(STOPPAGE_META.tea.notify).toBeNull()
+    expect(STOPPAGE_META.lunch.notify).toBeNull()
+    expect(STOPPAGE_META.deep_clean.notify).toBeNull()
+  })
+
+  it('asks a supervisor to sign a breakdown, and only a breakdown', () => {
+    for (const k of ALL_STOPPAGE_KINDS) {
+      expect(STOPPAGE_META[k].attested, k).toBe(k === 'breakdown')
+    }
   })
 
   it('guards the kind at a boundary', () => {
     expect(isStoppageKind('breakdown')).toBe(true)
+    expect(isStoppageKind('it_system')).toBe(true)
+    expect(isStoppageKind('changeover')).toBe(true)   // retired, but real
     expect(isStoppageKind('deep clean')).toBe(false)
     expect(isStoppageKind(undefined)).toBe(false)
     expect(isStoppageKind(7)).toBe(false)
@@ -251,15 +311,20 @@ describe('workedMinutes', () => {
 })
 
 describe('downtimeMinutes', () => {
-  it('counts only breakdown and maintenance', () => {
+  it('counts every downtime kind and no break', () => {
     const s = [
-      st('breakdown', '09:00', '10:00'),   // 60
-      st('maintenance', '11:00', '11:30'), // 30
-      st('deep_clean', '07:00', '08:00'),  // planned — not downtime
-      st('lunch', '13:00', '13:30'),
-      st('changeover', '14:00', '14:30'),
+      st('breakdown', '09:00', '10:00'),    // 60
+      st('maintenance', '11:00', '11:30'),  // 30
+      st('it_system', '11:30', '11:45'),    // 15
+      st('power', '12:00', '12:30'),        // 30
+      st('no_material', '14:00', '14:20'),  // 20
+      st('quality_hold', '15:00', '15:10'), // 10
+      st('deep_clean', '07:00', '08:00'),   // planned clean — not downtime
+      st('lunch', '13:00', '13:30'),        // break
+      st('other', '15:30', '15:40'),        // unclassified — not downtime
+      st('changeover', '15:45', '15:50'),   // retired — not downtime
     ]
-    expect(downtimeMinutes(s)).toBe(90)
+    expect(downtimeMinutes(s)).toBe(165)
   })
 
   it('includes an open breakdown up to now', () => {
@@ -307,7 +372,7 @@ describe('needsAttestation', () => {
   it('is false for every other kind', () => {
     // Making a supervisor sign for a tea break turns the signature into a
     // rubber stamp, and the one that matters gets signed as reflexively.
-    for (const k of STOPPAGE_KINDS) {
+    for (const k of ALL_STOPPAGE_KINDS) {
       if (k === 'breakdown') continue
       expect(needsAttestation(st(k, '09:00', '10:00')), k).toBe(false)
     }
@@ -345,14 +410,59 @@ describe('pendingAttestations', () => {
   })
 })
 
+describe('attestationState', () => {
+  it('tells a breakdown nobody called about apart from one that was ignored', () => {
+    // The distinction the supervisor-call column exists for. Both render as
+    // "awaiting supervisor" if you only look at the verdict, and a report that
+    // conflates them blames the operator every time — they are the one whose
+    // sheet is incomplete.
+    expect(attestationState(st('breakdown', '09:00', '10:00'))).toBe('not_called')
+    expect(attestationState(st('breakdown', '09:00', '10:00', {
+      supervisorRequestedAt: iso('10:05'), supervisorRequestCount: 3,
+    }))).toBe('ignored')
+  })
+
+  it('is signed once a verdict exists, called or not', () => {
+    expect(attestationState(st('breakdown', '09:00', '10:00', {
+      attestation: signed('confirmed'),
+    }))).toBe('signed')
+    // Disputed is still signed — somebody looked and made a decision.
+    expect(attestationState(st('breakdown', '09:00', '10:00', {
+      attestation: signed('disputed'), supervisorRequestedAt: iso('10:05'),
+    }))).toBe('signed')
+  })
+
+  it('is n/a for every kind that needs no signature', () => {
+    for (const k of ALL_STOPPAGE_KINDS) {
+      if (k === 'breakdown') continue
+      expect(attestationState(st(k, '09:00', '10:00')), k).toBe('n/a')
+    }
+  })
+
+  it('is n/a for a voided breakdown — it is off the sheet', () => {
+    expect(attestationState(st('breakdown', '09:00', '10:00', {
+      voidedAt: iso('10:01'),
+    }))).toBe('n/a')
+  })
+})
+
 describe('pendingNotifications', () => {
-  it('returns breakdowns the maintenance manager has not been told about', () => {
+  it('returns the stoppages whose team has not been told', () => {
     const rows = [
       st('breakdown', '09:00', '10:00'),
-      st('breakdown', '11:00', '11:30', { notifiedAt: iso('11:01') }),
-      st('maintenance', '12:00', '12:30'),  // planned — maintenance already knows
+      st('breakdown', '11:00', '11:30', { notifiedAt: iso('11:01') }),  // already sent
+      st('tea', '12:00', '12:30'),      // nobody to page
+      st('other', '13:00', '13:30'),    // a cause nobody named is not a page
+      st('it_system', '14:00', null),
     ]
-    expect(pendingNotifications(rows).map(s => s.startedAt)).toEqual([iso('09:00')])
+    expect(pendingNotifications(rows).map(s => s.startedAt)).toEqual([iso('09:00'), iso('14:00')])
+  })
+
+  it('routes by kind', () => {
+    expect(notifyTeamFor(st('breakdown', '09:00', null))).toBe('maintenance')
+    expect(notifyTeamFor(st('it_system', '09:00', null))).toBe('it')
+    expect(notifyTeamFor(st('no_material', '09:00', null))).toBe('supervisor')
+    expect(notifyTeamFor(st('tea', '09:00', null))).toBeNull()
   })
 
   it('stops returning one once notifiedAt is set, so a reload cannot re-send', () => {

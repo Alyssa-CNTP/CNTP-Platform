@@ -256,7 +256,8 @@ export interface StoppageLine {
   sectionId: string
   sectionName: string
   operatorName: string
-  kind: string                 // tea | lunch | deep_clean | breakdown | maintenance | changeover | other
+  /** See lib/core/timesheet/stoppages.ts for the full set. */
+  kind: string
   kindLabel: string
   startedAt: string
   endedAt: string | null       // null = was still running at the end of the shift
@@ -269,24 +270,38 @@ export interface StoppageLine {
   /** A supervisor's verdict on a breakdown. null = nobody has signed it yet. */
   verdict: 'confirmed' | 'disputed' | null
   attestedBy: string | null
+  /** When the operator last asked a supervisor to come and confirm it. Null
+   *  means they never did — which is a different problem from asking and being
+   *  ignored, and the report has to be able to tell them apart. */
+  supervisorRequestedAt: string | null
 }
 
 /**
- * Downtime for one machine on this shift, from the stoppage ledger.
+ * Downtime for one LINE on this shift, from the stoppage ledger.
  *
- * This is the "analysis of the machine alone" figure: a machine's own record,
- * not its line's. Disputed breakdowns are excluded; unsigned ones are counted
- * and reported separately in `unattestedMinutes`, so a reader can see how much
- * of the total nobody has confirmed yet.
+ * Keyed on the line, not on a machine, because the operator is never asked
+ * which machine stopped — the section is the production order they have open,
+ * so it is known, and asking again is a question with a wrong answer available.
+ * `area` is the maintenance module's own name for the same physical place, so
+ * a downtime figure and a job card can be talked about in the same words.
+ *
+ * Disputed breakdowns are excluded; unsigned ones are counted and reported
+ * separately in `unattestedMinutes`, so a reader can see how much of the total
+ * nobody has confirmed yet.
  */
-export interface MachineDowntimeLine {
-  machine: string
+export interface LineDowntimeLine {
   sectionId: string
   sectionName: string
+  /** The maintenance area, when the section maps to one. */
+  area: string | null
   events: number
   minutes: number
   unattestedMinutes: number
   stillOpen: number
+  /** Minutes per stoppage kind — what actually stopped this line, and for how
+   *  long. A line losing two hours to `no_material` is a different problem from
+   *  one losing two hours to `breakdown`, and a single total hides that. */
+  byKind: { kind: string; label: string; minutes: number; events: number }[]
   jobCardIds: number[]
 }
 
@@ -333,8 +348,8 @@ export interface ShiftReport {
   /** Every stoppage the operators logged. Optional — a payload frozen before
    *  the stoppage ledger existed has none, and must still render. */
   stoppages?: StoppageLine[]
-  /** Per-machine downtime, for machine-level analysis. Optional, same reason. */
-  machineDowntime?: MachineDowntimeLine[]
+  /** Per-line downtime, broken down by cause. Optional, same reason. */
+  lineDowntime?: LineDowntimeLine[]
   checks: ChecksLine[]
   waste: WasteLine[]
   notes: ReportNote[]

@@ -7,13 +7,13 @@ import { format, parseISO, differenceInCalendarDays } from 'date-fns'
 import {
   ChevronLeft, Loader2, CheckCircle2, AlertTriangle, Users, Lock,
   ClipboardList, PenLine, Save, Sparkles, Info, Plus, Gauge, HelpCircle,
-  FileText, Check, ArrowRight, Scale, Clock,
+  FileText, Check, ArrowRight, Scale, Clock, OctagonAlert,
 } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
 import { SignaturePad } from '@/components/production/capture/SignaturePad'
 import { TimesheetConfirm } from '@/components/production/capture/TimesheetConfirm'
-import { OperatorTimesheet } from '@/features/operator-timesheet'
+import { OperatorTimesheet, StoppageQuickLog } from '@/features/operator-timesheet'
 import {
   SievingCapture, emptySievingData, sievingTotals,
   type SievingData, type Shift,
@@ -67,7 +67,7 @@ import { MessageSquare } from 'lucide-react'
 import { productionShiftNow, SHIFT_LABEL } from '@/lib/production/shifts'
 import { n } from '@/lib/core/num'
 
-type Tab = 'production' | 'checks' | 'cleaning' | 'timesheet' | 'overview' | 'signoff' | 'messages'
+type Tab = 'production' | 'checks' | 'cleaning' | 'overview' | 'signoff' | 'messages'
 
 // What the operator copies to IT when a structured row write fails. Postgres puts
 // the constraint name in `message` but the offending key in `details` ("Key
@@ -79,17 +79,21 @@ const rowErrText = (e: { message?: string; details?: string | null; code?: strin
 // The capture screen reads as the real-world process the operators follow:
 // machine checks → capture (debag/bag) → cleaning → overview → sign-off.
 // Messages sits outside the flow (header icon) since it isn't a production step.
-// Timesheet sits between Cleaning and Overview because it is used THROUGHOUT the
-// shift, not at the end: an operator logs a breakdown while the line is down, and
-// a supervisor signs it there. It used to live inside Sign-off, which is why
-// stoppages were only ever recorded once the shift was already over.
+// The timesheet lives on SIGN-OFF, not on a step of its own.
+//
+// It briefly had its own tab, on the reasoning that a live tracker should not be
+// buried in the last step. The practical answer is the other way round: the
+// timesheet runs all shift but is only ever FINALISED at the end, which is
+// exactly what Sign-off is, and a seventh step is one more thing to walk past.
+// The one thing that genuinely cannot wait for Sign-off is a stoppage happening
+// now — that is what the "Production stopped" button in the header is for, and
+// it costs the capture screen nothing until it is tapped.
 const STEPS: { id: Tab; label: string; icon: typeof Gauge }[] = [
-  { id: 'checks',     label: 'Checks',    icon: Gauge },
-  { id: 'production', label: 'Capture',   icon: ClipboardList },
-  { id: 'cleaning',   label: 'Cleaning',  icon: Sparkles },
-  { id: 'timesheet',  label: 'Timesheet', icon: Clock },
-  { id: 'overview',   label: 'Overview',  icon: FileText },
-  { id: 'signoff',    label: 'Sign-off',  icon: PenLine },
+  { id: 'checks',     label: 'Checks',   icon: Gauge },
+  { id: 'production', label: 'Capture',  icon: ClipboardList },
+  { id: 'cleaning',   label: 'Cleaning', icon: Sparkles },
+  { id: 'overview',   label: 'Overview', icon: FileText },
+  { id: 'signoff',    label: 'Sign-off', icon: PenLine },
 ]
 
 // Big Blender and Small Blender share one capture component (BlenderCapture) —
@@ -376,15 +380,19 @@ function CaptureScreen() {
   const [tab, setTab]             = useState<Tab>(() => {
     const t = sp.get('tab')
     if (t === 'checks' && !hasChecks) return 'production'   // stale ?tab=checks on a section with no checks
-    return (['production', 'checks', 'cleaning', 'timesheet', 'overview', 'signoff', 'messages'] as const).includes(t as Tab) ? (t as Tab) : 'production'
+    return (['production', 'checks', 'cleaning', 'overview', 'signoff', 'messages'] as const).includes(t as Tab) ? (t as Tab) : 'production'
   })
-  // Lifted out of SignOff: the timesheet is its own tab now, so the sign-off
-  // step has to be told whether it was confirmed rather than owning the widget.
+  // The timesheet is mounted by SignOff, but these two live here: the header's
+  // stoppage button and the Sign-off step both need them, and lifting them
+  // is also what keeps the timesheet's own loader off the sign-off name input
+  // (the cause of the stoppage-loss bug — see features/operator-timesheet).
   const [tsConfirmed, setTsConfirmed] = useState(false)
-  // Breakdowns waiting on a supervisor's signature — badges the Timesheet tab
-  // so a supervisor walking past a tablet can see there is something to sign
-  // without opening every tab.
+  // Breakdowns waiting on a supervisor's signature — badges the Sign-off step
+  // so a supervisor walking past a tablet can see there is something to sign.
   const [pendingAttestations, setPendingAttestations] = useState(0)
+  // The mid-shift "Production stopped" dialog. Closed by default and reads
+  // nothing until opened, so the capture screen pays nothing for it.
+  const [stoppageOpen, setStoppageOpen] = useState(false)
   const [variantMismatch, setVariantMismatch] = useState<string | null>(null)
   const [saving, setSaving]       = useState(false)
   const [saved, setSaved]         = useState(false)
@@ -1939,6 +1947,20 @@ function CaptureScreen() {
         />
       )}
 
+      {/* Mid-shift stoppage logging. Rendered always, mounted closed — it
+          performs no read and starts no timer until `open` goes true. */}
+      {flags.operatorTimesheet && (
+        <FeatureBoundary name="Production stopped" silent>
+          <StoppageQuickLog
+            open={stoppageOpen} onClose={() => setStoppageOpen(false)}
+            sessionId={sessionId}
+            operatorName={verifiedOp ? (verifiedOp.display_name || verifiedOp.name) : (opNames[0] ?? '')}
+            operatorId={verifiedOp?.user_id ?? user?.id ?? null}
+            sectionId={sectionId} date={dateParam} shift={shift}
+          />
+        </FeatureBoundary>
+      )}
+
       {/* Header — section-tinted band */}
       <div className="flex items-center gap-3 px-4 pt-5 pb-4 flex-shrink-0 border-b border-stone-100"
         style={{ background: `linear-gradient(180deg, ${meta.colorHex}12, transparent)` }}>
@@ -1957,6 +1979,18 @@ function CaptureScreen() {
             )}
           </p>
         </div>
+        {/* "Production stopped" — the one thing that cannot wait for Sign-off,
+            where the rest of the timesheet is finalised. A stoppage's start time
+            is only accurate if it is recorded when the machine stops.
+            Costs this screen nothing until it is tapped: the dialog reads
+            nothing on mount and there is no polling anywhere in the feature. */}
+        {!cleanerActor && !locked && flags.operatorTimesheet && (
+          <button onClick={() => setStoppageOpen(true)} title="Log that production has stopped"
+            className="flex items-center gap-1.5 px-2.5 py-2 rounded-lg shrink-0 border border-err/30 bg-err/5 text-err hover:bg-err/10 transition-colors">
+            <OctagonAlert size={16} />
+            <span className="hidden sm:inline font-semibold text-[12px]">Stopped</span>
+          </button>
+        )}
         {!cleanerActor && (
           <button onClick={() => setCleanerGateOpen(true)} title="Cleaner sign-in"
             className="p-2 rounded-lg shrink-0 text-stone-400 hover:bg-black/5 hover:text-stone-600">
@@ -2026,16 +2060,13 @@ function CaptureScreen() {
           const isActive = tab === s.id
           // Checks reflects real state (signed?) so its tick means "checks done",
           // not just "we've moved past this tab".
-          // Timesheet, like Checks, reflects real state rather than "we've moved
-          // past this tab" — its tick means the operator confirmed it.
-          const isDone   = s.id === 'checks' ? checksSigned
-            : s.id === 'timesheet' ? tsConfirmed
-            : activeIdxStep > i
+          // Checks reflects real state rather than "we've moved past this tab".
+          const isDone   = s.id === 'checks' ? checksSigned : activeIdxStep > i
           const Icon = s.icon
           // A breakdown waiting on a supervisor is the one thing on this screen
           // somebody OTHER than the operator has to act on, so it gets a dot
           // rather than waiting to be found.
-          const needsSignature = s.id === 'timesheet' && pendingAttestations > 0
+          const needsSignature = s.id === 'signoff' && pendingAttestations > 0
           return (
             <div key={s.id} className="flex items-center shrink-0">
               <button onClick={() => setTab(s.id)} className="flex items-center gap-2 group">
@@ -2445,41 +2476,12 @@ function CaptureScreen() {
             </>
           )}
 
-          {/* Timesheet — a LIVE tracker, mounted in its own tab so stoppages are
-              logged while they are happening rather than reconstructed at
-              sign-off. One mount only: two would double-poll maintenance and
-              could write the same ledger from two copies of state. */}
-          {tab === 'timesheet' && (
-            <FeatureBoundary name="Operator timesheet">
-              {flags.operatorTimesheet ? (
-                <OperatorTimesheet
-                  sessionId={sessionId}
-                  operatorName={verifiedOp ? (verifiedOp.display_name || verifiedOp.name) : (opNames[0] ?? '')}
-                  operatorId={verifiedOp?.user_id ?? user?.id ?? null}
-                  sectionId={sectionId} date={dateParam} shift={shift}
-                  locked={locked || status === 'submitted'}
-                  canAttest={canApprove}
-                  onConfirmedChange={setTsConfirmed}
-                  onPendingAttestationsChange={setPendingAttestations}
-                />
-              ) : (
-                <TimesheetConfirm
-                  sessionId={sessionId}
-                  operatorName={verifiedOp ? (verifiedOp.display_name || verifiedOp.name) : (opNames[0] ?? '')}
-                  operatorId={verifiedOp?.user_id ?? user?.id ?? null}
-                  sectionId={sectionId} date={dateParam} shift={shift}
-                  locked={locked || status === 'submitted'}
-                  onConfirmedChange={setTsConfirmed}
-                />
-              )}
-            </FeatureBoundary>
-          )}
-
           {tab === 'signoff' && (
             <SignOff
               status={status} locked={locked} canApprove={canApprove}
-              timesheetConfirmed={tsConfirmed} onOpenTimesheet={() => setTab('timesheet')}
-              pendingAttestations={pendingAttestations}
+              onTimesheetConfirmed={setTsConfirmed}
+              onPendingAttestations={setPendingAttestations}
+              useLiveTimesheet={flags.operatorTimesheet}
               operatorName={verifiedOp ? (verifiedOp.display_name || verifiedOp.name) : (opNames[0] ?? '')}
               sessionId={sessionId} operatorId={verifiedOp?.user_id ?? user?.id ?? null}
               sectionId={sectionId} date={dateParam} shift={shift}
@@ -2519,12 +2521,12 @@ function CaptureScreen() {
 }
 
 // ── Sign-off tab ──────────────────────────────────────────────────────────────
-function SignOff({ status, locked, canApprove, timesheetConfirmed, onOpenTimesheet, pendingAttestations, operatorName, sessionId, operatorId, sectionId, date, shift, comments, onComments, hasRun, endOfRun, onEndOfRun, onSign, onSubmit, onApprove, submitting, capturedCodes }: {
+function SignOff({ status, locked, canApprove, onTimesheetConfirmed, onPendingAttestations, useLiveTimesheet, operatorName, sessionId, operatorId, sectionId, date, shift, comments, onComments, hasRun, endOfRun, onEndOfRun, onSign, onSubmit, onApprove, submitting, capturedCodes }: {
   status: string; locked: boolean; canApprove: boolean; operatorName: string
-  /** Confirmed on the Timesheet tab — this step only reports it. */
-  timesheetConfirmed: boolean
-  onOpenTimesheet: () => void
-  pendingAttestations: number
+  /** Reported UP to the page, which badges the stepper and gates submission. */
+  onTimesheetConfirmed: (v: boolean) => void
+  onPendingAttestations: (n: number) => void
+  useLiveTimesheet: boolean
   sessionId: string | null; operatorId: string | null; sectionId: string; date: string; shift: string
   comments: string; onComments: (v: string) => void
   hasRun: boolean; endOfRun: boolean; onEndOfRun: (v: boolean) => void
@@ -2534,7 +2536,7 @@ function SignOff({ status, locked, canApprove, timesheetConfirmed, onOpenTimeshe
 }) {
   const [opName, setOpName]   = useState(operatorName)
   const [opSig, setOpSig]     = useState(false)
-  const tsConfirmed = timesheetConfirmed
+  const [tsConfirmed, setTsConfirmed] = useState(false)
   const [codesConfirmed, setCodesConfirmed] = useState(false)
   const needsCodeConfirm = capturedCodes.length > 0
 
@@ -2551,38 +2553,33 @@ function SignOff({ status, locked, canApprove, timesheetConfirmed, onOpenTimeshe
           <span>Check your totals below, then sign your name and tap submit. Your supervisor approves and locks it after.</span>
         </div>
       )}
-      {/* The timesheet itself lives on its own tab — it is used all shift, not
-          only here. This step just reports whether it was confirmed and sends
-          the operator there. It is deliberately NOT mounted twice: the previous
-          version mounted it here and keyed its load effect on `opName` below,
-          so typing a name wiped every stoppage the operator had logged. */}
-      <div className="bg-white border border-stone-200 rounded-2xl p-4 flex items-center justify-between gap-3">
-        <div className="min-w-0">
-          <span className="text-[11px] font-semibold text-stone-500 uppercase tracking-wide flex items-center gap-1.5">
-            <Clock size={13} /> Timesheet
-          </span>
-          <p className="text-[12px] text-text-muted mt-0.5">
-            {tsConfirmed
-              ? 'Confirmed.'
-              : 'Not confirmed yet — check your hours and stoppages.'}
-            {pendingAttestations > 0 && (
-              <span className="text-warn">
-                {' '}{pendingAttestations} breakdown{pendingAttestations === 1 ? '' : 's'} awaiting a supervisor.
-              </span>
-            )}
-          </p>
-        </div>
-        {tsConfirmed ? (
-          <span className="inline-flex items-center gap-1.5 text-[11px] font-medium px-2.5 py-1 rounded-full bg-ok/10 text-ok shrink-0">
-            <CheckCircle2 size={13} /> Confirmed
-          </span>
+      {/* The timesheet, finalised here.
+          It is mounted with the operator name the SESSION carries, never with
+          `opName` from the input below. That distinction is the entire bug this
+          module was rebuilt for: the old component keyed its loader on the prop
+          it got from that input, so every keystroke re-derived the sheet and
+          wiped the operator's logged stoppages. Passing `opName` here would
+          reintroduce it exactly. */}
+      <FeatureBoundary name="Operator timesheet">
+        {useLiveTimesheet ? (
+          <OperatorTimesheet
+            sessionId={sessionId} operatorName={operatorName} operatorId={operatorId}
+            sectionId={sectionId} date={date} shift={shift}
+            locked={locked || status === 'submitted' || status === 'approved'}
+            atSignOff
+            canAttest={canApprove}
+            onConfirmedChange={v => { setTsConfirmed(v); onTimesheetConfirmed(v) }}
+            onPendingAttestationsChange={onPendingAttestations}
+          />
         ) : (
-          <button onClick={onOpenTimesheet}
-            className="shrink-0 px-3 py-2 rounded-xl border border-stone-200 bg-white text-[12px] font-semibold text-brand hover:bg-brand/5 transition-colors">
-            Open timesheet
-          </button>
+          <TimesheetConfirm
+            sessionId={sessionId} operatorName={operatorName} operatorId={operatorId}
+            sectionId={sectionId} date={date} shift={shift}
+            locked={locked || status === 'submitted' || status === 'approved'}
+            onConfirmedChange={v => { setTsConfirmed(v); onTimesheetConfirmed(v) }}
+          />
         )}
-      </div>
+      </FeatureBoundary>
 
       {/* Operator sign-off — only while still being captured (draft/new) */}
       {(status === 'new' || status === 'draft') && (
@@ -2602,11 +2599,7 @@ function SignOff({ status, locked, canApprove, timesheetConfirmed, onOpenTimeshe
           </div>
           {opSig && !tsConfirmed && (
             <p className="text-[12px] text-warn flex items-center gap-1.5 px-1">
-              <AlertTriangle size={13} />
-              <button onClick={onOpenTimesheet} className="underline text-left">
-                Confirm your timesheet
-              </button>
-              before submitting.
+              <AlertTriangle size={13} /> Confirm your timesheet above before submitting.
             </p>
           )}
           {opSig && tsConfirmed && (

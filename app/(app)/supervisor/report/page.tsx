@@ -182,7 +182,7 @@ function ShiftReportInner() {
           <MachineConfig report={report} />
           <Changeovers report={report} />
           <Stoppages report={report} />
-          <MachineDowntime report={report} />
+          <LineDowntime report={report} />
           <Breakdowns report={report} />
           <Checks report={report} />
           <Waste report={report} />
@@ -602,7 +602,7 @@ function Stoppages({ report }: { report: ShiftReport }) {
       hint={downtime.length
         ? `${hoursLabel(downtime.reduce((t, s) => t + s.minutes, 0))} of it machine downtime${unsigned ? ` · ${unsigned} unsigned` : ''}`
         : undefined}>
-      <Table head={['Time', 'Line', 'Who', 'Reason', 'Machine', 'For', 'Note', 'Signed']}>
+      <Table head={['Time', 'Line', 'Who', 'Reason', 'For', 'Note', 'Signed off']}>
         {rows.map(s => (
           <tr key={s.id}>
             <Td mono>
@@ -617,17 +617,24 @@ function Stoppages({ report }: { report: ShiftReport }) {
                 <span className="block text-[9px] font-normal text-text-muted">card #{s.jobCardId}</span>
               )}
             </Td>
-            <Td>{s.machine ?? '—'}</Td>
             <Td mono right className="font-semibold">
               {hoursLabel(s.minutes)}
               {!s.endedAt && <span className="block text-[9px] font-normal text-text-muted">to shift end</span>}
             </Td>
             <Td>{s.notes ?? '—'}</Td>
+            {/* An unsigned breakdown reads differently depending on whether
+                anyone was ever ASKED. "Nobody called" is the operator's to fix;
+                "asked 3x, still unsigned" is the supervisor's. A report that
+                shows both as "awaiting supervisor" blames the wrong person. */}
             <Td>
               {s.kind !== 'breakdown' ? <span className="text-text-muted">n/a</span>
                 : s.verdict === 'confirmed' ? <span className="text-ok">{s.attestedBy}</span>
                 : s.verdict === 'disputed' ? <span className="text-err">disputed · {s.attestedBy}</span>
-                : <span className="text-warn">awaiting supervisor</span>}
+                : s.supervisorRequestedAt
+                  ? <span className="text-err">
+                      called {sastTime(s.supervisorRequestedAt)} — not signed
+                    </span>
+                  : <span className="text-warn">nobody called</span>}
             </Td>
           </tr>
         ))}
@@ -637,35 +644,48 @@ function Stoppages({ report }: { report: ShiftReport }) {
 }
 
 /**
- * Downtime per machine — the machine's own record, not its line's.
+ * Downtime per LINE, split by cause.
  *
- * This is the figure for judging one machine over time: how often it stopped
- * and for how long, independent of which line it sits on or who was running it.
- * Disputed breakdowns are already excluded upstream; `unsigned` says how much
- * of the total nobody has confirmed yet, so the number is never quietly
- * presented as verified when it is not.
+ * Keyed on the line rather than a machine because the operator is never asked
+ * which machine stopped — the section is the production order they already have
+ * open. What replaces the machine column is the cause breakdown, which is the
+ * more useful cut anyway: two hours lost to `no_material` is a different
+ * problem, with a different owner, from two hours lost to `breakdown`.
+ *
+ * `unsigned` is shown separately so a total is never quietly presented as
+ * verified when nobody has signed it.
  */
-function MachineDowntime({ report }: { report: ShiftReport }) {
-  const rows = report.machineDowntime ?? []
+function LineDowntime({ report }: { report: ShiftReport }) {
+  const rows = report.lineDowntime ?? []
   if (rows.length === 0) return null
+  const total = rows.reduce((t, r) => t + r.minutes, 0)
   return (
-    <Section title="Downtime by machine" icon={Wrench} count={rows.length}
-      hint="Breakdown and maintenance stoppages only — planned cleaning is not downtime">
-      <Table head={['Machine', 'Line', 'Stoppages', 'Downtime', 'Unsigned', 'Job cards']}>
-        {rows.map(m => (
-          <tr key={`${m.sectionId}-${m.machine}`}>
-            <Td className="font-semibold">{m.machine}</Td>
-            <Td>{m.sectionName}</Td>
+    <Section title="Downtime by line" icon={Wrench} count={rows.length}
+      hint={`${hoursLabel(total)} of production time lost — breaks and the deep clean are not counted`}>
+      <Table head={['Line', 'Area', 'Stoppages', 'Downtime', 'Unsigned', 'What stopped it']}>
+        {rows.map(r => (
+          <tr key={r.sectionId}>
+            <Td className="font-semibold">{r.sectionName}</Td>
+            <Td className="text-text-muted">{r.area ?? '—'}</Td>
             <Td mono right>
-              {m.events}
-              {m.stillOpen > 0 && <span className="block text-[9px] font-normal text-warn">{m.stillOpen} still open</span>}
+              {r.events}
+              {r.stillOpen > 0 && <span className="block text-[9px] font-normal text-warn">{r.stillOpen} still open</span>}
             </Td>
-            <Td mono right className="font-semibold text-err">{hoursLabel(m.minutes)}</Td>
-            <Td mono right className={m.unattestedMinutes > 0 ? 'text-warn' : 'text-text-muted'}>
-              {m.unattestedMinutes > 0 ? hoursLabel(m.unattestedMinutes) : '—'}
+            <Td mono right className="font-semibold text-err">{hoursLabel(r.minutes)}</Td>
+            <Td mono right className={r.unattestedMinutes > 0 ? 'text-warn' : 'text-text-muted'}>
+              {r.unattestedMinutes > 0 ? hoursLabel(r.unattestedMinutes) : '—'}
             </Td>
-            <Td mono className="text-text-muted">
-              {m.jobCardIds.length ? m.jobCardIds.join(', ') : '—'}
+            <Td>
+              <div className="flex flex-wrap gap-1">
+                {r.byKind.map(k => (
+                  <span key={k.kind}
+                    className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-surface border border-surface-rule">
+                    {k.label}
+                    <span className="font-mono text-text-muted">{hoursLabel(k.minutes)}</span>
+                    {k.events > 1 && <span className="font-mono text-text-faint">×{k.events}</span>}
+                  </span>
+                ))}
+              </div>
             </Td>
           </tr>
         ))}
