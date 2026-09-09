@@ -214,6 +214,8 @@ export async function exportPasteuriserBatch(batch: any) {
     row['Cup Colour'] = n(s.cup_colour)
     row['Cup Clarity'] = s.cup_clarity || ''
     row['Sensorial'] = s.sensorial_pass || ''
+    // The taster, not the capturing QC — see BatchSample.sensorial_by.
+    row['Tasted By'] = s.sensorial_by || ''
     row['Sensorial Note'] = s.sensorial_note || ''
     row['Comment'] = s.comment || ''
     return row
@@ -346,6 +348,7 @@ export async function exportPasteuriserBatches(batches: any[], filename: string)
       row['Strength'] = n(s.strength)
       row['Cup Colour'] = n(s.cup_colour)
       row['Sensorial'] = s.sensorial_pass || ''
+      row['Tasted By'] = s.sensorial_by || ''
       row['Comment'] = s.comment || ''
       rawRows.push(row)
     })

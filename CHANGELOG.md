@@ -2,6 +2,18 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-07 — Gustav (Pasteuriser tasting records who tasted the sample)
+
+**Files changed:** `app/(app)/quality/pasteuriser/page.tsx`, `lib/utils/exportExcel.ts`
+
+- **A pasteuriser sensorial assessment now records the QC who tasted it, separately from the QC who captured the sample.** The granule line has always carried an `assessed_by` on a tasting; the pasteuriser had no such field, so a tasting was implicitly attributed to whoever typed the sieve and moisture values in — and the person who cups the tea is frequently not that person. A tasting is a subjective judgement and has to be attributable to the palate behind it. **Tasted By (QC)** is now required: the Save Sensorial button will not write a tasting without it.
+- **The field starts blank, not pre-filled with the capturing QC.** A pre-filled attribution field gets saved unread and the record then names someone who never tasted the tea, which is worse than no name at all. For the common case where it genuinely is the same person, a one-tap chip next to the field fills in the capturing QC's name.
+- **The taster is shown under the Pass/Reject verdict** in both the run dashboard and the batch history table, and exports as a **Tasted By** column in the single-batch and multi-batch Excel exports. Tastings captured before this field existed show `—` rather than falling back to the capturing QC's name — the taster on those records is genuinely unknown and the export must not invent one.
+- No migration: pasteuriser samples live inside `qms.quality_records.data_json`, so this is a new key on an existing JSON document. Older records simply have no `sensorial_by`.
+- **Also typed `lm_notes` on the pasteuriser `Batch`.** The Lab Manager screen writes it into `data_json` and this page renders it in two places, but it was absent from the interface, so those four reads were type errors. Fixing it drops the repo's type-error count by four.
+
+---
+
 ## 2026-09-01 — Gustav (Maintenance: Diamond Blender monthly checklist imported)
 
 **Files changed:** `supabase/migrations/20260901_011_monthly_checklist_diamond_blender.sql` (new, applied to staging)
