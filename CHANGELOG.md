@@ -137,6 +137,70 @@ contained, not silent. The optional backfill in the migration is commented and c
 attribute historic rows to a machine; they never carried one.
 ---
 
+## 2026-09-09 — Alyssa (The routes that write a sign-off, and the door that closes behind them)
+
+**Files changed:** `app/api/pasteuriser/labels/[id]/sign-off/route.ts` (new), `app/api/pasteuriser/job-cards/[id]/sign-off/route.ts` (new), `app/api/pasteuriser/labels/[id]/transition/route.ts`, `lib/production/label-approval.ts` (new), `lib/auth/permissions.ts`, `supabase/migrations/20260909_003_sign_off_recorded_by.sql` (new)
+
+Two routes, both deciding from a fresh read, both using the gates in `lib/core/labels/approval.ts` rather than restating them.
+
+### A new permission, because reusing one would defeat the change
+
+`can_quality_sign_labels`. Deliberately **not** folded into `can_approve_labels`: a label now needs Sales *and* Quality, and one key held by both would let Sales sign for Quality. Two names that one person can produce is one name. Granted to `quality_manager`; registered in all four places.
+
+### `POST /labels/[id]/sign-off`
+
+Records one role's signature against the template's **current** version — read server-side, never taken from the client, or a signature could attach to artwork the signer never saw.
+
+- **The name is the caller's**, resolved server-side, for Sales and Quality. For the **customer** and the **certifier** the signer is genuinely outside the building, so their name comes from the body — and `recorded_by` then captures who here stood behind the claim. "Control Union approved it" with nobody's hand on it is not a record.
+- **An already-`approved` template is signable.** Every label approved before this change carries only the old single approval, so Quality, the customer and the certifier have to be recordable against it — otherwise closing the gap would mean re-issuing every proof.
+- **When the fourth signature lands, the template approves itself.** It re-reads the register rather than reasoning from what it just wrote: another signature may have arrived in flight, and the question is what the register says now.
+
+### `POST /job-cards/[id]/sign-off`
+
+The two-name pre-print check on one run. It builds the list of signatures that *would* exist if this one were accepted, asks `printGate()`, and refuses only if core says the two are the same person. **One rule, one place** — the route does not re-implement it.
+
+The gate's other findings are deliberately *not* refusals. "The other half hasn't signed" is why the print is still shut, not a reason to reject a signature — otherwise the first signer could never go first.
+
+### The door that closes behind it
+
+**`approve` on the transition route is retired**, returning `410` with the address of the sign-off route. Leaving it would have been a second writer to `status` and, worse, a way for one `can_approve_labels` holder to approve a label Quality never saw — the exact hole this work closes.
+
+Removing it surfaced something that would have been a silent regression: that branch also **retired the previous approved version**. A partial unique index allows one approved version per code, so dropping it would have made every subsequent approval fail with a constraint error. It moved to `supersedeOtherApprovedVersions()` in `lib/production/label-approval.ts` and is called from the sign-off route before the status flips. TypeScript found the dead branches; the supersede step was found by reading them.
+
+### Migration `20260909_003`
+
+`recorded_by_employee_id` / `recorded_by_name`, with a CHECK that an external sign-off has a recorder and an internal one does not. `NOT VALID`, so the rows backfilled yesterday stay as they are rather than being given a recorder nobody can name.
+
+Typecheck **29**, back to baseline. Hooks gate clean, boundary lint clean, 403 core tests, build clean. Both migrations parse-checked with `pglast`.
+
+---
+
+## 2026-09-09 — Alyssa (Schema for the label sign-off rows)
+
+**Files changed:** `supabase/migrations/20260909_002_label_sign_offs.sql` (new)
+
+Storage for the rules that landed in `lib/core/labels/approval.ts`. One table, `public.label_sign_offs`, append-only. Nothing reads it yet.
+
+**Not more columns on `label_template_events`.** An event is a state transition — `proof_issued`, `approved`. A sign-off is one named role putting their name to a version, and four of them happen *before* the template becomes approved. Folding them into a stream where `approved` already means "the whole thing is approved" would make the same word mean two things at two scales.
+
+**Two scopes, one table.** `template` is the artwork chain (Sales, Quality, Customer, Certifier) per template version; `print` is the two-name pre-print check on one job card. One table because every column is shared and core already treats them as one `SignOff` shape — but `scope` is a real discriminant with a CHECK behind it, not a field consumers duck-type on.
+
+**Three things the database holds so code does not have to:**
+
+- **`template_version` is recorded at signing, never derived.** The template's version moves when artwork is edited, and core discards sign-offs from earlier versions — deriving it at read time would silently promote every old approval.
+- **Two composite foreign keys** tie a print sign-off to a job card, that job card to its assignment, and that assignment to this template. A signature cannot name a card, an order and a piece of artwork that do not all belong together.
+- **A print sign-off must carry both `job_card_id` and `assignment_id`.** Not tidiness: the composite FK is MATCH SIMPLE, so a NULL in either column makes Postgres skip the check entirely.
+
+**The two-different-people rule is deliberately not a trigger.** `printGate()` enforces it and the route decides from a fresh read — the shape ARCHITECTURE.md §6 requires. A trigger would be a second implementation of one rule, which is what §1A exists to stop. The migration says so, so nobody adds one later.
+
+**Backfill records only what is known.** Every template approved before today carries one `approved` event by a `can_approve_labels` holder — that is the *sales* approval, and it is backfilled as such with the real name and timestamp where 20260907_003 captured them. Quality, the customer and the certifier are left outstanding, because they genuinely are.
+
+**Consequence, so it is not a surprise: every currently-approved label reads as not ready for a job card until those three are recorded.** That is correct, and it is the gap this work closes.
+
+Parse-checked against the real Postgres grammar (pglast) — 16 statements. Idempotent; both `ADD CONSTRAINT`s are wrapped, since Postgres has no `IF NOT EXISTS` for them.
+
+---
+
 ## 2026-09-09 — Alyssa (Label approval: the two gates, in core)
 
 **Files changed:** `lib/core/labels/approval.ts` (new), `lib/core/labels/approval.test.ts` (new), `lib/core/labels/index.ts`
