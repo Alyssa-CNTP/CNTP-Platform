@@ -227,12 +227,67 @@ export interface WasteLine {
 }
 
 export interface ReportNote {
-  kind: 'handover' | 'message'
+  /** `timesheet` — the operator's own note about the shift, saved with their
+   *  timesheet. Added when stoppages moved to their own ledger: an operator's
+   *  note used to sit in React state until sign-off and never reached any
+   *  report at all. */
+  kind: 'handover' | 'message' | 'timesheet'
   sectionId: string | null
   sectionName: string
   author: string
   body: string
   at: string
+}
+
+/**
+ * One stoppage from `production.timesheet_stoppages` — what the line was NOT
+ * producing during, and why.
+ *
+ * Distinct from `BreakdownLine`, which is a maintenance JOB CARD. The two are
+ * different records of (sometimes) the same event and must not be merged: a
+ * card exists whether or not an operator noticed, and a stoppage exists whether
+ * or not a card was raised. `jobCardId` is the link where there is one.
+ *
+ * Optional on `ShiftReport` so a payload frozen before this shipped keeps
+ * rendering (see the note at the top of this file).
+ */
+export interface StoppageLine {
+  id: string
+  sectionId: string
+  sectionName: string
+  operatorName: string
+  kind: string                 // tea | lunch | deep_clean | breakdown | maintenance | changeover | other
+  kindLabel: string
+  startedAt: string
+  endedAt: string | null       // null = was still running at the end of the shift
+  minutes: number
+  notes: string | null
+  machine: string | null
+  jobCardId: number | null
+  /** Whether this counts as machine downtime (breakdown / maintenance only). */
+  downtime: boolean
+  /** A supervisor's verdict on a breakdown. null = nobody has signed it yet. */
+  verdict: 'confirmed' | 'disputed' | null
+  attestedBy: string | null
+}
+
+/**
+ * Downtime for one machine on this shift, from the stoppage ledger.
+ *
+ * This is the "analysis of the machine alone" figure: a machine's own record,
+ * not its line's. Disputed breakdowns are excluded; unsigned ones are counted
+ * and reported separately in `unattestedMinutes`, so a reader can see how much
+ * of the total nobody has confirmed yet.
+ */
+export interface MachineDowntimeLine {
+  machine: string
+  sectionId: string
+  sectionName: string
+  events: number
+  minutes: number
+  unattestedMinutes: number
+  stillOpen: number
+  jobCardIds: number[]
 }
 
 export interface OutstandingItem {
@@ -275,6 +330,11 @@ export interface ShiftReport {
   machineConfig: MachineConfigLine[]
   changeovers: Changeover[]
   breakdowns: BreakdownLine[]
+  /** Every stoppage the operators logged. Optional — a payload frozen before
+   *  the stoppage ledger existed has none, and must still render. */
+  stoppages?: StoppageLine[]
+  /** Per-machine downtime, for machine-level analysis. Optional, same reason. */
+  machineDowntime?: MachineDowntimeLine[]
   checks: ChecksLine[]
   waste: WasteLine[]
   notes: ReportNote[]
