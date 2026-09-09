@@ -86,6 +86,10 @@ export type PermissionKey =
   | 'can_approve_labels'       // sales: record the CU/customer sign-off
   | 'can_assign_label_po'      // sales: bind an approved template to a customer PO
   | 'can_print_labels'         // supervisor: print finished-product labels on the line
+  // Quality's own label authority. NOT folded into can_approve_labels: a label
+  // now needs Sales AND Quality, and one key held by both would let Sales sign
+  // for Quality, which is the whole thing the second signature prevents.
+  | 'can_quality_sign_labels'  // quality: sign a template, and the pre-print test label
   // Production — Shift Report (the generated end-of-shift record)
   | 'can_view_shift_report'    // read a shift report (any date/shift)
   | 'can_edit_shift_report'    // regenerate, add supervisor notes, save the draft
@@ -180,6 +184,7 @@ export const ALL_PERMISSION_KEYS: PermissionKey[] = [
   'can_generate_job_cards','can_approve_job_cards',
   'can_generate_job_cards_granule','can_approve_job_cards_granule',
   'can_view_labels','can_design_labels','can_approve_labels','can_assign_label_po','can_print_labels',
+  'can_quality_sign_labels',
   'can_view_shift_report','can_edit_shift_report','can_submit_shift_report','can_approve_shift_report',
   'can_view_capture_ratings','can_rate_capture','can_delete_capture_rating',
   'can_access_sales','can_access_marketing','can_access_research','can_access_intelligence',
@@ -525,6 +530,9 @@ export const ROLE_PERMISSION_DEFAULTS: Record<string, Permissions> = {
     can_delete_staff: true,
     // Training (FSSC owner — also authors/assigns courses + sees org-wide competency)
     can_author_training: true, can_assign_training: true, can_view_all_competency: true,
+    // Labels — Quality's signature on the artwork chain and on the pre-print
+    // test label. Read, sign; never author or print.
+    can_view_labels: true, can_quality_sign_labels: true,
   },
 
   // ── Management — read-only across platform ─────────────────────────────────
@@ -709,6 +717,7 @@ export const PERMISSION_GROUPS: {
       { key: 'can_approve_labels',  label: 'Record the Control Union / customer approval of a template' },
       { key: 'can_assign_label_po', label: 'Assign a customer PO to an approved label' },
       { key: 'can_print_labels',    label: 'Print finished-product labels on the line' },
+      { key: 'can_quality_sign_labels', label: 'Quality: sign a label template, and the pre-print test label' },
     ],
   },
   {
