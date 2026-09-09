@@ -135,6 +135,26 @@ type-clean, production build clean.
 it is, the Timesheet tab shows a visible read error and capture carries on — the failure is
 contained, not silent. The optional backfill in the migration is commented and cannot
 attribute historic rows to a machine; they never carried one.
+---
+
+## 2026-09-09 — Alyssa (Label approval: the two gates, in core)
+
+**Files changed:** `lib/core/labels/approval.ts` (new), `lib/core/labels/approval.test.ts` (new), `lib/core/labels/index.ts`
+
+The rules only. Nothing imports them yet — the schema and the screens follow separately, per the refactor strategy.
+
+**Two gates, deliberately not one.** *Gate A* asks whether a **job card** may be raised: the artwork is settled, all four template sign-offs are in, and a customer PO is bound. By the time the production manager sees it, nothing about the label is still open — which is the whole requirement. *Gate B* asks whether these labels may be **printed**: gate A plus the pre-print check on this run.
+
+Folding them together would mean either re-approving artwork nobody changed, or printing a run nobody checked.
+
+- **Template chain is now four names, not one:** Sales lead, **Quality department**, Customer, Control Union / label regulation. Quality was missing.
+- **Pre-print check is two names** — sales lead and quality supervisor — and they **must be different people**. One person signing both halves is one pair of eyes wearing two hats, which is what a second signature exists to prevent. Matched on employee id, falling back to name when neither signer has a Staff Directory link.
+- **A signature is against a version.** `signOffsForVersion` discards approvals given on earlier artwork: editing an approved label supersedes it, and carrying a v1 signature onto v2 is how a label reaches the floor with an approval nobody gave.
+- **Every blocker is returned at once**, as a sentence the screen shows verbatim. A gate that reveals one fault per attempt turns one conversation into four.
+
+**19 tests.** Proven to bite by disabling the two-different-people rule: exactly the two tests for it fail, and nothing else does.
+
+---
 
 ## 2026-09-09 — Alyssa (Sales: the customer account dashboard)
 
