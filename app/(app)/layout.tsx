@@ -71,6 +71,9 @@ const ROUTE_GUARDS: Array<{
   // are shown the link in the Sidebar, so without QUALITY here the route bounced
   // the QC straight back to /home and a check could never be opened.
   // Longest-prefix matcher means this job-cards rule wins for that sub-route.
+  // NOTE: there must be exactly ONE rule for this prefix — two rules with the
+  // same prefix tie on length and the FIRST wins the stable sort, which silently
+  // reinstated the bug when a duplicate crept in.
   { prefix: '/maintenance/job-cards', departments: ['Maintenance','Management','Production','Quality'], permission: 'can_access_maintenance', orPermission: true },
   { prefix: '/maintenance',           departments: ['Maintenance','Management'],              permission: 'can_access_maintenance', orPermission: true },
 
