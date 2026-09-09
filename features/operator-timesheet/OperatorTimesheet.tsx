@@ -1,31 +1,49 @@
 'use client'
 
 /**
- * The operator timesheet — a live tracker, not a form filled in at sign-off.
+ * The operator timesheet — finalised on Sign-off, but written all shift.
  *
- * ── What changed, and why the shape had to change with it ────────────────────
+ * ── Where it lives, and why ─────────────────────────────────────────────────
+ *
+ * Mounted by the SIGN-OFF step. It briefly had a step of its own, on the
+ * reasoning that something used all shift should not be buried in the last one.
+ * The practical answer is the other way round: the timesheet runs all shift but
+ * is only ever COMPLETED at the end, which is what Sign-off is for, and a
+ * seventh step is one more thing to walk past.
+ *
+ * The one thing that cannot wait for Sign-off is a stoppage happening now. That
+ * is `StoppageQuickLog`, opened from the capture header — see its own note.
+ *
+ * ── What was wrong before, and what fixed it ────────────────────────────────
  *
  * The previous component held every stoppage in React state and wrote the lot
- * once, when the operator tapped "Confirm timesheet". Two consequences:
+ * once, when the operator tapped "Confirm timesheet". Its load effect depended
+ * on `operatorName` — and the capture page feeds that from the sign-off name
+ * INPUT, so typing a name re-ran the effect and reset the list to the standard
+ * tea/lunch schedule. Start and end re-derived to the same values, so the sheet
+ * looked right while every logged stoppage was gone. That is precisely the
+ * floor's report: "start and end are fine, the other stoppages don't save."
  *
- *   * ANY re-derive lost them. The load effect depended on `operatorName`, and
- *     the capture page feeds it the sign-off name INPUT — so typing a name
- *     re-ran the effect, which reset the list to the standard tea/lunch
- *     schedule. Start and end were re-derived to the same values, so the sheet
- *     looked right while every logged stoppage was gone. That is precisely the
- *     floor's report: "start and end are fine, the other stoppages don't save."
- *   * Nothing could be tracked. A stoppage that only exists at sign-off cannot
- *     prompt anybody, cannot be matched to a maintenance card that is happening
- *     NOW, and cannot become a KPI.
+ * Two things fix it, and both matter:
  *
- * So every edit here writes its own row immediately (`saveStoppage`, per-row
- * upsert on a stable uuid). Reloading the page mid-shift shows the same sheet.
- * Nothing depends on the operator reaching sign-off for the data to exist, and
- * nothing re-derives over what is already there.
+ *   1. Every edit writes its own row immediately (`saveStoppage`, per-row upsert
+ *      on a stable uuid). Reloading mid-shift shows the same sheet.
+ *   2. The loader is keyed on the SESSION and reads its identity from a ref, so
+ *      it cannot depend on a prop that changes per keystroke. Being back inside
+ *      Sign-off is exactly why that has to hold structurally rather than by
+ *      being careful — see `identity` below.
  *
  * `queue()` is the pattern to keep: optimistic local state, then a write, and
  * on failure a visible banner rather than a silent revert. An operator who has
  * just logged a two-hour breakdown must not be told it saved when it did not.
+ *
+ * ── What this does NOT do ───────────────────────────────────────────────────
+ *
+ * It never reads the maintenance schema, and it polls nothing. An earlier
+ * version read `job_cards` every 45 seconds from the capture screen to offer
+ * stoppages maintenance already knew about; that was both latency the capture
+ * screen should not pay and the wrong direction — the operator stops the
+ * machine, so the operator is who knows when. See prompts.ts.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -33,23 +51,23 @@ import { format, parseISO } from 'date-fns'
 import {
   Clock, Coffee, UtensilsCrossed, Sparkles, Wrench, ArrowLeftRight, CircleDot,
   Plus, Trash2, CheckCircle2, Loader2, Info, AlertTriangle, Play, Square,
-  Activity, X, RefreshCw,
+  Activity, X, Zap, MonitorOff, PackageX, ShieldAlert, BellRing,
 } from 'lucide-react'
 import {
-  STOPPAGE_KINDS, STOPPAGE_META, isLive, isOpen, stoppageMinutes,
-  workedMinutes, downtimeMinutes, validateStoppages, deepCleanDue,
+  STOPPAGE_KINDS, ALL_STOPPAGE_KINDS, STOPPAGE_META, isLive, isOpen, isRetiredKind,
+  stoppageMinutes, workedMinutes, downtimeMinutes, validateStoppages, deepCleanDue,
   pendingAttestations, pendingNotifications,
   type Stoppage, type StoppageKind, type SupervisorVerdict,
 } from '@/lib/core/timesheet/stoppages'
 import {
   loadStoppages, saveStoppage, voidStoppage, seedScheduledStoppages,
-  loadTimesheet, confirmTimesheet, saveTimesheetNote, loadLineJobCards,
-  loadLineMachines, isCardOpen, attestStoppage, reportBreakdown,
-  type StoppageScope, type LineJobCard,
+  loadTimesheet, confirmTimesheet, saveTimesheetNote,
+  attestStoppage, reportStoppage, callSupervisor,
+  type StoppageScope,
 } from './db'
 import { getMySignatureStatus, type MySignatureStatus } from '@/lib/production/employee-signature'
-import { derivePrompts, panelCards, type PromptKind, type TimesheetPrompt } from './prompts'
-import { primaryAreaForSection, hasAreaMapping } from './areas'
+import { derivePrompts, type PromptKind, type TimesheetPrompt } from './prompts'
+import { primaryAreaForSection } from './areas'
 
 // ── formatting ───────────────────────────────────────────────────────────────
 
@@ -86,18 +104,48 @@ function timeToIso(time: string, anchorIso: string | null, fallbackDate: string)
 const KIND_ICON: Record<StoppageKind, typeof Coffee> = {
   tea: Coffee, lunch: UtensilsCrossed, deep_clean: Sparkles,
   breakdown: AlertTriangle, maintenance: Wrench,
-  changeover: ArrowLeftRight, other: CircleDot,
+  power: Zap, it_system: MonitorOff, no_material: PackageX, quality_hold: ShieldAlert,
+  other: CircleDot,
+  changeover: ArrowLeftRight,   // retired — rendered only where a row carries it
 }
 
-/** Chip colour per kind. Downtime reads red; planned time reads neutral. */
+/**
+ * Chip colour per kind. Downtime reads red, breaks read as breaks.
+ *
+ * Driven off the same `downtime` flag the KPI uses, so the screen and the
+ * figure cannot disagree about which stoppages cost production.
+ */
 const KIND_TONE: Record<StoppageKind, string> = {
-  tea:         'bg-info/10 text-info border-info/25',
-  lunch:       'bg-warn/10 text-warn border-warn/25',
-  deep_clean:  'bg-brand/10 text-brand border-brand/25',
-  breakdown:   'bg-err/10 text-err border-err/25',
-  maintenance: 'bg-err/10 text-err border-err/25',
-  changeover:  'bg-stone-100 text-stone-600 border-stone-300',
-  other:       'bg-stone-100 text-stone-600 border-stone-300',
+  tea:          'bg-info/10 text-info border-info/25',
+  lunch:        'bg-warn/10 text-warn border-warn/25',
+  deep_clean:   'bg-brand/10 text-brand border-brand/25',
+  breakdown:    'bg-err/10 text-err border-err/25',
+  maintenance:  'bg-err/10 text-err border-err/25',
+  power:        'bg-err/10 text-err border-err/25',
+  it_system:    'bg-err/10 text-err border-err/25',
+  no_material:  'bg-err/10 text-err border-err/25',
+  quality_hold: 'bg-err/10 text-err border-err/25',
+  other:        'bg-stone-100 text-stone-600 border-stone-300',
+  changeover:   'bg-stone-100 text-stone-600 border-stone-300',
+}
+
+/**
+ * What to ask for in the note, per kind.
+ *
+ * The section and the line are already known from the open production order, so
+ * the note is the ONLY thing the operator adds — which makes the prompt worth
+ * getting right. A generic "What happened?" on a power failure gets "power
+ * off"; asking what was affected gets something a report can use.
+ */
+const NOTE_HINT: Partial<Record<StoppageKind, string>> = {
+  breakdown:    'What broke, and what stopped?',
+  maintenance:  'What was worked on?',
+  power:        'Whole factory, or just this line?',
+  it_system:    'What is down — the tablet, the network, Acumatica?',
+  no_material:  'Waiting on what, from where?',
+  quality_hold: 'What is on hold, and who called it?',
+  other:        'What happened?',
+  changeover:   'What changed over?',
 }
 
 const CARD  = 'bg-white border border-stone-200 rounded-2xl'
@@ -105,21 +153,15 @@ const LABEL = 'text-[11px] font-semibold text-stone-500 uppercase tracking-wide'
 const TIME  = 'px-2.5 py-2 rounded-xl border border-stone-200 bg-white text-[14px] text-text outline-none focus:border-brand tabular-nums'
 const TEXT  = 'w-full px-3 py-2 rounded-xl border border-stone-200 bg-white text-[13px] text-text outline-none focus:border-brand'
 
-/** Quick-log buttons, in the order an operator reaches for them. */
-const QUICK: { kind: StoppageKind; label: string }[] = [
-  { kind: 'breakdown',   label: 'Breakdown' },
-  { kind: 'maintenance', label: 'Maintenance' },
-  { kind: 'deep_clean',  label: 'Deep clean' },
-  { kind: 'changeover',  label: 'Changeover' },
-  { kind: 'tea',         label: 'Tea' },
-  { kind: 'lunch',       label: 'Lunch' },
-  { kind: 'other',       label: 'Other' },
-]
-
-// How often to re-read the line's maintenance cards. 45s: fast enough that a
-// breakdown reaches the operator while it is still happening, slow enough that
-// a tablet on factory wifi is not polling a schema it mostly does not need.
-const CARD_POLL_MS = 45_000
+/**
+ * Quick-log buttons — every offerable kind, in the order an operator reaches
+ * for them.
+ *
+ * Derived from `STOPPAGE_KINDS` rather than listed again, so a kind added to
+ * core cannot be missing from the screen. Retired kinds are excluded by
+ * construction: they are not in `STOPPAGE_KINDS`.
+ */
+const QUICK: readonly StoppageKind[] = STOPPAGE_KINDS
 
 export interface OperatorTimesheetProps {
   sessionId:     string | null
@@ -157,16 +199,13 @@ export function OperatorTimesheet({
   const [endIso, setEndIso]       = useState<string | null>(null)
   const [note, setNote]           = useState('')
 
-  const [cards, setCards]       = useState<LineJobCard[]>([])
-  const [machines, setMachines] = useState<string[]>([])
-  const [dismissedCards, setDismissedCards] = useState<ReadonlySet<number>>(new Set())
   const [dismissedKinds, setDismissedKinds] = useState<ReadonlySet<PromptKind>>(new Set())
-  const [showCards, setShowCards] = useState(false)
 
   // Supervisor attestation
   const [sigStatus, setSigStatus] = useState<MySignatureStatus | null>(null)
   const [signing, setSigning]     = useState<string | null>(null)
   const [disputeFor, setDisputeFor] = useState<string | null>(null)
+  const [calling, setCalling]     = useState<string | null>(null)
   const [disputeNote, setDisputeNote] = useState('')
 
   // A ticking clock so an OPEN stoppage's minutes climb on screen instead of
@@ -253,29 +292,6 @@ export function OperatorTimesheet({
     return () => { alive = false }
   }, [sessionId])
 
-  // ── Maintenance cards, polled ─────────────────────────────────────────────
-  const refreshCards = useCallback(async () => {
-    if (!hasAreaMapping(sectionId)) return
-    try {
-      // Everything raised since the start of the run day, plus anything still open.
-      const since = new Date(`${date}T00:00:00`).toISOString()
-      setCards(await loadLineJobCards(sectionId, since))
-    } catch (e) {
-      // A maintenance read failing must not disturb capture — the timesheet
-      // still works, it just stops offering cards. §3: the adapter is total.
-      console.warn('[operator-timesheet] job cards unavailable:', e)
-    }
-  }, [sectionId, date])
-
-  useEffect(() => {
-    if (locked) return
-    refreshCards()
-    const t = setInterval(refreshCards, CARD_POLL_MS)
-    return () => clearInterval(t)
-  }, [refreshCards, locked])
-
-  useEffect(() => { loadLineMachines(sectionId).then(setMachines) }, [sectionId])
-
   useEffect(() => { if (canAttest) getMySignatureStatus().then(setSigStatus) }, [canAttest])
 
   // ── Writes ────────────────────────────────────────────────────────────────
@@ -339,6 +355,8 @@ export function OperatorTimesheet({
       voidedAt: null,
       attestation: null,
       notifiedAt: null,
+      supervisorRequestedAt: null,
+      supervisorRequestCount: 0,
       ...from,
     })
   }, [queue, sectionId])
@@ -353,6 +371,7 @@ export function OperatorTimesheet({
       notes: null, machine: null, area: primaryAreaForSection(sectionId),
       jobCardId: null, source: 'operator', voidedAt: null,
       attestation: null, notifiedAt: null,
+      supervisorRequestedAt: null, supervisorRequestCount: 0,
     })
   }, [queue, sectionId])
 
@@ -368,12 +387,15 @@ export function OperatorTimesheet({
     }
   }, [operatorName])
 
-  // ── Telling maintenance ───────────────────────────────────────────────────
+  // ── Telling whoever can act ───────────────────────────────────────────────
   //
-  // Fires for any live breakdown with no `notified_at` stamp — which is the
-  // de-dupe: the stamp is written only after the route accepts, so a failure
-  // retries on the next render and a success never sends twice, across reloads
-  // and across two operators on the same session.
+  // Fires for any live stoppage with no `notified_at` stamp whose kind names a
+  // team. The stamp is the de-dupe: written only after the route accepts, so a
+  // failure retries on the next render and a success never sends twice, across
+  // reloads and across two operators on the same session.
+  //
+  // Which team is the KIND's decision, taken server-side from core — the
+  // browser does not get to choose who it pages.
   //
   // A ref guards against the SAME render loop firing twice while the first
   // request is still in flight; `notified_at` is what guards across reloads.
@@ -385,15 +407,14 @@ export function OperatorTimesheet({
 
     for (const s of due) {
       notifying.current.add(s.id)
-      reportBreakdown({
+      reportStoppage({
         stoppageId:   s.id,
         sectionId,
-        machine:      s.machine,
+        kind:         s.kind,
         area:         s.area,
         description:  s.notes ?? '',
         operatorName,
         startedAt:    s.startedAt,
-        jobCardId:    s.jobCardId,
       }).then(ok => {
         if (ok) {
           setStoppages(prev => prev.map(x =>
@@ -408,6 +429,12 @@ export function OperatorTimesheet({
 
   // ── Derived ───────────────────────────────────────────────────────────────
 
+  // The line a stoppage is filed against — never asked for, because it is the
+  // production order the operator already has open. Shown so they can see what
+  // is being recorded on their behalf, which is not the same as choosing it.
+  const area = primaryAreaForSection(sectionId)
+  const areaLabel = area ? `logged against ${area}` : 'logged against this line'
+
   const live      = useMemo(() => stoppages.filter(isLive), [stoppages])
   const running   = useMemo(() => live.filter(isOpen), [live])
   const effEnd    = endIso ?? new Date(now).toISOString()
@@ -419,11 +446,9 @@ export function OperatorTimesheet({
   )
 
   const prompts = useMemo(() => derivePrompts({
-    cards, stoppages, date, shift,
-    dismissedCardIds: dismissedCards, dismissedKinds, atSignOff,
-  }), [cards, stoppages, date, shift, dismissedCards, dismissedKinds, atSignOff])
+    stoppages, date, shift, dismissedKinds, atSignOff,
+  }), [stoppages, date, shift, dismissedKinds, atSignOff])
 
-  const openCardCount = cards.filter(isCardOpen).length
   const awaiting = useMemo(() => pendingAttestations(stoppages), [stoppages])
 
   useEffect(() => {
@@ -431,6 +456,35 @@ export function OperatorTimesheet({
   }, [awaiting.length])
 
   // ── Supervisor signs ──────────────────────────────────────────────────────
+
+  /**
+   * Call a supervisor to come and confirm a breakdown.
+   *
+   * The operator's "submit". It notifies the production supervisors and stamps
+   * the row, so a shift report can later tell "never asked" apart from "asked
+   * four times and ignored" — different problems, different people at fault.
+   */
+  const call = useCallback(async (s: Stoppage) => {
+    setCalling(s.id)
+    try {
+      const at = await callSupervisor({
+        stoppageId:    s.id,
+        sectionId,
+        area:          s.area,
+        description:   s.notes ?? '',
+        operatorName,
+        startedAt:     s.startedAt,
+        previousCalls: s.supervisorRequestCount,
+      })
+      if (!at) { setSaveError('Could not reach a supervisor. Try again, or go and find one.'); return }
+      setStoppages(prev => prev.map(x => x.id === s.id
+        ? { ...x, supervisorRequestedAt: at, supervisorRequestCount: x.supervisorRequestCount + 1 }
+        : x))
+      setSaveError(null)
+    } finally {
+      setCalling(null)
+    }
+  }, [sectionId, operatorName])
 
   /**
    * Record the supervisor's verdict on a breakdown.
@@ -475,24 +529,6 @@ export function OperatorTimesheet({
 
   const actOnPrompt = useCallback((p: TimesheetPrompt) => {
     switch (p.kind) {
-      case 'log_breakdown': {
-        const c = p.card!
-        startNow(c.workflow === 'breakdown' ? 'breakdown' : 'maintenance', {
-          // Start from when maintenance says it started, not from now — the
-          // line stopped when the machine did, not when the operator noticed
-          // the prompt.
-          startedAt: c.startedAt ?? c.raisedAt,
-          notes:     `${c.cardNo}: ${c.description}`,
-          machine:   c.machine,
-          area:      c.area,
-          jobCardId: c.id,
-          source:    'maintenance',
-        })
-        break
-      }
-      case 'close_stoppage':
-        if (p.stoppageId && p.closeAt) closeAt(p.stoppageId, p.closeAt)
-        break
       case 'log_deep_clean':
         addClosed('deep_clean')
         setDismissedKinds(prev => new Set([...prev, 'log_deep_clean' as PromptKind]))
@@ -500,12 +536,24 @@ export function OperatorTimesheet({
       case 'still_open':
         if (p.stoppageId) closeAt(p.stoppageId, new Date().toISOString())
         break
+      case 'confirm_with_supervisor':
+        // Nothing to do on screen — the supervisor signs it in the panel
+        // below. The prompt carries no action, so this case is unreachable
+        // from the UI and exists only to keep the switch total.
+        break
     }
-  }, [startNow, closeAt, addClosed])
+  }, [closeAt, addClosed])
 
+  /**
+   * Wave a prompt away for the rest of the shift.
+   *
+   * Only offered where declining is a real answer — a Wednesday deep clean, a
+   * stoppage the operator will close themselves. `confirm_with_supervisor`
+   * carries no dismiss, because it is not a suggestion: it is the state of the
+   * sheet, and it stays until somebody signs.
+   */
   const dismissPrompt = useCallback((p: TimesheetPrompt) => {
-    if (p.card) setDismissedCards(prev => new Set([...prev, p.card!.id]))
-    else setDismissedKinds(prev => new Set([...prev, p.kind]))
+    setDismissedKinds(prev => new Set([...prev, p.kind]))
   }, [])
 
   // ── Confirm ───────────────────────────────────────────────────────────────
@@ -633,18 +681,24 @@ export function OperatorTimesheet({
                   <p className="text-[12px] text-text-muted break-words">{p.detail}</p>
                 </div>
               </div>
-              <div className="flex items-center gap-2">
-                <button onClick={() => actOnPrompt(p)}
-                  className={`flex-1 py-2 rounded-xl text-[13px] font-semibold text-white transition-opacity hover:opacity-90 ${
-                    p.urgency === 'high' ? 'bg-err' : 'bg-info'
-                  }`}>
-                  {p.action}
-                </button>
-                <button onClick={() => dismissPrompt(p)} title="Not on my line"
-                  className="px-3 py-2 rounded-xl border border-stone-200 bg-white text-[12px] text-stone-500 hover:text-text transition-colors">
-                  Not mine
-                </button>
-              </div>
+              {/* A prompt with no action is telling the operator something
+                  they do away from the screen (get a supervisor). It gets no
+                  buttons at all — an "OK" that does nothing trains people to
+                  dismiss the ones that do. */}
+              {p.action && (
+                <div className="flex items-center gap-2">
+                  <button onClick={() => actOnPrompt(p)}
+                    className={`flex-1 py-2 rounded-xl text-[13px] font-semibold text-white transition-opacity hover:opacity-90 ${
+                      p.urgency === 'high' ? 'bg-err' : 'bg-info'
+                    }`}>
+                    {p.action}
+                  </button>
+                  <button onClick={() => dismissPrompt(p)} title="Didn’t happen this shift"
+                    className="px-3 py-2 rounded-xl border border-stone-200 bg-white text-[12px] text-stone-500 hover:text-text transition-colors">
+                    Not today
+                  </button>
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -727,10 +781,30 @@ export function OperatorTimesheet({
                   </div>
                 )
               ) : (
-                <p className="text-[11px] text-warn flex items-center gap-1.5">
-                  <Clock size={11} /> Waiting for a supervisor
-                  {s.notifiedAt ? ' · maintenance has been notified' : ''}
-                </p>
+                /* The OPERATOR'S side: a button that actually fetches someone.
+                   Before this the screen said "awaiting supervisor confirmation"
+                   and offered no way to ask anybody, so a sheet sat unsigned
+                   until a supervisor happened to walk past the tablet.
+                   Repeatable on purpose — being ignored is the case it exists
+                   for, and each repeat escalates the notification. */
+                <div className="space-y-2">
+                  <button onClick={() => call(s)} disabled={calling === s.id}
+                    className="w-full flex items-center justify-center gap-1.5 py-2.5 rounded-xl bg-warn text-white text-[13px] font-semibold disabled:opacity-40 hover:opacity-90 transition-opacity">
+                    {calling === s.id
+                      ? <Loader2 size={14} className="animate-spin" />
+                      : <BellRing size={14} />}
+                    {s.supervisorRequestedAt ? 'Ask again' : 'Ask a supervisor to confirm'}
+                  </button>
+                  <p className="text-[11px] text-text-muted flex items-center gap-1.5">
+                    <Clock size={11} className="shrink-0" />
+                    {s.supervisorRequestedAt
+                      ? `Asked at ${hhmm(s.supervisorRequestedAt)}${
+                          s.supervisorRequestCount > 1 ? ` · ${s.supervisorRequestCount} times` : ''
+                        } — still not signed.`
+                      : 'Nobody has been asked yet.'}
+                    {s.notifiedAt ? ' Maintenance knows.' : ''}
+                  </p>
+                </div>
               )}
             </div>
           ))}
@@ -740,23 +814,30 @@ export function OperatorTimesheet({
       {/* ── Quick log ────────────────────────────────────────────────────── */}
       {!readOnly && (
         <div className={`${CARD} p-4 space-y-3`}>
-          <div className="flex items-center justify-between">
-            <span className={LABEL}>Log a stoppage</span>
-            <span className="text-[11px] text-text-muted">starts now · end it when you’re back</span>
+          <div className="flex items-baseline justify-between gap-2">
+            <span className={LABEL}>Why did production stop?</span>
+            <span className="text-[11px] text-text-muted">
+              starts now · {areaLabel}
+            </span>
           </div>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-            {QUICK.map(({ kind, label }) => {
+          {/* The section and its area come from the production order that is
+              open — the operator is never asked which line they are on. All
+              they add is a note. */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+            {QUICK.map(kind => {
               const Icon = KIND_ICON[kind]
+              const m = STOPPAGE_META[kind]
               return (
                 <button key={kind} onClick={() => startNow(kind)}
-                  className={`flex items-center justify-center gap-1.5 py-2.5 rounded-xl border text-[12px] font-semibold transition-opacity hover:opacity-80 ${KIND_TONE[kind]}`}>
-                  <Icon size={13} /> {label}
+                  className={`flex items-center justify-center gap-1.5 py-2.5 px-2 rounded-xl border text-[12px] font-semibold transition-opacity hover:opacity-80 ${KIND_TONE[kind]}`}>
+                  <Icon size={13} className="shrink-0" />
+                  <span className="truncate">{m.short}</span>
                 </button>
               )
             })}
             <button onClick={() => addClosed('other')}
               className="flex items-center justify-center gap-1.5 py-2.5 rounded-xl border-2 border-dashed border-stone-300 text-[12px] font-medium text-stone-500 hover:border-brand hover:text-brand transition-colors">
-              <Plus size={14} /> Past stoppage
+              <Plus size={14} /> Earlier
             </button>
           </div>
         </div>
@@ -787,7 +868,6 @@ export function OperatorTimesheet({
               date={date}
               now={now}
               readOnly={readOnly}
-              machines={machines}
               problem={problemById.get(s.id)}
               onPatch={p => patch(s.id, p)}
               onCloseNow={() => closeAt(s.id, new Date().toISOString())}
@@ -822,50 +902,6 @@ export function OperatorTimesheet({
           placeholder="e.g. Tower ran slow all morning after the belt change…"
           className={`${TEXT} resize-none disabled:bg-stone-50 disabled:text-stone-500`} />
       </div>
-
-      {/* ── Maintenance on this line ─────────────────────────────────────── */}
-      {hasAreaMapping(sectionId) && cards.length > 0 && (
-        <div className={`${CARD} p-4 space-y-2`}>
-          <button onClick={() => setShowCards(v => !v)}
-            className="w-full flex items-center justify-between">
-            <span className={`${LABEL} flex items-center gap-1.5`}>
-              <Wrench size={13} /> Maintenance on this line
-            </span>
-            <span className="flex items-center gap-2 text-[11px] text-text-muted">
-              {openCardCount > 0 && (
-                <span className="px-2 py-0.5 rounded-full bg-err/10 text-err font-semibold">
-                  {openCardCount} open
-                </span>
-              )}
-              {showCards ? 'hide' : 'show'}
-            </span>
-          </button>
-          {showCards && (
-            <div className="space-y-1.5 pt-1">
-              {panelCards(cards).map(c => (
-                <div key={c.id} className="flex items-start gap-2 px-3 py-2 rounded-xl bg-stone-50 border border-stone-200">
-                  <span className={`mt-0.5 w-1.5 h-1.5 rounded-full shrink-0 ${isCardOpen(c) ? 'bg-err' : 'bg-ok'}`} />
-                  <div className="min-w-0 flex-1">
-                    <p className="text-[12px] font-semibold text-text truncate">
-                      {c.cardNo} · {c.machine || c.area}
-                    </p>
-                    <p className="text-[11px] text-text-muted truncate">{c.description}</p>
-                  </div>
-                  <span className="text-[10px] font-mono text-text-muted shrink-0">
-                    {hhmm(c.raisedAt)}
-                  </span>
-                </div>
-              ))}
-              {!readOnly && (
-                <button onClick={refreshCards}
-                  className="w-full flex items-center justify-center gap-1.5 py-2 text-[11px] text-stone-500 hover:text-brand transition-colors">
-                  <RefreshCw size={12} /> Refresh
-                </button>
-              )}
-            </div>
-          )}
-        </div>
-      )}
 
       {/* ── Confirm ──────────────────────────────────────────────────────── */}
       {!confirmed && !locked && (
@@ -936,13 +972,12 @@ function TimeField({ label, value, onChange, disabled, hint, placeholderNow }: {
 }
 
 function StoppageRow({
-  stoppage: s, date, now, readOnly, machines, problem, onPatch, onCloseNow, onRemove,
+  stoppage: s, date, now, readOnly, problem, onPatch, onCloseNow, onRemove,
 }: {
   stoppage: Stoppage
   date: string
   now: number
   readOnly: boolean
-  machines: string[]
   problem?: string
   onPatch: (p: Partial<Stoppage>) => void
   onCloseNow: () => void
@@ -952,8 +987,6 @@ function StoppageRow({
   const Icon = KIND_ICON[s.kind] ?? CircleDot
   const open = isOpen(s)
   const mins = stoppageMinutes(s, now)
-
-  const fromCard = s.jobCardId != null
 
   return (
     <div className={`rounded-xl border p-2.5 space-y-2 ${open ? 'bg-err/5 border-err/25' : 'bg-stone-50 border-stone-200'}`}>
@@ -974,6 +1007,12 @@ function StoppageRow({
             {STOPPAGE_KINDS.map(k => (
               <option key={k} value={k}>{STOPPAGE_META[k].label}</option>
             ))}
+            {/* A row already carrying a retired kind keeps it selectable, or
+                opening the dropdown would silently re-file it as something
+                else. It cannot be chosen fresh — it is not in STOPPAGE_KINDS. */}
+            {isRetiredKind(s.kind) && (
+              <option value={s.kind}>{STOPPAGE_META[s.kind].label}</option>
+            )}
           </select>
         )}
 
@@ -982,7 +1021,7 @@ function StoppageRow({
             const iso = timeToIso(e.target.value, s.startedAt, date)
             if (iso) onPatch({ startedAt: iso })
           }}
-          className={`${TIME} w-[86px] ${readOnly ? 'bg-stone-50 text-stone-500' : ''}`} />
+          className={`${TIME} w-[104px] ${readOnly ? 'bg-stone-50 text-stone-500' : ''}`} />
         <span className="text-[12px] text-text-muted">–</span>
 
         {open && !readOnly ? (
@@ -996,7 +1035,7 @@ function StoppageRow({
               const iso = timeToIso(e.target.value, s.endedAt ?? s.startedAt, date)
               if (iso) onPatch({ endedAt: iso })
             }}
-            className={`${TIME} w-[86px] ${readOnly ? 'bg-stone-50 text-stone-500' : ''}`} />
+            className={`${TIME} w-[104px] ${readOnly ? 'bg-stone-50 text-stone-500' : ''}`} />
         )}
 
         <span className={`text-[11px] font-mono tabular-nums shrink-0 ${open ? 'text-err font-bold' : 'text-stone-500'}`}>
@@ -1010,30 +1049,6 @@ function StoppageRow({
           </button>
         )}
       </div>
-
-      {/* Machine — the per-machine KPI has to be asked for, not guessed. */}
-      {meta?.needsMachine && !readOnly && (
-        <div className="flex items-center gap-2">
-          {machines.length > 0 ? (
-            <select value={s.machine ?? ''} onChange={e => onPatch({ machine: e.target.value || null })}
-              className="flex-1 px-2.5 py-2 rounded-lg border border-stone-200 bg-white text-[12px] outline-none focus:border-brand cursor-pointer">
-              <option value="">Which machine? (optional)</option>
-              {machines.map(m => <option key={m} value={m}>{m}</option>)}
-              {s.machine && !machines.includes(s.machine) && (
-                <option value={s.machine}>{s.machine}</option>
-              )}
-            </select>
-          ) : (
-            <input type="text" value={s.machine ?? ''} onChange={e => onPatch({ machine: e.target.value || null })}
-              placeholder="Which machine?" className={TEXT} />
-          )}
-        </div>
-      )}
-      {meta?.needsMachine && readOnly && s.machine && (
-        <p className="text-[11px] text-text-muted flex items-center gap-1.5">
-          <Wrench size={11} /> {s.machine}
-        </p>
-      )}
 
       {/* Notes */}
       {(meta?.needsNotes || s.notes) && (
@@ -1056,19 +1071,17 @@ function StoppageRow({
               const v = e.target.value
               if (v !== (s.notes ?? '')) onPatch({ notes: v || null })
             }}
-            placeholder={
-              s.kind === 'breakdown' ? 'What broke, and what stopped?'
-                : s.kind === 'maintenance' ? 'What was worked on?'
-                : s.kind === 'changeover' ? 'What changed over?'
-                : 'What happened?'
-            }
+            placeholder={NOTE_HINT[s.kind] ?? 'What happened?'}
             className={`${TEXT} ${problem ? 'border-err' : ''}`} />
         )
       )}
 
-      {fromCard && (
+      {/* Only set where maintenance later raised a card for this stoppage.
+          Nothing on this screen writes it — the capture page does not read the
+          maintenance schema at all any more. */}
+      {s.jobCardId != null && (
         <p className="text-[10px] text-text-muted flex items-center gap-1">
-          <Wrench size={10} /> Linked to maintenance job card
+          <Wrench size={10} /> Job card {s.jobCardId}
         </p>
       )}
       {/* A signed breakdown says so on the row, not only in the panel above —

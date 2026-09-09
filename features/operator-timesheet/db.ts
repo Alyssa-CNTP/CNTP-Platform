@@ -15,28 +15,23 @@ import {
   scheduledStoppages, toSnapshotBreaks, workedMinutes,
   type Stoppage, type StoppageKind, type StoppageSource, type SupervisorVerdict,
 } from '@/lib/core/timesheet/stoppages'
-import type { SupabaseClient } from '@supabase/supabase-js'
-import { areasForSection } from './areas'
 import type { Database } from '@/lib/supabase/database.types'
 
 // ── Typed edges ──────────────────────────────────────────────────────────────
 //
-// Two conversions are genuinely unavoidable here, so each happens ONCE, behind
-// a name, instead of being sprinkled through the file as `as any`:
+// `stoppageWrite` / `timesheetWrite` exist because Supabase's generated Insert
+// type demands every non-defaulted column, so a PARTIAL write — a supervisor
+// signing, without restating the operator's times — cannot satisfy it.
+// `Partial<Row>` is what these writes actually are.
 //
-//   * `maint()` — database.types.ts describes only the `production` schema, so
-//     a `maintenance` read has to go through an untyped client. Narrowing to
-//     the bare `SupabaseClient` says exactly that, and says it in one place.
+// Neither uses `any`, which matters beyond style: they still check every column
+// name against the real row, and they earned that immediately — the first
+// compile caught `breaks` and `derived_data` being handed objects the `jsonb`
+// columns' type does not accept.
 //
-//   * `stoppageWrite` / `timesheetWrite` — Supabase's generated Insert type
-//     demands every non-defaulted column, so a PARTIAL write (a supervisor
-//     signing, without restating the operator's times) cannot satisfy it.
-//     `Partial<Row>` is what these writes actually are.
-//
-// Neither uses `any`, which matters beyond style: the payload helpers still
-// check every column name against the real row, and they earned that
-// immediately — the first compile caught `breaks` and `derived_data` being
-// handed objects the `jsonb` columns' type does not accept.
+// NOTHING in this file reads the `maintenance` schema. An earlier version
+// polled `job_cards` and `machines`; both are gone, along with the untyped
+// client that reaching another schema required. See prompts.ts for why.
 
 type StoppageRow    = Database['production']['Tables']['timesheet_stoppages']['Row']
 type StoppageInsert = Database['production']['Tables']['timesheet_stoppages']['Insert']
@@ -48,9 +43,6 @@ type TimesheetInsert = Database['production']['Tables']['prod_timesheets']['Inse
 // what a bare `as any` on the payload gives up.
 const stoppageWrite  = (w: Partial<StoppageRow>)  => w as unknown as StoppageInsert
 const timesheetWrite = (w: Partial<TimesheetRow>) => w as unknown as TimesheetInsert
-
-/** The `maintenance` schema, read through an untyped client — see above. */
-const maint = () => (getDb() as unknown as SupabaseClient).schema('maintenance')
 
 /**
  * A value bound for a `jsonb` column.
@@ -70,7 +62,7 @@ const asJson = (v: unknown): JsonValue => v as JsonValue
 const COLS =
   'id,kind,started_at,ended_at,notes,machine,area,job_card_id,source,voided_at,' +
   'supervisor_verdict,supervisor_name,supervisor_employee_id,supervisor_signed_at,' +
-  'supervisor_note,notified_at'
+  'supervisor_note,notified_at,supervisor_requested_at,supervisor_request_count'
 
 function toStoppage(r: StoppageRow): Stoppage {
   return {
@@ -97,6 +89,8 @@ function toStoppage(r: StoppageRow): Stoppage {
         }
       : null,
     notifiedAt: r.notified_at ?? null,
+    supervisorRequestedAt:  r.supervisor_requested_at ?? null,
+    supervisorRequestCount: Number(r.supervisor_request_count ?? 0),
   }
 }
 
@@ -182,9 +176,63 @@ export async function saveStoppage(scope: StoppageScope, s: Stoppage): Promise<v
     supervisor_signed_at:   s.attestation?.signedAt ?? null,
     supervisor_note:        s.attestation?.note ?? null,
     notified_at: s.notifiedAt,
+    // Carried through rather than omitted: this is an UPSERT, so on the insert
+    // path an omitted column takes its default and would silently reset a call
+    // the operator had already made.
+    supervisor_requested_at:  s.supervisorRequestedAt,
+    supervisor_request_count: s.supervisorRequestCount,
     updated_at:  new Date().toISOString(),
   }), { onConflict: 'id' })
   if (error) throw new Error(`Could not save the stoppage: ${error.message}`)
+}
+
+/**
+ * Call a supervisor to come and confirm a breakdown.
+ *
+ * The operator's "submit". Without this the screen said "awaiting supervisor
+ * confirmation" and then nothing happened — there was no way to actually ask
+ * anyone, so the sheet sat unsigned until somebody wandered past the tablet.
+ *
+ * Repeatable on purpose. A supervisor who did not come the first time is the
+ * case this exists for, and `supervisor_request_count` records how many times
+ * they were asked — so a shift report can tell "never asked" apart from "asked
+ * four times and ignored", which are different problems with different people
+ * at fault.
+ *
+ * Returns the timestamp recorded, or null if the call could not be sent. The
+ * stamp is written only AFTER the notification is accepted: stamping first
+ * would show the operator "supervisor called" for a call that never left.
+ */
+export async function callSupervisor(args: {
+  stoppageId:   string
+  sectionId:    string
+  area:         string | null
+  description:  string
+  operatorName: string
+  startedAt:    string
+  /** How many times they have been asked already, for the message. */
+  previousCalls: number
+}): Promise<string | null> {
+  try {
+    const res = await fetch('/api/production/stoppage/call-supervisor', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(args),
+    })
+    if (!res.ok) throw new Error(`call-supervisor route returned ${res.status}`)
+    const body = await res.json().catch(() => ({}))
+    const at = body.requestedAt ?? new Date().toISOString()
+    const { error } = await table().update(stoppageWrite({
+      supervisor_requested_at:  at,
+      supervisor_request_count: args.previousCalls + 1,
+      updated_at:               new Date().toISOString(),
+    })).eq('id', args.stoppageId)
+    if (error) throw new Error(error.message)
+    return at
+  } catch (e) {
+    console.warn('[operator-timesheet] could not call a supervisor:', e)
+    return null
+  }
 }
 
 /**
@@ -218,7 +266,7 @@ export async function attestStoppage(args: {
 }
 
 /**
- * Mark a breakdown as having been reported to the maintenance manager.
+ * Mark a stoppage as having been reported to the team that owns it.
  *
  * Written AFTER the notification is accepted, never before: a stamp written
  * first would suppress the retry when the send actually failed, and the
@@ -232,30 +280,35 @@ export async function markNotified(stoppageId: string, at: string): Promise<void
 }
 
 /**
- * Tell the maintenance manager (and the production supervisors) that a line is
- * down, then stamp the row so it is never sent twice.
+ * Tell whichever team can act that the line has stopped, then stamp the row so
+ * it is never sent twice.
+ *
+ * The OPERATOR stopped the machine and the operator logged it — this only
+ * carries the news. Which team is decided server-side from the stoppage kind
+ * (`STOPPAGE_META[kind].notify`): maintenance for a breakdown or a power
+ * failure, IT for the system being down, the production supervisors for a
+ * material or quality hold.
  *
  * Goes through an API route because `notify()` is server-only — it writes other
  * users' notification rows with the service-role client, which a browser
  * session cannot and must not be able to do.
  *
  * Returns true when the row was stamped. A failure is deliberately quiet at the
- * call site: the breakdown is already saved, and an operator mid-shift cannot
- * act on "the notification service is down". It retries on the next poll,
+ * call site: the stoppage is already saved, and an operator mid-shift cannot
+ * act on "the notification service is down". It retries on the next render,
  * because `notified_at` is still null.
  */
-export async function reportBreakdown(args: {
-  stoppageId:  string
-  sectionId:   string
-  machine:     string | null
-  area:        string | null
-  description: string
+export async function reportStoppage(args: {
+  stoppageId:   string
+  sectionId:    string
+  kind:         StoppageKind
+  area:         string | null
+  description:  string
   operatorName: string
-  startedAt:   string
-  jobCardId:   number | null
+  startedAt:    string
 }): Promise<boolean> {
   try {
-    const res = await fetch('/api/production/breakdown/notify', {
+    const res = await fetch('/api/production/stoppage/notify', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(args),
@@ -265,7 +318,7 @@ export async function reportBreakdown(args: {
     await markNotified(args.stoppageId, body.notifiedAt ?? new Date().toISOString())
     return true
   } catch (e) {
-    console.warn('[operator-timesheet] breakdown notification failed, will retry:', e)
+    console.warn('[operator-timesheet] stoppage notification failed, will retry:', e)
     return false
   }
 }
@@ -437,122 +490,4 @@ export async function confirmTimesheet(args: ConfirmArgs): Promise<void> {
   }), { onConflict: 'session_id,operator_name' })
 
   if (error) throw new Error(`Could not save the timesheet: ${error.message}`)
-}
-
-// ── Maintenance job cards for this line ──────────────────────────────────────
-
-/**
- * The job-card columns this feature reads. Declared here rather than imported
- * from lib/maintenance/types, and narrower than that module's `JobCard` on
- * purpose: this is the read contract of ONE query, so a column dropped from the
- * select is a type error rather than a silent `undefined` at runtime.
- */
-interface JobCardRow {
-  id:           number
-  card_no:      string | null
-  area:         string | null
-  machine:      string | null
-  description:  string | null
-  workflow:     string | null
-  status:       string | null
-  raised_at:    string
-  started_at:   string | null
-  completed_at: string | null
-  raised_by:    string | null
-  assigned_to:  string | null
-}
-
-export interface LineJobCard {
-  id:          number
-  cardNo:      string
-  area:        string
-  machine:     string | null
-  description: string
-  workflow:    'breakdown' | 'planned'
-  status:      string
-  raisedAt:    string
-  startedAt:   string | null
-  completedAt: string | null
-  raisedBy:    string | null
-  assignedTo:  string | null
-}
-
-const CLOSED_STATUSES = new Set(['complete', 'cancelled'])
-
-export function isCardOpen(c: LineJobCard): boolean {
-  return !CLOSED_STATUSES.has(c.status)
-}
-
-/**
- * The machines on this line, from the maintenance module's own register.
- *
- * Read from `maintenance.machines` rather than kept as a list here, because a
- * per-machine downtime KPI is only as good as the machine names agreeing across
- * the two modules — a second list would drift, and every stoppage typed against
- * a name maintenance does not use is a machine with no history.
- *
- * Returns [] on any failure. A missing picker degrades to free text (the
- * component keeps an "other" option); a throw here would take out the whole
- * timesheet, which is the trade §3 names — degrade to the old answer, never a
- * blank screen over a half-captured session.
- */
-export async function loadLineMachines(sectionId: string): Promise<string[]> {
-  const areas = areasForSection(sectionId)
-  if (areas.length === 0) return []
-  try {
-    const { data, error } = await maint().from('machines')
-      .select('name,area').in('area', areas).eq('active', true).order('name')
-    if (error) throw new Error(error.message)
-    const rows = (data as { name: string | null }[] | null) ?? []
-    const names = rows.map(m => String(m.name ?? '')).filter(Boolean)
-    return [...new Set(names)]
-  } catch (e) {
-    console.warn('[operator-timesheet] machine register unavailable:', e)
-    return []
-  }
-}
-
-/**
- * Maintenance job cards touching this line during this shift.
- *
- * Both the open ones and any closed since the shift began: a card completed
- * twenty minutes ago is exactly the one whose stoppage the operator still needs
- * prompting to close.
- *
- * Read-only. This feature never writes to the maintenance schema — a job card's
- * lifecycle belongs to the maintenance module, and a capture screen quietly
- * completing a card would be two owners of one workflow.
- */
-export async function loadLineJobCards(
-  sectionId: string,
-  sinceIso: string,
-): Promise<LineJobCard[]> {
-  const areas = areasForSection(sectionId)
-  if (areas.length === 0) return []
-
-  const { data, error } = await maint().from('job_cards')
-    .select('id,card_no,area,machine,description,workflow,status,raised_at,started_at,completed_at,raised_by,assigned_to')
-    .in('area', areas)
-    // Raised during the shift, OR raised earlier and still not closed — a
-    // breakdown from yesterday that is still down is still stopping this line.
-    .or(`raised_at.gte.${sinceIso},status.not.in.(complete,cancelled)`)
-    .order('raised_at', { ascending: false })
-    .limit(50)
-
-  if (error) throw new Error(`Could not read maintenance job cards: ${error.message}`)
-
-  return ((data as JobCardRow[] | null) ?? []).map(c => ({
-    id:          Number(c.id),
-    cardNo:      c.card_no ?? String(c.id),
-    area:        c.area ?? '',
-    machine:     c.machine ?? null,
-    description: c.description ?? '',
-    workflow:    (c.workflow === 'breakdown' ? 'breakdown' : 'planned') as 'breakdown' | 'planned',
-    status:      c.status ?? 'raised',
-    raisedAt:    c.raised_at,
-    startedAt:   c.started_at ?? null,
-    completedAt: c.completed_at ?? null,
-    raisedBy:    c.raised_by ?? null,
-    assignedTo:  c.assigned_to ?? null,
-  }))
 }

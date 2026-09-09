@@ -16,11 +16,12 @@ import type {
   ShiftReport, LineReport, OutputLine, ThroughputLine, MachineConfigLine,
   MachineSetting, Changeover, BreakdownLine, ChecksLine, CheckFailure,
   WasteLine, ReportNote, OutstandingItem, RosteredPerson, PresentPerson,
-  AbsentPerson, ShiftReportAuditEntry, StoppageLine, MachineDowntimeLine,
+  AbsentPerson, ShiftReportAuditEntry, StoppageLine, LineDowntimeLine,
 } from '@/lib/production/shift-report'
 import type { Shift } from '@/lib/supabase/database.types'
 import { round1, yieldPct, kgPerHour } from '@/lib/core/metrics'
 import { STOPPAGE_META, type StoppageKind } from '@/lib/core/timesheet/stoppages'
+import { primaryAreaForSection } from '@/features/operator-timesheet'
 
 const num = (v: unknown): number => {
   if (v === null || v === undefined || v === '') return 0
@@ -119,7 +120,7 @@ export async function buildShiftReport(date: string, shift: Shift): Promise<Shif
   {
     const { data: stopRaw, error: stopErr } = await prod().from('timesheet_stoppages')
       .select('id,section_id,operator_name,kind,started_at,ended_at,notes,machine,job_card_id,' +
-              'supervisor_verdict,supervisor_name,voided_at')
+              'supervisor_verdict,supervisor_name,supervisor_requested_at,voided_at')
       .eq('date', date).in('shift', shiftVals).is('voided_at', null)
       .order('started_at', { ascending: true })
     // A missing table is the pre-migration state, not a broken report. Named in
@@ -146,37 +147,50 @@ export async function buildShiftReport(date: string, shift: Shift): Promise<Shif
         downtime: !!meta?.downtime,
         verdict: r.supervisor_verdict ?? null,
         attestedBy: r.supervisor_verdict ? (r.supervisor_name ?? 'Supervisor') : null,
+        supervisorRequestedAt: r.supervisor_requested_at ?? null,
       })
     }
   }
 
-  // ── Per-machine downtime — the machine's own record, not its line's ───────
+  // ── Per-line downtime, broken down by cause ──────────────────────────────
   //
-  // Aggregated here rather than read from production.v_machine_downtime because
+  // Aggregated here rather than read from production.v_line_downtime because
   // the view measures an open stoppage to now() (right for a live dashboard)
   // while a shift report must measure it to the end of the shift window. Same
-  // rules otherwise: only breakdown/maintenance, and never a disputed one.
-  const machineDowntime: MachineDowntimeLine[] = (() => {
-    const byMachine = new Map<string, MachineDowntimeLine>()
+  // rules otherwise: downtime kinds only, and never a disputed one.
+  //
+  // Keyed on the LINE. The operator is never asked which machine stopped — the
+  // section is the production order they have open — so a per-machine figure
+  // would be a column of nulls. What replaces it is `byKind`: two hours lost to
+  // `no_material` is a different problem from two hours lost to `breakdown`,
+  // and one total hides that.
+  const lineDowntime: LineDowntimeLine[] = (() => {
+    const byLine = new Map<string, LineDowntimeLine>()
     for (const s of stoppages) {
-      if (!s.downtime || !s.machine) continue
+      if (!s.downtime) continue
       if (s.verdict === 'disputed') continue
-      const key = `${s.sectionId}::${s.machine}`
-      let row = byMachine.get(key)
+      let row = byLine.get(s.sectionId)
       if (!row) {
         row = {
-          machine: s.machine, sectionId: s.sectionId, sectionName: s.sectionName,
-          events: 0, minutes: 0, unattestedMinutes: 0, stillOpen: 0, jobCardIds: [],
+          sectionId: s.sectionId, sectionName: s.sectionName,
+          area: primaryAreaForSection(s.sectionId),
+          events: 0, minutes: 0, unattestedMinutes: 0, stillOpen: 0,
+          byKind: [], jobCardIds: [],
         }
-        byMachine.set(key, row)
+        byLine.set(s.sectionId, row)
       }
       row.events += 1
       row.minutes += s.minutes
       if (s.kind === 'breakdown' && !s.verdict) row.unattestedMinutes += s.minutes
       if (!s.endedAt) row.stillOpen += 1
       if (s.jobCardId != null && !row.jobCardIds.includes(s.jobCardId)) row.jobCardIds.push(s.jobCardId)
+
+      const k = row.byKind.find(x => x.kind === s.kind)
+      if (k) { k.minutes += s.minutes; k.events += 1 }
+      else row.byKind.push({ kind: s.kind, label: s.kindLabel, minutes: s.minutes, events: 1 })
     }
-    return [...byMachine.values()].sort((a, b) => b.minutes - a.minutes)
+    for (const row of byLine.values()) row.byKind.sort((a, b) => b.minutes - a.minutes)
+    return [...byLine.values()].sort((a, b) => b.minutes - a.minutes)
   })()
 
   // ── Roster — who was SUPPOSED to be here ─────────────────────────────────
@@ -704,7 +718,7 @@ export async function buildShiftReport(date: string, shift: Shift): Promise<Shif
       totalWorkedMinutes: present.reduce((t, p) => t + p.workedMinutes, 0),
     },
     lines, outputs, throughput, machineConfig, changeovers, breakdowns,
-    stoppages, machineDowntime,
+    stoppages, lineDowntime,
     checks, waste, notes, outstanding, record, gaps,
   }
 }

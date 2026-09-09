@@ -27,18 +27,70 @@
 
 // ── Kinds ────────────────────────────────────────────────────────────────────
 
+/**
+ * The kinds an operator can log, in the order they are offered.
+ *
+ * This list is meant to cover EVERYTHING that stops production, because the
+ * alternative is not "a shorter list" — it is every unlisted cause arriving as
+ * `other` with a free-text note, which is how a stoppage stops being
+ * analysable. That is exactly what happened to breakdowns and deep cleans under
+ * the old five-value union.
+ *
+ * So it includes the non-mechanical causes too: the system being down, a power
+ * failure, waiting on material from the line upstream, and a quality hold. A
+ * line stopped by load-shedding produced nothing, and a KPI that can only
+ * explain mechanical stoppages will show that hour as unexplained.
+ */
 export const STOPPAGE_KINDS = [
-  'tea', 'lunch', 'deep_clean', 'breakdown', 'maintenance', 'changeover', 'other',
+  'tea', 'lunch', 'deep_clean',
+  'breakdown', 'maintenance',
+  'power', 'it_system', 'no_material', 'quality_hold',
+  'other',
 ] as const
 
-export type StoppageKind = typeof STOPPAGE_KINDS[number]
+/**
+ * Kinds that exist in stored data but are no longer offered.
+ *
+ * `changeover` is retired pending a rebuild of that function. It stays here,
+ * and in the database CHECK, because rows already carry it — historic
+ * `prod_timesheets.breaks` entries and anything the optional backfill imports.
+ * Dropping it from the type outright would make `toStoppage` cast a real row to
+ * a kind that does not exist, and `STOPPAGE_META[kind]` would come back
+ * undefined on a screen the operator is mid-shift on.
+ *
+ * Retired means: rendered if present, never offered.
+ */
+export const RETIRED_STOPPAGE_KINDS = ['changeover'] as const
+
+export const ALL_STOPPAGE_KINDS = [...STOPPAGE_KINDS, ...RETIRED_STOPPAGE_KINDS] as const
+
+export type StoppageKind = typeof ALL_STOPPAGE_KINDS[number]
+/** A kind the operator may still choose. */
+export type OfferableStoppageKind = typeof STOPPAGE_KINDS[number]
 
 export function isStoppageKind(v: unknown): v is StoppageKind {
-  return typeof v === 'string' && (STOPPAGE_KINDS as readonly string[]).includes(v)
+  return typeof v === 'string' && (ALL_STOPPAGE_KINDS as readonly string[]).includes(v)
+}
+
+/** Is this kind still on offer, or only rendered because a row carries it? */
+export function isRetiredKind(k: StoppageKind): boolean {
+  return (RETIRED_STOPPAGE_KINDS as readonly string[]).includes(k)
 }
 
 /** Where a ledger row came from. `standard` = the scheduled tea/lunch. */
 export type StoppageSource = 'operator' | 'standard' | 'maintenance'
+
+/**
+ * Who needs to be told, immediately, that the line has stopped.
+ *
+ * The operator stops the machine, so the operator is the one who knows it
+ * stopped and when. This field says who finds out — it is a notification
+ * routing rule, not a claim about who logs the stoppage.
+ *
+ * `null` means nobody is paged: a tea break and a scheduled deep clean are not
+ * news, and notifying on them is how the notifications that matter get ignored.
+ */
+export type NotifyTeam = 'maintenance' | 'it' | 'supervisor'
 
 /**
  * A supervisor's verdict on a breakdown the operator logged.
@@ -63,57 +115,114 @@ export interface StoppageMeta {
   /** Short form for a chip or a pill. */
   short: string
   /**
-   * Planned absence of production (tea, lunch, deep clean, changeover) versus
-   * unplanned machine failure. Only the unplanned kinds are machine downtime —
-   * a deep clean every Tuesday morning is not a breakdown, and counting it as
-   * one makes the availability figure meaningless.
+   * Scheduled absence of production (tea, lunch, the Tuesday deep clean,
+   * planned maintenance) versus something that went wrong. Planned work can
+   * still be downtime — a service stops the line — so this is not the same
+   * question as `downtime`.
    */
   planned: boolean
-  /** Counts toward machine downtime KPIs. */
+  /**
+   * Counts toward the line's downtime KPI.
+   *
+   * Breaks are not downtime: the shift is designed around them, and counting
+   * them would make every shift look 10% broken. Everything that stops
+   * production when it was supposed to be running is, including the
+   * non-mechanical causes — a line stopped by the system being down produced
+   * exactly as little as one stopped by a bearing.
+   */
   downtime: boolean
   /** A stoppage of this kind cannot be confirmed without a description. */
   needsNotes: boolean
-  /** Offer the machine picker — the KPI is per machine, so it has to be asked. */
-  needsMachine: boolean
-  /** Duration pre-filled when the operator logs one with an end time. */
+  /** Who is paged when this is logged. See `NotifyTeam`. */
+  notify: NotifyTeam | null
+  /**
+   * Does a supervisor have to sign this off?
+   *
+   * Breakdown only. It is the kind most often disputed after the fact, and the
+   * one an operator is most exposed on — so a signature protects them as much
+   * as it protects the figure. Extending it to every kind would make the
+   * signature a reflex, and the one that matters would be signed as
+   * thoughtlessly as the rest.
+   */
+  attested: boolean
+  /** Duration pre-filled when the operator logs one after the fact. */
   defaultMinutes: number
 }
 
 export const STOPPAGE_META: Record<StoppageKind, StoppageMeta> = {
   tea: {
     label: 'Tea break', short: 'Tea',
-    planned: true, downtime: false, needsNotes: false, needsMachine: false, defaultMinutes: 30,
+    planned: true, downtime: false, needsNotes: false,
+    notify: null, attested: false, defaultMinutes: 30,
   },
   lunch: {
     label: 'Lunch', short: 'Lunch',
-    planned: true, downtime: false, needsNotes: false, needsMachine: false, defaultMinutes: 30,
+    planned: true, downtime: false, needsNotes: false,
+    notify: null, attested: false, defaultMinutes: 30,
   },
   deep_clean: {
     // Usually the Tuesday morning shift — see `deepCleanDue()`.
     label: 'Deep clean', short: 'Deep clean',
-    planned: true, downtime: false, needsNotes: false, needsMachine: true, defaultMinutes: 60,
+    planned: true, downtime: false, needsNotes: false,
+    notify: null, attested: false, defaultMinutes: 60,
   },
   breakdown: {
     label: 'Breakdown', short: 'Breakdown',
-    planned: false, downtime: true, needsNotes: true, needsMachine: true, defaultMinutes: 30,
+    planned: false, downtime: true, needsNotes: true,
+    notify: 'maintenance', attested: true, defaultMinutes: 30,
   },
   maintenance: {
-    label: 'Maintenance', short: 'Maintenance',
-    planned: false, downtime: true, needsNotes: true, needsMachine: true, defaultMinutes: 30,
+    label: 'Planned maintenance', short: 'Maintenance',
+    // Planned, but the line is still stopped for it.
+    planned: true, downtime: true, needsNotes: true,
+    notify: 'maintenance', attested: false, defaultMinutes: 30,
   },
-  changeover: {
-    label: 'Changeover', short: 'Changeover',
-    planned: true, downtime: false, needsNotes: true, needsMachine: false, defaultMinutes: 30,
+  power: {
+    label: 'Power failure', short: 'Power',
+    planned: false, downtime: true, needsNotes: true,
+    // Electrical and the boiler are maintenance's, load-shedding or not.
+    notify: 'maintenance', attested: false, defaultMinutes: 30,
+  },
+  it_system: {
+    label: 'System / IT down', short: 'System',
+    planned: false, downtime: true, needsNotes: true,
+    // IT, not maintenance. Paging a fitter for a network outage wastes the one
+    // person who could have fixed it.
+    notify: 'it', attested: false, defaultMinutes: 15,
+  },
+  no_material: {
+    label: 'Waiting for material', short: 'No material',
+    planned: false, downtime: true, needsNotes: true,
+    // Nothing to fix — an upstream line or the store has to move, so this is
+    // the supervisor's to resolve.
+    notify: 'supervisor', attested: false, defaultMinutes: 30,
+  },
+  quality_hold: {
+    label: 'Quality hold', short: 'QC hold',
+    planned: false, downtime: true, needsNotes: true,
+    notify: 'supervisor', attested: false, defaultMinutes: 30,
   },
   other: {
     label: 'Other stoppage', short: 'Other',
-    planned: true, downtime: false, needsNotes: true, needsMachine: false, defaultMinutes: 15,
+    // Deliberately NOT downtime and NOT notified. `other` is the bucket for
+    // whatever this list failed to anticipate, so it cannot be trusted to mean
+    // the line was down — and a cause nobody named is not a page to anyone.
+    // A recurring `other` in the shift reports is the signal to add a kind.
+    planned: true, downtime: false, needsNotes: true,
+    notify: null, attested: false, defaultMinutes: 15,
+  },
+
+  // ── Retired ────────────────────────────────────────────────────────────────
+  changeover: {
+    label: 'Changeover (retired)', short: 'Changeover',
+    planned: true, downtime: false, needsNotes: true,
+    notify: null, attested: false, defaultMinutes: 30,
   },
 }
 
-/** The kinds that count as machine downtime. Derived, so the two can't drift. */
+/** The kinds that count as downtime. Derived, so the two cannot drift. */
 export const DOWNTIME_KINDS: readonly StoppageKind[] =
-  STOPPAGE_KINDS.filter(k => STOPPAGE_META[k].downtime)
+  ALL_STOPPAGE_KINDS.filter(k => STOPPAGE_META[k].downtime)
 
 // ── The record ───────────────────────────────────────────────────────────────
 
@@ -137,8 +246,17 @@ export interface Stoppage {
   voidedAt:   string | null
   /** The supervisor's signature on a breakdown. Null until one is applied. */
   attestation: Attestation | null
-  /** When the maintenance manager was told. Null = not yet notified. */
+  /** When the owning team was told. Null = not yet notified. */
   notifiedAt:  string | null
+  /**
+   * When the operator last called a supervisor to come and confirm this, and
+   * how many times they have asked.
+   *
+   * Null is not the same as zero-and-never-answered: it means nobody was ever
+   * called. A report that cannot tell those apart blames the wrong person.
+   */
+  supervisorRequestedAt: string | null
+  supervisorRequestCount: number
 }
 
 const MS_PER_MIN = 60_000
@@ -278,36 +396,60 @@ export function downtimeMinutes(stoppages: Stoppage[], now: number = Date.now())
 /**
  * Does this stoppage need a supervisor's signature?
  *
- * Only breakdowns. They are the one kind that moves a number somebody is
- * measured on — time out of production KPIs, downtime against a named machine —
- * so they are the one kind that is not self-certifying. Tea, lunch, a deep
- * clean and a changeover are scheduled or self-evident; making a supervisor
- * sign for a tea break would turn the signature into a rubber stamp and the
- * one that matters would be signed as reflexively as the rest.
- *
- * A voided breakdown needs nothing: it has been taken off the sheet.
+ * Driven by `STOPPAGE_META[kind].attested`, so the rule lives in one table
+ * rather than as a hard-coded kind check that a new kind would quietly bypass.
+ * A voided stoppage needs nothing: it has been taken off the sheet.
  */
 export function needsAttestation(s: Stoppage): boolean {
-  return isLive(s) && s.kind === 'breakdown' && !s.attestation
+  return isLive(s) && !!STOPPAGE_META[s.kind]?.attested && !s.attestation
 }
 
-/** Breakdowns still waiting on a supervisor, oldest first. */
+/** Stoppages still waiting on a supervisor, oldest first. */
 export function pendingAttestations(stoppages: Stoppage[]): Stoppage[] {
   return stoppages
     .filter(needsAttestation)
     .sort((a, b) => a.startedAt.localeCompare(b.startedAt))
 }
 
+/** Who should be told about this stoppage, if anyone. */
+export function notifyTeamFor(s: Stoppage): NotifyTeam | null {
+  return STOPPAGE_META[s.kind]?.notify ?? null
+}
+
 /**
- * Breakdowns the maintenance manager has not been told about yet.
+ * Where an unsigned breakdown is stuck.
+ *
+ *   `signed`      — done, either way.
+ *   `not_called`  — nobody has been asked. The OPERATOR's to fix.
+ *   `ignored`     — a supervisor was called and has not signed. THEIRS.
+ *   `n/a`         — this kind never needed a signature.
+ *
+ * The distinction is the whole point of recording the call. Both of the middle
+ * two render as "awaiting supervisor" if you only look at the verdict column,
+ * and a shift report that cannot tell them apart blames the wrong person — the
+ * operator, every time, because they are the one whose sheet is incomplete.
+ */
+export type AttestationState = 'n/a' | 'signed' | 'not_called' | 'ignored'
+
+export function attestationState(s: Stoppage): AttestationState {
+  if (!STOPPAGE_META[s.kind]?.attested || !isLive(s)) return 'n/a'
+  if (s.attestation) return 'signed'
+  return s.supervisorRequestedAt ? 'ignored' : 'not_called'
+}
+
+/**
+ * Stoppages whose team has not been told yet.
  *
  * Keyed on `notifiedAt` rather than on "is this new to the component", because
  * a notification you cannot tell you already sent gets sent again on every
  * reload — and a maintenance manager who receives the same breakdown six times
  * stops reading them.
+ *
+ * The operator is who logs it and who knows when the machine stopped; this is
+ * only about who then finds out.
  */
 export function pendingNotifications(stoppages: Stoppage[]): Stoppage[] {
-  return stoppages.filter(s => isLive(s) && s.kind === 'breakdown' && !s.notifiedAt)
+  return stoppages.filter(s => isLive(s) && !s.notifiedAt && notifyTeamFor(s) !== null)
 }
 
 // ── The scheduled breaks ─────────────────────────────────────────────────────
@@ -364,6 +506,7 @@ export function scheduledStoppages(
       notes: null, machine: null, area: null, jobCardId: null,
       source: 'standard', voidedAt: null,
       attestation: null, notifiedAt: null,
+      supervisorRequestedAt: null, supervisorRequestCount: 0,
     })
   }
   return out

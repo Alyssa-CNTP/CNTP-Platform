@@ -299,7 +299,15 @@ export interface Database {
           section_id:    string
           date:          string
           shift:         string
-          kind:          'tea' | 'lunch' | 'deep_clean' | 'breakdown' | 'maintenance' | 'changeover' | 'other'
+          // Covers non-mechanical causes too — a line stopped by the system
+          // being down produced as little as one stopped by a bearing.
+          // `changeover` is RETIRED: still stored (historic rows, backfill),
+          // never offered. See lib/core/timesheet/stoppages.ts.
+          kind:          'tea' | 'lunch' | 'deep_clean'
+                       | 'breakdown' | 'maintenance'
+                       | 'power' | 'it_system' | 'no_material' | 'quality_hold'
+                       | 'other'
+                       | 'changeover'
           started_at:    string
           ended_at:      string | null   // null = still running
           notes:         string | null
@@ -314,7 +322,11 @@ export interface Database {
           supervisor_employee_id: string | null
           supervisor_signed_at:   string | null
           supervisor_note:        string | null
-          notified_at:   string | null   // maintenance manager told
+          notified_at:   string | null   // the owning team was told
+          // The operator calling for a signature. NULL = never asked, which is
+          // a different problem from asked-and-ignored.
+          supervisor_requested_at:  string | null
+          supervisor_request_count: number
           voided_at:     string | null
           voided_by:     string | null
           void_reason:   string | null
