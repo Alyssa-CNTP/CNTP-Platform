@@ -16,7 +16,7 @@ import { useParams, useRouter } from 'next/navigation'
 import { format } from 'date-fns'
 import { ArrowLeft, Printer, Loader2, CheckCircle2, Clock, Pen, Play, Radio, Sparkles, MessageSquare, MessageSquarePlus, ArrowRightLeft, AlertTriangle } from 'lucide-react'
 import { loadOrderDay, type OrderDay, type OrderBagRow, type OrderRebagRow, type OrderFreshTopUpRow, type OrderDebagRow, type OrderShiftBlock, type OrderMassBalance, type OrderTimesheet, type OrderNote } from '@/lib/production/order-detail'
-import { sectionMeta, GRADE_TO_LOCAL_EXPORT } from '@/lib/production/capture-config'
+import { sectionMeta, GRADE_TO_LOCAL_EXPORT, isOrganicVariant } from '@/lib/production/capture-config'
 import { formatSAST } from '@/lib/production/shifts'
 import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
@@ -79,6 +79,24 @@ function inputType(d: OrderDebagRow): string {
   const pt = (d.product_type || '').trim()
   if (!pt || /farm\s*bag/i.test(pt)) return 'Bulk Bag'
   return pt
+}
+
+// One (variant, grade) run within the day, while it is being built up.
+interface MutableRun {
+  key: string
+  variant: string | null
+  grade: string | null
+  inputs: OrderDebagRow[]
+  outputs: OrderBagRow[]
+}
+
+// A run's title: what was made, in the words the floor uses. Either half can be
+// missing, and a missing half says so rather than quietly disappearing — a run
+// reading "Conventional" alone would look like a complete label, and the reader
+// would have no way to tell it apart from one where the grade is genuinely
+// known.
+function runTitle(variant: string | null, grade: string | null): string {
+  return `${variant || 'Variant not recorded'} · ${grade || 'grade not recorded'}`
 }
 
 export default function ProductionOrderDetailPage() {
@@ -179,74 +197,158 @@ export default function ProductionOrderDetailPage() {
   //                output entirely rather than counted on either side.
   const isBucketRow   = (d: OrderDebagRow) => /bucket elevator/i.test(d.product_type || '')
   const isCarriedOut  = (d: OrderDebagRow) => isBucketRow(d) && (d.shift === 'afternoon' || d.shift === 'night')
-  const sameVariant   = (d: OrderDebagRow) => !d.variant || !variant || d.variant === variant
   // Carried IN from yesterday, and only if it is this run's material.
-  const bucketInExcluded = debags.filter(d => isBucketRow(d) && !isCarriedOut(d) && !sameVariant(d))
+  //
+  // Two things were wrong with the guard this replaces, and together they cost
+  // 5 950 kg off a printed order.
+  //
+  //   1. It was applied to EVERY debagging row, not just the bucket elevator —
+  //      which is the only thing the comment above it ever described.
+  //   2. It compared the raw variant STRING against the day's variant, and the
+  //      day's variant is whatever the FIRST shift recorded.
+  //
+  // On 2026-09-07 the Sieving tower ran Conventional in the morning and
+  // RA-Conventional in the afternoon. Every one of the afternoon's 18 farm-bag
+  // rows failed `d.variant === variant` and was dropped — from the inputs
+  // panel, from Total Input, and from the afternoon's own block, which printed
+  // INPUT 0.0 kg. Output has no such filter, so all 47 bags still counted: the
+  // order read 6 577 kg in against 12 892 kg out, +96.0%, 196% yield. Nothing
+  // on the page said anything had been held back, because the sentence that
+  // would have said so (bucketInExcludedKg) only ever covered bucket rows.
+  //
+  // Now: bucket rows only, compared by variant FAMILY. Conventional and
+  // RA-Conventional are one physical pool and blend freely; organic is the
+  // segregated one (ARCHITECTURE §5 — lib/production/inventory.ts already
+  // matches carry-over this way).
+  const family = (v: string | null | undefined) =>
+    v ? (isOrganicVariant(v) ? 'organic' : 'conventional') : null
+  const isCarriedInBucket = (d: OrderDebagRow) => isBucketRow(d) && !isCarriedOut(d)
+  const bucketInExcluded = debags.filter(d =>
+    isCarriedInBucket(d) && !!d.variant && !!variant && family(d.variant) !== family(variant))
   const bucketInExcludedKg = bucketInExcluded.reduce((t, d) => t + (Number(d.kg_nett) || 0), 0)
+  const bucketExcludedIds = new Set(bucketInExcluded.map(d => d.id))
 
-  const inputRows = debags.filter(d => !isCarriedOut(d) && sameVariant(d))
+  const inputRows = debags.filter(d => !isCarriedOut(d) && !bucketExcludedIds.has(d.id))
   const bucketCarryOverKg = debags.filter(isCarriedOut).reduce((s, d) => s + (Number(d.kg_nett) || 0), 0)
   const totalInput  = inputRows.reduce((s, d) => s + (Number(d.kg_nett) || 0), 0)
-  // Total output has TWO parts and the Bagging panel only ever listed one of
-  // them. Its header showed bagsOutputKg -- bags PLUS the half-bag top-up
-  // increments -- over a list containing only the bags, so the panel claimed a
-  // weight its own rows could not add up to and the top-ups appeared to be
-  // counted twice or not at all depending on which number you read. Named
-  // separately here so the panel can show the arithmetic instead of asserting
-  // the answer.
-  const baggedOnlyKg = bags.filter(b => !b.bornViaRebag).reduce((t, b) => t + (b.kg || 0), 0)
-  const freshTopUpKg = freshTopUps.reduce((t, r) => t + r.kg, 0)
+  // Total output has TWO parts — bags bagged out, and the half-bag top-up
+  // increments added into bags from an earlier day. The old Bagging panel
+  // asserted the combined figure over a list containing only the bags, so the
+  // top-ups appeared to be counted twice or not at all depending on which
+  // number you read. The arithmetic is now in view instead: each run shows its
+  // own bags, the top-ups are listed under "Not attributable to one run" with
+  // their weight, and the two add up to this total.
   const totalOutput = bagsOutputKg
   const yieldPct = totalInput > 0 ? Math.round((totalOutput / totalInput) * 1000) / 10 : null
   const wholeRunBalance = massBalanceInfo(totalOutput, totalInput)
 
-  // ── The summary, split by grade ──────────────────────────────────────────
-  // A changeover day runs two grades under one production order, and a single
-  // pair of totals cannot say which is which. That is what made the 31-08
-  // report misleading: 14 385 kg in and 14 103 kg out, correct to the kilogram,
-  // with nothing anywhere on it distinguishing Export from Export Blend.
+  // ── The order, divided into RUNS ─────────────────────────────────────────
+  // A production order covers one section for one day, and a day can run more
+  // than one thing. 2026-09-07 on the Sieving tower was Conventional in the
+  // morning and RA-Conventional in the afternoon, both Domestic/Local, rolled
+  // into one pair of totals that read as a single 12.5 t run of nothing in
+  // particular. 31-08 was the same shape with grades: 14 385 kg in and
+  // 14 103 kg out, correct to the kilogram, with nothing on the page
+  // distinguishing Export from Export Blend.
   //
-  // Input and output are split per grade because both are captured per bag and
-  // are therefore real. There is deliberately NO per-grade balance: the tower
-  // is one physical stream, so the bucket elevator carried across the
-  // changeover and the machine spillage belong to no single grade, and material
-  // sitting in the machine when the grade changed was fed by one and bagged as
-  // the other. A per-grade balance would be false precision. Anything that
-  // cannot be attributed is shown on its own line rather than folded into a
-  // grade, so these figures add up to the totals above.
-  const inputByGrade = new Map<string, number>()
-  let inputUnattributedKg = 0
+  // So the division here is (VARIANT, GRADE) — WHAT was made. The shift is only
+  // WHEN it happened: it is carried on every row and named in each run's
+  // header, but it does not divide the order, because one run routinely spans
+  // the changeover and a changeover routinely happens mid-shift.
+  //
+  // Attribution needs a grade, and a grade is captured per bag on both sides —
+  // the farm bag's grade at debagging, the bag's own destination at bagging —
+  // so a run's input and output are measured figures, not an apportionment.
+  //
+  // A run DOES get a balance, which the by-grade table this replaces
+  // deliberately withheld. The reasoning for withholding it was sound and is
+  // kept, not discarded: the tower is one physical stream, so material sitting
+  // in the machine when the variant or grade changed was fed by one run and
+  // bagged by the next. What changed is that hiding the per-run balance did not
+  // make that go away — it just left one whole-day figure that was wrong in a
+  // way nobody could decompose. The balance is shown, and everything that
+  // belongs to no run is listed under it with its weight, so the reader can see
+  // exactly how much slack sits between the runs and the day.
+  const runOrder: string[] = []
+  const runMap = new Map<string, MutableRun>()
+  const runFor = (v: string | null, g: string | null) => {
+    const key = `${v ?? ''}|${g ?? ''}`
+    let r = runMap.get(key)
+    if (!r) { r = { key, variant: v, grade: g, inputs: [], outputs: [] }; runMap.set(key, r); runOrder.push(key) }
+    return r
+  }
+  // The bucket elevator and machine spillage belong to no run by nature: the
+  // elevator carries across the changeover and spillage is loss off the machine.
+  // They are held out whatever else they carry.
+  const belongsToNoRun = (d: OrderDebagRow) => d.is_spillage || isBucketRow(d)
+
+  // Which grades each variant actually ran today, taken only from rows that
+  // carry one. This places a row that has a variant but NO grade — which on the
+  // Blender is most of them, because a bag whose bag_tags row was never written
+  // has no destination to read. That is a gap in the record, not a fact about
+  // the material, and filing 6 650 kg of blend under "not attributable" would
+  // state the opposite. So it joins its variant's run when that variant ran
+  // exactly ONE grade today. Where the variant ran two, nothing can be inferred
+  // and it gets its own labelled block rather than being folded into either —
+  // an Export bag quietly counted as Export Blend is the failure this whole
+  // division exists to prevent.
+  const gradesByVariant = new Map<string, Set<string>>()
+  const noteGrade = (v: string | null, g: string | null) => {
+    const grade = (g || '').trim()
+    if (!grade) return
+    const key = v ?? ''
+    const set = gradesByVariant.get(key) ?? new Set<string>()
+    set.add(grade)
+    gradesByVariant.set(key, set)
+  }
+  for (const d of inputRows) if (!belongsToNoRun(d)) noteGrade(d.variant, d.grade)
+  for (const b of bags) noteGrade(b.variant, b.grade)
+  const soleGradeFor = (v: string | null): string | null => {
+    const set = gradesByVariant.get(v ?? '')
+    return set && set.size === 1 ? Array.from(set)[0] : null
+  }
+
+  const unattributedInputs: OrderDebagRow[] = []
+  const unattributedOutputs: OrderBagRow[] = []
+  // Inputs first, and `debags` arrives time-ordered, so the morning's run is
+  // named before the afternoon's and the sections read down the day.
   for (const d of inputRows) {
-    const g = (d.grade || '').trim()
-    const kg = Number(d.kg_nett) || 0
-    if (!g) { inputUnattributedKg += kg; continue }
-    inputByGrade.set(g, (inputByGrade.get(g) ?? 0) + kg)
+    if (belongsToNoRun(d)) { unattributedInputs.push(d); continue }
+    const g = (d.grade || '').trim() || soleGradeFor(d.variant)
+    if (!g && !d.variant) { unattributedInputs.push(d); continue }
+    runFor(d.variant, g).inputs.push(d)
   }
-  const outputByGrade = new Map<string, { kg: number; bags: number }>()
-  let outputUnattributedKg = 0
-  let outputUnattributedBags = 0
   for (const b of bags) {
-    if (b.bornViaRebag) continue          // counted on the day its source was bagged
-    const g = (b.grade || '').trim()
-    if (!g) { outputUnattributedKg += b.kg || 0; outputUnattributedBags++; continue }
-    const cur = outputByGrade.get(g) ?? { kg: 0, bags: 0 }
-    cur.kg += b.kg || 0
-    cur.bags += 1
-    outputByGrade.set(g, cur)
+    const g = (b.grade || '').trim() || soleGradeFor(b.variant)
+    if (!g && !b.variant) { unattributedOutputs.push(b); continue }
+    runFor(b.variant, g).outputs.push(b)
   }
-  // Half-bag top-ups add weight to a bag from an earlier day; the increment
-  // carries no grade of its own.
+  const runs = runOrder.map(key => {
+    const r = runMap.get(key)!
+    const shiftsInRun: string[] = []
+    for (const row of [...r.inputs, ...r.outputs]) {
+      if (row.shift && !shiftsInRun.includes(row.shift)) shiftsInRun.push(row.shift)
+    }
+    shiftsInRun.sort((a, b) => (a === 'morning' ? 0 : 1) - (b === 'morning' ? 0 : 1))
+    const inKg = r.inputs.reduce((t, d) => t + (Number(d.kg_nett) || 0), 0)
+    // Re-bagged-in bags are listed with the run but never summed into it —
+    // their kg was counted as output on whatever earlier day the source bag was
+    // first bagged. Same rule as the whole-day total.
+    const outKg = r.outputs.filter(b => !b.bornViaRebag).reduce((t, b) => t + (b.kg || 0), 0)
+    return { ...r, shifts: shiftsInRun, inKg, outKg }
+  })
+  // Half-bag top-ups add weight to a bag first bagged on an earlier day; the
+  // increment carries no grade of its own, so it belongs to no run either.
   const topUpUnattributedKg = freshTopUps.reduce((t, r) => t + r.kg, 0)
-  const gradeRows = Array.from(new Set([...inputByGrade.keys(), ...outputByGrade.keys()]))
-    .sort()
-    .map(g => ({
-      grade: g,
-      inKg: inputByGrade.get(g) ?? 0,
-      out: outputByGrade.get(g) ?? { kg: 0, bags: 0 },
-    }))
-  const unattributedInKg  = inputUnattributedKg
-  const unattributedOutKg = outputUnattributedKg + topUpUnattributedKg
-  const showGradeBreakdown = gradeRows.length > 1
+  const unattributedInKg  = unattributedInputs.reduce((t, d) => t + (Number(d.kg_nett) || 0), 0)
+  const unattributedOutKg = unattributedOutputs.filter(b => !b.bornViaRebag).reduce((t, b) => t + (b.kg || 0), 0)
+    + topUpUnattributedKg
+  const hasUnattributed = unattributedInputs.length > 0 || unattributedOutputs.length > 0
+    || topUpUnattributedKg > 0 || bucketCarryOverKg > 0
+  // The header names every run the day actually held, not just the first
+  // shift's — which is what made 07-09 read as a plain Conventional order when
+  // half of it was RA-Conventional.
+  const runsLabel = runs.length ? runs.map(r => runTitle(r.variant, r.grade)).join('  +  ') : variantGrade
 
   return (
     <div className="px-4 py-6 max-w-[1000px] mx-auto space-y-5 print-full-width">
@@ -276,7 +378,7 @@ export default function ProductionOrderDetailPage() {
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
             <Field label="Date" value={format(new Date(date), 'd MMM yyyy')} bold />
             <Field label="Shift" value={shifts.map(s => SHIFT_LABEL[s.session.shift] ?? s.session.shift).join(' + ')} bold />
-            <Field label="Variant & grade" value={variantGrade} strong />
+            <Field label="Variant & grade" value={runsLabel} strong className="col-span-2" />
             <Field label="Operators" value={operators.join(', ') || '—'} bold />
             <Field label="Supervisor" value={supervisor || '—'} bold />
             <Field label="Submitted" value={submittedAt ? format(new Date(submittedAt), 'd MMM HH:mm') : '—'} bold />
@@ -299,10 +401,75 @@ export default function ProductionOrderDetailPage() {
         <NotesPanel sessionId={representativeSessionId} notes={notes} requestedByName={displayName} />
       </div>
 
-      {/* Whole-run mass balance — computed from actual debag/bag rows */}
+      {/* ── The runs ─────────────────────────────────────────────────────────
+          One section per (variant, grade): what went in, what came out, and its
+          own balance. The shift is a column on every row and a label in each
+          header — it says WHEN, not WHAT, and one run routinely spans the
+          changeover. */}
+      {runs.length === 0 && (totalInput > 0 || totalOutput > 0) && (
+        <Panel>
+          <PanelHead title="Runs" />
+          <PanelBody>
+            <Empty>Nothing captured against a variant and grade — see the day totals below.</Empty>
+          </PanelBody>
+        </Panel>
+      )}
+      {runs.map(run => (
+        <RunSection key={run.key} run={run} multiShift={shifts.length > 1} />
+      ))}
+
+      {/* Everything that belongs to no single run. Listed rather than spread
+          across the runs, because spreading it would be an apportionment and
+          every other figure on this page is a measurement. */}
+      {hasUnattributed && (
+        <Panel>
+          <PanelHead title="Not attributable to one run"
+            meta={`${unattributedInKg.toFixed(1)} kg in · ${unattributedOutKg.toFixed(1)} kg out`} />
+          <PanelBody>
+            <div className="space-y-4">
+              <p className="text-[11.5px] text-text-muted leading-relaxed">
+                The bucket elevator carries across the changeover, machine spillage is loss off the
+                machine, and a half-bag top-up adds weight to a bag first bagged on an earlier day.
+                None of them carries a grade, so none of them belongs to a run above — but all of
+                them are real and all of them are in the day totals below. This is the slack between
+                the runs and the day.
+              </p>
+              {unattributedInputs.length > 0 && (
+                <>
+                  <BatchTotals rows={unattributedInputs} />
+                  {groupBy(unattributedInputs, inputType).map(g => (
+                    <InputTypeGroup key={`u-in-${g.type}`} type={g.type} rows={g.rows} multiShift={shifts.length > 1} />
+                  ))}
+                </>
+              )}
+              {groupBy(unattributedOutputs, b => b.product_type || 'Other').map(g => (
+                <OutputTypeGroup key={`u-out-${g.type}`} type={g.type} rows={g.rows} multiShift={shifts.length > 1} />
+              ))}
+              {bucketCarryOverKg > 0 && (
+                <div className="flex items-center justify-between gap-2 rounded-xl border border-dashed border-surface-rule px-3 py-2.5 text-[12.5px]">
+                  <span className="text-text-muted">Bucket elevator — carried to next day <span className="text-text-faint">(WIP left in the tower, not bagged — counts on neither side)</span></span>
+                  <span className="font-mono text-text tabular-nums whitespace-nowrap">{bucketCarryOverKg.toFixed(1)} kg</span>
+                </div>
+              )}
+              {topUpUnattributedKg > 0 && (
+                <div className="flex items-center justify-between gap-2 rounded-xl border border-dashed border-surface-rule px-3 py-2.5 text-[12.5px]">
+                  <span className="text-text-muted">Half-bag top-ups into older bags <span className="text-text-faint">(the increment only — listed in full further down)</span></span>
+                  <span className="font-mono text-text tabular-nums whitespace-nowrap">+{topUpUnattributedKg.toFixed(1)} kg</span>
+                </div>
+              )}
+            </div>
+          </PanelBody>
+        </Panel>
+      )}
+
+      {/* Whole day — the check that the runs and the unattributed add up, not
+          the headline. It sits under them deliberately: one pair of totals for
+          a day that ran two different materials is the figure that made this
+          page unreadable in the first place. */}
       {(totalInput > 0 || totalOutput > 0) && (
         <Panel>
-          <PanelHead title="Mass balance — full run (07h00–01h00)" />
+          <PanelHead title="Whole day — all runs combined (07h00–01h00)"
+            meta={runs.length > 1 ? `${runs.length} runs` : undefined} />
           <PanelBody>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
               <Field label="Total input"  value={`${totalInput.toFixed(1)} kg`} />
@@ -310,51 +477,58 @@ export default function ProductionOrderDetailPage() {
               <Field label="Balance (out − in)" value={<span className={TONE_TEXT_CLASS[wholeRunBalance.tone]}>{wholeRunBalance.text}</span>} />
               <Field label="Yield"        value={yieldPct != null ? `${yieldPct}%` : '—'} />
             </div>
-            {/* Which of those kilograms are Export and which are Export Blend.
-                Only shown when the run actually held more than one grade. */}
-            {showGradeBreakdown && (
+
+            {runs.length > 1 && (
               <div className="mt-4 rounded-xl border border-surface-rule overflow-hidden">
-                <div className="px-3 py-2 bg-surface-dim text-[12.5px] font-semibold text-text">
-                  By grade
-                </div>
-                <table className="w-full text-left border-collapse">
-                  <thead>
-                    <tr>
-                      {['Grade', 'Input', 'Output', 'Bags'].map((h, i) => (
-                        <th key={h} className={`px-3 py-1.5 font-mono text-[9px] font-semibold text-text-faint uppercase tracking-[0.06em] whitespace-nowrap ${i > 0 ? 'text-right' : ''}`}>{h}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-surface-rule/60">
-                    {gradeRows.map(g => (
-                      <tr key={g.grade}>
-                        <td className="px-3 py-1.5 text-[12.5px] font-medium text-text whitespace-nowrap">{g.grade}</td>
-                        <td className="px-3 py-1.5 font-mono text-[12px] text-text-muted text-right tabular-nums">{g.inKg.toFixed(1)} kg</td>
-                        <td className="px-3 py-1.5 font-mono text-[12px] text-text-muted text-right tabular-nums">{g.out.kg.toFixed(1)} kg</td>
-                        <td className="px-3 py-1.5 font-mono text-[12px] text-text-muted text-right tabular-nums">{g.out.bags}</td>
-                      </tr>
-                    ))}
-                    {(unattributedInKg > 0 || unattributedOutKg > 0) && (
+                <div className="px-3 py-2 bg-surface-dim text-[12.5px] font-semibold text-text">Per run</div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse min-w-[560px]">
+                    <thead>
                       <tr>
-                        <td className="px-3 py-1.5 text-[12.5px] text-text-muted">
-                          Not attributable to one grade
-                          <span className="block text-[10.5px] text-text-faint">
-                            bucket elevator across the changeover, machine spillage, half-bag top-ups
-                          </span>
-                        </td>
-                        <td className="px-3 py-1.5 font-mono text-[12px] text-text-muted text-right tabular-nums">{unattributedInKg > 0 ? `${unattributedInKg.toFixed(1)} kg` : '—'}</td>
-                        <td className="px-3 py-1.5 font-mono text-[12px] text-text-muted text-right tabular-nums">{unattributedOutKg > 0 ? `${unattributedOutKg.toFixed(1)} kg` : '—'}</td>
-                        <td className="px-3 py-1.5 font-mono text-[12px] text-text-faint text-right tabular-nums">{outputUnattributedBags || '—'}</td>
+                        {['Run', 'Shift', 'Input', 'Output', 'Balance', 'Bags'].map((h, i) => (
+                          <th key={h} className={`px-3 py-1.5 font-mono text-[9px] font-semibold text-text-faint uppercase tracking-[0.06em] whitespace-nowrap ${i > 1 ? 'text-right' : ''}`}>{h}</th>
+                        ))}
                       </tr>
-                    )}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody className="divide-y divide-surface-rule/60">
+                      {runs.map(r => {
+                        const bal = massBalanceInfo(r.outKg, r.inKg)
+                        return (
+                          <tr key={r.key}>
+                            <td className="px-3 py-1.5 text-[12.5px] font-medium text-text whitespace-nowrap">{runTitle(r.variant, r.grade)}</td>
+                            <td className="px-3 py-1.5 text-[11.5px] text-text-muted whitespace-nowrap">{r.shifts.map(s => SHIFT_LABEL[s] ?? s).join(' + ') || '—'}</td>
+                            <td className="px-3 py-1.5 font-mono text-[12px] text-text-muted text-right tabular-nums">{r.inKg.toFixed(1)} kg</td>
+                            <td className="px-3 py-1.5 font-mono text-[12px] text-text-muted text-right tabular-nums">{r.outKg.toFixed(1)} kg</td>
+                            <td className={`px-3 py-1.5 font-mono text-[12px] text-right tabular-nums whitespace-nowrap ${TONE_TEXT_CLASS[bal.tone]}`}>
+                              {bal.balance >= 0 ? '+' : ''}{bal.balance.toFixed(1)} kg
+                            </td>
+                            <td className="px-3 py-1.5 font-mono text-[12px] text-text-muted text-right tabular-nums">{r.outputs.length}</td>
+                          </tr>
+                        )
+                      })}
+                      {(unattributedInKg > 0 || unattributedOutKg > 0) && (
+                        <tr>
+                          <td className="px-3 py-1.5 text-[12.5px] text-text-muted" colSpan={2}>
+                            Not attributable to one run
+                            <span className="block text-[10.5px] text-text-faint">
+                              bucket elevator across the changeover, machine spillage, half-bag top-ups
+                            </span>
+                          </td>
+                          <td className="px-3 py-1.5 font-mono text-[12px] text-text-muted text-right tabular-nums">{unattributedInKg > 0 ? `${unattributedInKg.toFixed(1)} kg` : '—'}</td>
+                          <td className="px-3 py-1.5 font-mono text-[12px] text-text-muted text-right tabular-nums">{unattributedOutKg > 0 ? `${unattributedOutKg.toFixed(1)} kg` : '—'}</td>
+                          <td className="px-3 py-1.5 font-mono text-[12px] text-text-faint text-right tabular-nums">—</td>
+                          <td className="px-3 py-1.5 font-mono text-[12px] text-text-faint text-right tabular-nums">{unattributedOutputs.length || '—'}</td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
                 <p className="px-3 py-2 border-t border-surface-rule/60 bg-surface-dim/40 text-[11px] text-text-muted leading-relaxed">
-                  No balance per grade, deliberately. The tower is one physical stream: the bucket
-                  elevator carries across the changeover, spillage belongs to no single grade, and
-                  material in the machine when the grade changed went in as one and came out as the
-                  other. Input and output above are captured per bag and are real; a balance per
-                  grade would not be.
+                  A run&apos;s balance covers its own material only. The tower is one physical stream,
+                  so material sitting in the machine when the variant or the grade changed was fed by
+                  one run and bagged by the next — that reads as a shortfall on the first and a
+                  surplus on the second. The row above holds what belongs to neither. Read the run
+                  balances together with the day figure, not instead of it.
                 </p>
               </div>
             )}
@@ -363,16 +537,16 @@ export default function ProductionOrderDetailPage() {
                 so the figure can be checked rather than taken on trust. */}
             <p className="mt-3 pt-3 border-t border-surface-rule/60 text-[11.5px] text-text-muted leading-relaxed">
               Input is farm bags debagged plus machine spillage, plus the bucket elevator carried in
-              from the previous day when it is the same variant. Output is bags bagged out plus the
-              weight added into older bags by half-bag top-up — the top-up amount only, not those
-              bags&apos; full weight.
+              from the previous day when it is the same variant family. Output is bags bagged out
+              plus the weight added into older bags by half-bag top-up — the top-up amount only, not
+              those bags&apos; full weight.
               {bucketCarryOverKg > 0 && (
                 <> Bucket elevator left for tomorrow ({bucketCarryOverKg.toFixed(1)} kg) is work in
                 progress and counts on neither side.</>
               )}
               {bucketInExcludedKg > 0 && (
                 <> {bucketInExcludedKg.toFixed(1)} kg of carried-in bucket elevator is excluded as a
-                different variant from this run.</>
+                different variant family from this run.</>
               )}
               {(debagDuplicatesHidden > 0 || duplicateOutputsHidden > 0) && (
                 <> Excludes {debagDuplicatesHidden > 0 ? `${debagDuplicatesHidden} duplicate debagging row${debagDuplicatesHidden === 1 ? '' : 's'}` : ''}
@@ -383,90 +557,6 @@ export default function ProductionOrderDetailPage() {
           </PanelBody>
         </Panel>
       )}
-
-      {/* Debagging (inputs) — grouped by type with per-type totals */}
-      <Panel>
-        <PanelHead title="Debagging — inputs"
-          meta={`${inputRows.length} bag${inputRows.length === 1 ? '' : 's'}${
-            debagDuplicatesHidden > 0 ? ` · ${debagDuplicatesHidden} duplicate row${debagDuplicatesHidden === 1 ? '' : 's'} hidden` : ''
-          }`} />
-        <PanelBody>
-          {inputRows.length === 0 ? <Empty>No inputs recorded.</Empty> : (
-            <div className="space-y-4">
-              {/* Per batch first, because that is the question actually asked of
-                  this panel: how much of each batch went in. The per-type
-                  tables below still list every bag; this is the total. */}
-              <BatchTotals rows={inputRows} />
-              {groupBy(inputRows, inputType).map(g => (
-                <InputTypeGroup key={g.type} type={g.type} rows={g.rows} multiShift={shifts.length > 1} />
-              ))}
-            </div>
-          )}
-        </PanelBody>
-      </Panel>
-
-      {/* Bagging (outputs) — grouped by product type with per-type totals */}
-      <Panel>
-        {/* The bags' OWN weight, so the header matches the rows beneath it.
-            Total output is stated at the foot of the panel, where the top-up
-            increment is added in view. */}
-        <PanelHead title="Bagging — outputs"
-          meta={`${bags.length} bag${bags.length === 1 ? '' : 's'} · ${baggedOnlyKg.toFixed(1)} kg${
-            duplicateOutputsHidden > 0 ? ` · ${duplicateOutputsHidden} duplicate row${duplicateOutputsHidden === 1 ? '' : 's'} hidden` : ''
-          }`} />
-        <PanelBody>
-          {bags.filter(b => b.gradeSource === 'lot').length > 0 && (
-            <p className="mb-3 text-[11.5px] text-text-muted leading-relaxed">
-              {bags.filter(b => b.gradeSource === 'lot').length} bag
-              {bags.filter(b => b.gradeSource === 'lot').length === 1 ? '' : 's'} below take
-              their grade from the lot they were sieved from, not from the bag&apos;s own tag —
-              marked <span className="text-warn font-medium">from lot</span>. A lot&apos;s grade is
-              settled when it is debagged, so a bag off an Export Blend lot is Export Blend even if
-              the tag still said Export. The printed label on those bags is wrong and needs
-              reprinting.
-            </p>
-          )}
-          {bags.length === 0 && bucketCarryOverKg === 0 ? <Empty>No output bags recorded.</Empty> : (
-            <div className="space-y-4">
-              {groupBy(bags, b => b.product_type || 'Other').map(g => (
-                <OutputTypeGroup key={g.type} type={g.type} rows={g.rows} multiShift={shifts.length > 1} />
-              ))}
-              {bucketCarryOverKg > 0 && (
-                <div className="flex items-center justify-between gap-2 rounded-xl border border-dashed border-surface-rule px-3 py-2.5 text-[12.5px]">
-                  <span className="text-text-muted">Bucket elevator — carried to next day <span className="text-text-faint">(WIP left in the tower, not bagged — excluded from mass balance)</span></span>
-                  <span className="font-mono text-text tabular-nums whitespace-nowrap">{bucketCarryOverKg.toFixed(1)} kg</span>
-                </div>
-              )}
-
-              {/* The arithmetic behind Total output, in view. Only when there
-                  is a top-up to add -- otherwise the bags' total IS the output
-                  and a second identical figure is noise. */}
-              {freshTopUpKg > 0 && (
-                <div className="rounded-xl border border-surface-rule overflow-hidden">
-                  <div className="flex items-center justify-between gap-2 px-3 py-2 text-[12.5px]">
-                    <span className="text-text-muted">Bagged out</span>
-                    <span className="font-mono text-text tabular-nums whitespace-nowrap">{bags.length} bags · {baggedOnlyKg.toFixed(1)} kg</span>
-                  </div>
-                  <div className="flex items-center justify-between gap-2 px-3 py-2 text-[12.5px] border-t border-surface-rule/60">
-                    <span className="text-text-muted">
-                      Half-bag top-ups — added into older bags
-                      <span className="block text-[10.5px] text-text-faint">
-                        the amount added today, listed in full below; those bags were bagged on an
-                        earlier day and are not in the count above
-                      </span>
-                    </span>
-                    <span className="font-mono text-text tabular-nums whitespace-nowrap">+{freshTopUpKg.toFixed(1)} kg</span>
-                  </div>
-                  <div className="flex items-center justify-between gap-2 px-3 py-2.5 text-[12.5px] font-semibold border-t border-surface-rule bg-surface-dim">
-                    <span className="text-text">Total output</span>
-                    <span className="font-mono text-text tabular-nums whitespace-nowrap">{bagsOutputKg.toFixed(1)} kg</span>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-        </PanelBody>
-      </Panel>
 
       {/* Re-bagged in — bags born from an existing bag via re-bagging, not
           fresh production. Informational only: its kg is deliberately NOT
@@ -611,6 +701,90 @@ function groupBy<T>(rows: T[], key: (r: T) => string): { type: string; rows: T[]
     map.get(t)!.push(r)
   }
   return order.map(type => ({ type, rows: map.get(type)! }))
+}
+
+// ── One run: one (variant, grade) within the day ─────────────────────────────
+// Complete on its own — its inputs per batch and per type, its output bags per
+// product, and its own balance. This is the unit the floor and the certifier
+// both think in: RA-Conventional Domestic/Local is a different thing from
+// Conventional Domestic/Local and always was, whichever shift made it.
+//
+// The shift is shown, never used to divide: a run spans the changeover whenever
+// the tower keeps running the same material past 16h00, which is most days.
+interface RunView extends MutableRun {
+  shifts: string[]
+  inKg: number
+  outKg: number
+}
+
+function RunSection({ run, multiShift }: { run: RunView; multiShift: boolean }) {
+  const bal = massBalanceInfo(run.outKg, run.inKg)
+  const runYield = run.inKg > 0 ? Math.round((run.outKg / run.inKg) * 1000) / 10 : null
+  const shiftText = run.shifts.map(s => SHIFT_LABEL[s] ?? s).join(' + ') || '—'
+  const fromLot = run.outputs.filter(b => b.gradeSource === 'lot').length
+  return (
+    <Panel>
+      <PanelHead
+        title={runTitle(run.variant, run.grade)}
+        meta={`${shiftText} · ${run.inputs.length} bag${run.inputs.length === 1 ? '' : 's'} in · ${run.outputs.length} bag${run.outputs.length === 1 ? '' : 's'} out`} />
+      <PanelBody>
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+            <Field label="Input"  value={`${run.inKg.toFixed(1)} kg`} />
+            <Field label="Output" value={`${run.outKg.toFixed(1)} kg`} />
+            <Field label="Balance (out − in)" value={<span className={TONE_TEXT_CLASS[bal.tone]}>{bal.text}</span>} />
+            <Field label="Yield"  value={runYield != null ? `${runYield}%` : '—'} />
+          </div>
+
+          <div>
+            <SubHead label="Debagging — inputs"
+              meta={`${run.inputs.length} bag${run.inputs.length === 1 ? '' : 's'} · ${run.inKg.toFixed(1)} kg`} />
+            {run.inputs.length === 0 ? <Empty>No inputs recorded for this run.</Empty> : (
+              <div className="space-y-4">
+                <BatchTotals rows={run.inputs} />
+                {groupBy(run.inputs, inputType).map(g => (
+                  <InputTypeGroup key={g.type} type={g.type} rows={g.rows} multiShift={multiShift} />
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div>
+            <SubHead label="Bagging — outputs"
+              meta={`${run.outputs.length} bag${run.outputs.length === 1 ? '' : 's'} · ${run.outKg.toFixed(1)} kg`} />
+            {fromLot > 0 && (
+              <p className="mb-3 text-[11.5px] text-text-muted leading-relaxed">
+                {fromLot} bag{fromLot === 1 ? '' : 's'} below take their grade from the lot they were
+                sieved from, not from the bag&apos;s own tag — marked{' '}
+                <span className="text-warn font-medium">from lot</span>. A lot&apos;s grade is settled
+                when it is debagged, so a bag off an Export Blend lot is Export Blend even if the tag
+                still said Export. The printed label on those bags is wrong and needs reprinting.
+              </p>
+            )}
+            {run.outputs.length === 0 ? <Empty>No output bags recorded for this run.</Empty> : (
+              <div className="space-y-4">
+                {groupBy(run.outputs, b => b.product_type || 'Other').map(g => (
+                  <OutputTypeGroup key={g.type} type={g.type} rows={g.rows} multiShift={multiShift} />
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </PanelBody>
+    </Panel>
+  )
+}
+
+// A heading inside a run, one step down from PanelHead — the run is the panel,
+// so inputs and outputs cannot each be one too without the page becoming a
+// stack of identical boxes.
+function SubHead({ label, meta }: { label: string; meta?: string }) {
+  return (
+    <div className="flex items-baseline justify-between gap-2 mb-2">
+      <span className="text-[12.5px] font-semibold text-text">{label}</span>
+      {meta && <span className="font-mono text-[11px] text-text-faint whitespace-nowrap">{meta}</span>}
+    </div>
+  )
 }
 
 // One input type's rows. Columns per the agreed layout: farm bag number (from

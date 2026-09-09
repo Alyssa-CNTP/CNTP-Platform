@@ -2,6 +2,63 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-09 — Alyssa (PRODUCTION: a production order is divided by what was made, not by when)
+
+**Files changed:** `app/(app)/production/orders/[id]/page.tsx`
+
+Reported from the printed Sieving order for 7 September, which read **6 577 kg in against 12 892 kg out — a balance of +96.0% and a yield of 196%** — with the afternoon shift's own block showing `INPUT 0.0 kg`.
+
+### The 5 950 kg that was being dropped
+
+```ts
+const variant     = shifts.map(s => s.session.variant).find(Boolean) ?? null
+const sameVariant = (d) => !d.variant || !variant || d.variant === variant
+const inputRows   = debags.filter(d => !isCarriedOut(d) && sameVariant(d))
+```
+
+Two things were wrong with that guard and they compounded.
+
+- **It was applied to every debagging row**, though the comment directly above it described one case only: the bucket elevator carried in from the previous day, which is this run's input only when it is the same material.
+- **It compared the raw variant string**, and the day's `variant` is whatever the *first* shift recorded.
+
+The tower ran `Conventional` on the morning of 7 September and `RA-Conventional` in the afternoon. All 18 of the afternoon's farm-bag rows failed `d.variant === variant` and were dropped — from the inputs panel, from Total Input, and from the afternoon's own shift block. The output side has no equivalent filter, so all 47 bags still counted.
+
+It was silent. The panel prints a careful list of what it holds back — duplicate rows, bucket elevator carried to tomorrow, carried-in bucket of a different variant — and 5 950 kg of farm bags appeared in none of them, because the sentence that would have said so (`bucketInExcludedKg`) only ever covered bucket rows.
+
+Now: **bucket rows only, compared by variant FAMILY.** `Conventional` and `RA-Conventional` are one physical pool and blend freely; organic is the segregated one (ARCHITECTURE §5 — `lib/production/inventory.ts` already matches carry-over this way). Uses the existing `isOrganicVariant` rather than a fourth copy of the family rule.
+
+### The order is now divided into runs
+
+A production order covers one section for one day, and a day can run more than one thing. Rolled into a single pair of totals, 7 September read as one 12.5 t run of nothing in particular; 31 August was the same shape with grades — 14 385 kg in and 14 103 kg out, correct to the kilogram, with nothing on the page separating Export from Export Blend.
+
+**The division is now `(variant, grade)` — what was made.** The shift is *when*: it stays as a column on every row and is named in each run's header, but it no longer divides the order, because one run routinely spans the changeover and a changeover routinely happens mid-shift.
+
+Each run is a complete section of the report: its own inputs per batch and per type, its own output bags per product, and **its own mass balance**. Under them:
+
+- **Not attributable to one run** — the bucket elevator across the changeover, machine spillage, half-bag top-ups into older bags. None carries a grade, so none belongs to a run, but all are real and all are in the day totals. Listed with their weights instead of spread across the runs, because spreading them would be an apportionment and every other figure on the page is a measurement.
+- **Whole day — all runs combined**, with a per-run table, sitting *under* the runs rather than above them. One pair of totals for a day that ran two different materials is the figure that made this page unreadable in the first place.
+
+The header's **Variant & grade** now names every run the day held, not just the first shift's.
+
+**This reverses one earlier decision, deliberately.** The by-grade table it replaces withheld a per-grade balance on the grounds that the tower is one physical stream — material in the machine when the grade changed was fed by one run and bagged by the next. That reasoning is right and is kept, in the note under the per-run table. What changed is the conclusion: hiding the per-run balance did not make the problem go away, it just left one whole-day figure that was wrong in a way nobody could decompose.
+
+### What 7 September now reads
+
+| | Was | Now |
+|---|---|---|
+| Total input | 6 577.0 kg | **12 527.0 kg** |
+| Total output | 12 892.0 kg | 12 892.0 kg |
+| Balance | +6 315.0 kg (+96.0%) | **+365.0 kg (+2.9%)** |
+| Yield | 196% | **102.9%** |
+
+split as **Conventional · Domestic/Local** (Morning) 6 544.0 in / 5 699.0 out / −845.0 kg, **RA-Conventional · Domestic/Local** (Afternoon) 5 950.0 in / 7 053.0 out / +1 103.0 kg, and 33.0 kg in / 140.0 kg out attributable to neither.
+
+The two runs are each still outside ±1%, and that is now visible rather than hidden inside a day total: the bucket elevator crossing 16h00 belongs to neither run, which is exactly what the unattributable panel is for.
+
+No migration, no change to `lib/production/order-detail.ts`, and no change to what is captured — only to how the order is divided when it is read.
+
+---
+
 ## 2026-09-07 — Gustav (Pasteuriser tasting records who tasted the sample)
 
 **Files changed:** `app/(app)/quality/pasteuriser/page.tsx`, `lib/utils/exportExcel.ts`
