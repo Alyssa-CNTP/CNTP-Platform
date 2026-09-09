@@ -2,6 +2,32 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-09 — Alyssa (Schema for the label sign-off rows)
+
+**Files changed:** `supabase/migrations/20260909_002_label_sign_offs.sql` (new)
+
+Storage for the rules that landed in `lib/core/labels/approval.ts`. One table, `public.label_sign_offs`, append-only. Nothing reads it yet.
+
+**Not more columns on `label_template_events`.** An event is a state transition — `proof_issued`, `approved`. A sign-off is one named role putting their name to a version, and four of them happen *before* the template becomes approved. Folding them into a stream where `approved` already means "the whole thing is approved" would make the same word mean two things at two scales.
+
+**Two scopes, one table.** `template` is the artwork chain (Sales, Quality, Customer, Certifier) per template version; `print` is the two-name pre-print check on one job card. One table because every column is shared and core already treats them as one `SignOff` shape — but `scope` is a real discriminant with a CHECK behind it, not a field consumers duck-type on.
+
+**Three things the database holds so code does not have to:**
+
+- **`template_version` is recorded at signing, never derived.** The template's version moves when artwork is edited, and core discards sign-offs from earlier versions — deriving it at read time would silently promote every old approval.
+- **Two composite foreign keys** tie a print sign-off to a job card, that job card to its assignment, and that assignment to this template. A signature cannot name a card, an order and a piece of artwork that do not all belong together.
+- **A print sign-off must carry both `job_card_id` and `assignment_id`.** Not tidiness: the composite FK is MATCH SIMPLE, so a NULL in either column makes Postgres skip the check entirely.
+
+**The two-different-people rule is deliberately not a trigger.** `printGate()` enforces it and the route decides from a fresh read — the shape ARCHITECTURE.md §6 requires. A trigger would be a second implementation of one rule, which is what §1A exists to stop. The migration says so, so nobody adds one later.
+
+**Backfill records only what is known.** Every template approved before today carries one `approved` event by a `can_approve_labels` holder — that is the *sales* approval, and it is backfilled as such with the real name and timestamp where 20260907_003 captured them. Quality, the customer and the certifier are left outstanding, because they genuinely are.
+
+**Consequence, so it is not a surprise: every currently-approved label reads as not ready for a job card until those three are recorded.** That is correct, and it is the gap this work closes.
+
+Parse-checked against the real Postgres grammar (pglast) — 16 statements. Idempotent; both `ADD CONSTRAINT`s are wrapped, since Postgres has no `IF NOT EXISTS` for them.
+
+---
+
 ## 2026-09-09 — Alyssa (Label approval: the two gates, in core)
 
 **Files changed:** `lib/core/labels/approval.ts` (new), `lib/core/labels/approval.test.ts` (new), `lib/core/labels/index.ts`
