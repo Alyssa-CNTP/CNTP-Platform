@@ -16,7 +16,7 @@ import { toTemplate, type LabelTemplateRow } from '@/features/pasteuriser-labels
  * designer is still editing, and the designer's save must lose, not the proof.
  *
  *   draft            --issue_proof--> pending_approval   (can_design_labels)
- *   pending_approval --approve------> approved           (can_approve_labels)
+ *   pending_approval --approve------> approved           REMOVED, see below
  *   pending_approval --reject-------> rejected           (can_approve_labels)
  *   rejected         --reopen-------> draft              (can_design_labels)
  *
@@ -27,14 +27,13 @@ import { toTemplate, type LabelTemplateRow } from '@/features/pasteuriser-labels
 
 type Action = 'issue_proof' | 'approve' | 'reject' | 'reopen'
 
-const RULES: Record<Action, {
+const RULES: Record<Exclude<Action, 'approve'>, {
   from: LabelTemplateStatus[]
   to: LabelTemplateStatus
   permission: 'can_design_labels' | 'can_approve_labels'
   event: 'proof_issued' | 'approved' | 'rejected' | 'reopened'
 }> = {
   issue_proof: { from: ['draft'],            to: 'pending_approval', permission: 'can_design_labels',  event: 'proof_issued' },
-  approve:     { from: ['pending_approval'], to: 'approved',         permission: 'can_approve_labels', event: 'approved' },
   reject:      { from: ['pending_approval'], to: 'rejected',         permission: 'can_approve_labels', event: 'rejected' },
   reopen:      { from: ['rejected'],         to: 'draft',            permission: 'can_design_labels',  event: 'reopened' },
 }
@@ -48,6 +47,27 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   if (!body) return NextResponse.json({ error: 'Bad request' }, { status: 400 })
 
   const action = str(body.action) as Action
+
+  /**
+   * `approve` is gone, and refusing loudly is the point.
+   *
+   * A template is approved when Sales, Quality, the customer and the certifier
+   * have each signed — recorded through /sign-off, which flips the status when
+   * the fourth lands. Leaving this action in place would be a second writer to
+   * the same field and, worse, a way for one holder of can_approve_labels to
+   * approve a label Quality never saw. That is exactly the hole the sign-off
+   * chain closes, so it cannot stay open behind it.
+   *
+   * A 410 rather than a 400: the endpoint existed and deliberately does not any
+   * more, and the caller needs to know which door to use instead.
+   */
+  if (action === 'approve') {
+    return NextResponse.json({
+      error: 'Approval is no longer a single action. Record each sign-off — Sales, Quality, Customer, Control Union — and the label approves itself when the last one lands.',
+      use: `/api/pasteuriser/labels/${id}/sign-off`,
+    }, { status: 410 })
+  }
+
   const rule = RULES[action]
   if (!rule) return NextResponse.json({ error: `Unknown action '${action}'` }, { status: 400 })
   if (!caller.can(rule.permission)) return NextResponse.json({ error: 'Permission denied' }, { status: 403 })
@@ -93,14 +113,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const now = new Date().toISOString()
   const patch: Record<string, unknown> = { status: rule.to, updated_at: now }
   if (action === 'issue_proof') patch.proof_issued_at = now
-  if (action === 'approve') {
-    patch.approved_by = caller.userId
-    patch.approved_at = now
-    patch.rejected_reason = null
-    if (externalRef) patch.cu_approval_ref = externalRef
-    const customerRef = strOrNull(body.customerRef)
-    if (customerRef) patch.customer_approval_ref = customerRef
-  }
   if (action === 'reject') patch.rejected_reason = note
   if (action === 'reopen') { patch.rejected_reason = null; patch.proof_issued_at = null }
 
@@ -155,23 +167,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   }
   const actorName = caller.name ?? null
 
-  // Approving a version retires the one it replaces. Superseded rows are kept
-  // forever — bags printed from them are in the warehouse, and a traceability
-  // query has to be able to reconstruct exactly what was on them.
-  if (action === 'approve') {
-    const { data: retired } = await admin
-      .from('label_templates')
-      .update({ status: 'superseded', updated_at: now })
-      .eq('code', row.code).eq('status', 'approved').neq('id', id)
-      .select('id')
-    for (const r of retired ?? []) {
-      await admin.from('label_template_events').insert({
-        template_id: r.id, event: 'superseded', actor_id: caller.userId,
-        actor_name: actorName, actor_signature: actorSignature,
-        note: `Superseded by ${row.code} v${row.version}`,
-      })
-    }
-  }
+  // Retiring the version an approval replaces MOVED to the sign-off route,
+  // because that is where a template now becomes approved. It is not dropped —
+  // see supersedeOtherApprovedVersions() in lib/production/label-approval.ts.
 
   await admin.from('label_template_events').insert({
     template_id: id,

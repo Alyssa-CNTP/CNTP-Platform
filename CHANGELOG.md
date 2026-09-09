@@ -2,6 +2,44 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-09 — Alyssa (The routes that write a sign-off, and the door that closes behind them)
+
+**Files changed:** `app/api/pasteuriser/labels/[id]/sign-off/route.ts` (new), `app/api/pasteuriser/job-cards/[id]/sign-off/route.ts` (new), `app/api/pasteuriser/labels/[id]/transition/route.ts`, `lib/production/label-approval.ts` (new), `lib/auth/permissions.ts`, `supabase/migrations/20260909_003_sign_off_recorded_by.sql` (new)
+
+Two routes, both deciding from a fresh read, both using the gates in `lib/core/labels/approval.ts` rather than restating them.
+
+### A new permission, because reusing one would defeat the change
+
+`can_quality_sign_labels`. Deliberately **not** folded into `can_approve_labels`: a label now needs Sales *and* Quality, and one key held by both would let Sales sign for Quality. Two names that one person can produce is one name. Granted to `quality_manager`; registered in all four places.
+
+### `POST /labels/[id]/sign-off`
+
+Records one role's signature against the template's **current** version — read server-side, never taken from the client, or a signature could attach to artwork the signer never saw.
+
+- **The name is the caller's**, resolved server-side, for Sales and Quality. For the **customer** and the **certifier** the signer is genuinely outside the building, so their name comes from the body — and `recorded_by` then captures who here stood behind the claim. "Control Union approved it" with nobody's hand on it is not a record.
+- **An already-`approved` template is signable.** Every label approved before this change carries only the old single approval, so Quality, the customer and the certifier have to be recordable against it — otherwise closing the gap would mean re-issuing every proof.
+- **When the fourth signature lands, the template approves itself.** It re-reads the register rather than reasoning from what it just wrote: another signature may have arrived in flight, and the question is what the register says now.
+
+### `POST /job-cards/[id]/sign-off`
+
+The two-name pre-print check on one run. It builds the list of signatures that *would* exist if this one were accepted, asks `printGate()`, and refuses only if core says the two are the same person. **One rule, one place** — the route does not re-implement it.
+
+The gate's other findings are deliberately *not* refusals. "The other half hasn't signed" is why the print is still shut, not a reason to reject a signature — otherwise the first signer could never go first.
+
+### The door that closes behind it
+
+**`approve` on the transition route is retired**, returning `410` with the address of the sign-off route. Leaving it would have been a second writer to `status` and, worse, a way for one `can_approve_labels` holder to approve a label Quality never saw — the exact hole this work closes.
+
+Removing it surfaced something that would have been a silent regression: that branch also **retired the previous approved version**. A partial unique index allows one approved version per code, so dropping it would have made every subsequent approval fail with a constraint error. It moved to `supersedeOtherApprovedVersions()` in `lib/production/label-approval.ts` and is called from the sign-off route before the status flips. TypeScript found the dead branches; the supersede step was found by reading them.
+
+### Migration `20260909_003`
+
+`recorded_by_employee_id` / `recorded_by_name`, with a CHECK that an external sign-off has a recorder and an internal one does not. `NOT VALID`, so the rows backfilled yesterday stay as they are rather than being given a recorder nobody can name.
+
+Typecheck **29**, back to baseline. Hooks gate clean, boundary lint clean, 403 core tests, build clean. Both migrations parse-checked with `pglast`.
+
+---
+
 ## 2026-09-09 — Alyssa (Schema for the label sign-off rows)
 
 **Files changed:** `supabase/migrations/20260909_002_label_sign_offs.sql` (new)
