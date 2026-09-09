@@ -1,6 +1,7 @@
 -- ============================================================
 -- label_sign_offs.recorded_by — who keyed in an external approval.
 -- Run in: Supabase SQL Editor — STAGING first, then PRODUCTION.
+-- Depends on: 20260909_005_label_sign_offs.sql (RUN THAT FIRST).
 -- Then:   NOTIFY pgrst, 'reload schema';
 -- ============================================================
 --

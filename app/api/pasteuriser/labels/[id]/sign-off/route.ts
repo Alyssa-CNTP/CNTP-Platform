@@ -28,7 +28,7 @@ import { supersedeOtherApprovedVersions } from '@/lib/production/label-approval'
  * For an internal role the signer is the caller, resolved server-side. For the
  * CUSTOMER and the CERTIFIER the signer is genuinely outside the building, so
  * their name does come from the body — and then `recorded_by` captures who
- * here stood behind that claim (20260909_003). "Control Union approved it" with
+ * here stood behind that claim (20260909_006). "Control Union approved it" with
  * nobody's hand on it is not a record.
  */
 
@@ -131,7 +131,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     external_ref: strOrNull(body.externalRef),
     note: strOrNull(body.note),
     signed_at: nowIso,
-    // Only on an external sign-off — the CHECK in 20260909_003 refuses both.
+    // Only on an external sign-off — the CHECK in 20260909_006 refuses both.
     recorded_by_employee_id: external ? employeeId : null,
     recorded_by_name: external ? (caller.name || null) : null,
   }

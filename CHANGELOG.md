@@ -2,6 +2,27 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-09 — Alyssa (Two migrations shared a number, and one of them was never run)
+
+**Files changed:** `supabase/migrations/20260909_002_label_sign_offs.sql` → `20260909_005_label_sign_offs.sql`, `supabase/migrations/20260909_003_sign_off_recorded_by.sql` → `20260909_006_sign_off_recorded_by.sql`, `app/api/pasteuriser/labels/[id]/sign-off/route.ts`
+
+Two different migrations were both called `20260909_002`: the timesheet stoppage ledger and the label sign-off register. They were written the same day by two pieces of work that did not know about each other.
+
+The consequence is not cosmetic. Checked against staging today:
+
+| Migration | On staging |
+|---|---|
+| `20260909_002_timesheet_stoppages` | applied |
+| `20260909_002_label_sign_offs` | **never run** |
+| `20260909_003_sign_off_recorded_by` | **never run** (it needs the table above) |
+| `20260909_004_stoppage_coverage…` | applied |
+
+`20260909_002` was run, `004` was run on top of it, and the pair in between was silently skipped — because from the outside "002" looked done. `public.label_sign_offs` does not exist on staging, so **every sign-off route returns a schema error**, and the label approval chain that shipped in #949 and #950 has never executed once.
+
+Nothing about the SQL changed. The two label migrations are renumbered `005` and `006`, past the timesheet's `004`, so they sort after their sibling instead of colliding with it, and each now names its dependency in its header. The two `20260909_003` references in the sign-off route's comments follow the rename.
+
+**Still to run on staging, in this order:** `20260909_005_label_sign_offs.sql`, then `20260909_006_sign_off_recorded_by.sql`, then `NOTIFY pgrst, 'reload schema';`.
+
 ## 2026-09-09 — Alyssa (A stoppage that notified nobody said it had notified maintenance)
 
 **Files changed:** `features/operator-timesheet/db.ts`, `features/operator-timesheet/OperatorTimesheet.tsx`, `features/operator-timesheet/StoppageQuickLog.tsx`, `app/api/production/stoppage/notify/route.ts`
