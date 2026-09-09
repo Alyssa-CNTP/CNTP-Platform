@@ -5,11 +5,17 @@ import { useRouter } from 'next/navigation'
 import { ChevronRight, Plus, Search } from 'lucide-react'
 import {
   SEED_TEMPLATES, fetchTemplates, toTemplate, type LabelTemplateRow,
+  fetchCustomerAccounts, fetchAssignableReps, setCustomerSalesRep,
+  type AssignableRep,
   errMessage,
 } from '@/features/pasteuriser-labels'
 import type { LabelTemplateStatus } from '@/lib/core/labels'
-import { groupLibraryByCustomer } from '@/lib/core/labels/library'
+import {
+  groupLibraryByCustomer, withOwnership, unassignedAccounts,
+  type CustomerAccount,
+} from '@/lib/core/labels/library'
 import { useAuth } from '@/lib/auth/context'
+import { useMyEmployee } from '@/lib/training/use-my-employee'
 
 /**
  * The label library.
@@ -54,11 +60,25 @@ export default function LabelLibraryPage() {
   const router = useRouter()
   const { p: perm, isFullAdmin } = useAuth()
   const can = (k: Parameters<typeof perm>[0]) => isFullAdmin || perm(k)
+  // Account ownership is a sales-management act, and can_assign_label_po is the
+  // key sales already holds for binding work to a customer. Deliberately not a
+  // sixth label permission: adding one mid-testing means four more
+  // registrations (union, registry, route guard, nav) for a control that sits
+  // on a page the same people already reach.
+  const canAssign = can('can_assign_label_po')
   const [rows, setRows] = useState<LabelTemplateRow[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [q, setQ] = useState('')
   const [creating, setCreating] = useState(false)
+
+  // Who owns which account, and who the viewer is in the Staff Directory.
+  // useMyEmployee is the app's existing resolver for auth.users.id ->
+  // employees.id; the auth context carries userId but not the employee link.
+  const { userId } = useAuth()
+  const { employeeId } = useMyEmployee(userId)
+  const [accounts, setAccounts] = useState<CustomerAccount[]>([])
+  const [reps, setReps] = useState<AssignableRep[]>([])
 
   async function load() {
     setLoading(true)
@@ -67,6 +87,15 @@ export default function LabelLibraryPage() {
     finally { setLoading(false) }
   }
   useEffect(() => { void load() }, [])
+
+  // Ownership loads separately and never blocks the library. An empty or
+  // failed customer master means every group reads as unassigned, which is
+  // the honest degradation -- a label list that will not render because
+  // nobody has been given an account would be a worse trade.
+  const loadAccounts = async () => {
+    try { setAccounts(await fetchCustomerAccounts()) } catch { setAccounts([]) }
+  }
+  useEffect(() => { void loadAccounts() }, [])
 
   const groups = useMemo(() => {
     const needle = q.trim().toLowerCase()
@@ -79,16 +108,47 @@ export default function LabelLibraryPage() {
     return groupLibraryByCustomer(matching)
   }, [rows, q])
 
+  // Annotated with the sales lead, viewer's own accounts first. The rule is
+  // lib/core/labels/library.ts, so the job-card picker and the approval queue
+  // get the same answer as this screen.
+  const owned = useMemo(
+    () => withOwnership(groups, accounts, employeeId),
+    [groups, accounts, employeeId],
+  )
+  const mineCount = useMemo(() => owned.filter(g => g.mine).length, [owned])
+
   const familyCount = useMemo(
     () => groups.reduce((a, g) => a + g.families.length, 0),
     [groups],
   )
+
+  // An account nobody owns is invisible work: no rep sees it under their own
+  // customers, so nobody is prompted to approve its labels.
+  const orphans = useMemo(() => unassignedAccounts(accounts), [accounts])
 
   // Seed designs not yet in the library — the thirteen BarTender files.
   const unseeded = useMemo(() => {
     const have = new Set(rows.map(r => r.code))
     return SEED_TEMPLATES.filter(s => !have.has(s.code))
   }, [rows])
+
+  // Reps are only fetched when someone actually opens a picker. The Staff
+  // Directory is not needed to read the library, and loading every employee on
+  // every page view to populate a control most viewers cannot use is the kind
+  // of cost ARCHITECTURE.md 3 calls out.
+  async function ensureReps() {
+    if (reps.length) return
+    try { setReps(await fetchAssignableReps()) }
+    catch (e) { setError(errMessage(e)) }
+  }
+
+  async function assignRep(customer: string, employee: string | null) {
+    try {
+      await setCustomerSalesRep(customer, employee)
+      await loadAccounts()
+      setError(null)
+    } catch (e) { setError(errMessage(e)) }
+  }
 
   async function create(seedFrom?: string) {
     setCreating(true)
@@ -136,6 +196,12 @@ export default function LabelLibraryPage() {
           className="w-full pl-9 pr-3 py-2 rounded-lg border border-surface-rule bg-surface text-sm text-text" />
       </div>
 
+      {mineCount > 0 && (
+        <p className="text-[11px] text-text-muted -mt-2">
+          Your {mineCount} account{mineCount === 1 ? '' : 's'} first, then the rest alphabetically.
+        </p>
+      )}
+
       {loading ? (
         <p className="text-sm text-text-muted py-8 text-center">Loading…</p>
       ) : familyCount === 0 ? (
@@ -144,15 +210,34 @@ export default function LabelLibraryPage() {
         </p>
       ) : (
         <div className="space-y-5">
-          {groups.map(g => (
+          {owned.map(g => (
             <div key={g.label} className="space-y-2">
-              <div className="flex items-baseline gap-2">
+              <div className="flex items-baseline gap-2 flex-wrap">
                 <h2 className="font-display font-bold text-[13px] uppercase tracking-wide text-text-muted">
                   {g.label}
                 </h2>
+                {g.mine && (
+                  <span className="px-1.5 py-0.5 rounded bg-brand/10 text-brand text-[10px] font-semibold uppercase tracking-wide">
+                    Mine
+                  </span>
+                )}
                 <span className="text-[11px] text-text-faint">
                   {g.families.length} label{g.families.length === 1 ? '' : 's'}
                 </span>
+                {/* The generic group belongs to no customer, so it can have no
+                    lead -- offering a picker there would invite an assignment
+                    that has nowhere to be stored. */}
+                {g.customer && (
+                  <CustomerLead
+                    customer={g.customer}
+                    repId={g.salesRepEmployeeId}
+                    repName={g.salesRepName}
+                    reps={reps}
+                    canAssign={canAssign}
+                    onLoadReps={ensureReps}
+                    onAssign={assignRep}
+                  />
+                )}
               </div>
               {g.families.map(f => (
                 <button key={f.code} onClick={() => router.push(`/pasteuriser/labels/${f.headline.id}`)}
@@ -182,6 +267,28 @@ export default function LabelLibraryPage() {
         </div>
       )}
 
+      {/* Accounts with no sales lead. Only shown to whoever can fix it, and
+          only when there are some -- a permanent empty panel teaches people to
+          stop reading that part of the screen. */}
+      {canAssign && orphans.length > 0 && (
+        <div className="card p-4 space-y-2">
+          <p className="text-[11px] uppercase tracking-wide font-semibold text-text-faint">
+            {orphans.length} customer{orphans.length === 1 ? '' : 's'} with no sales lead
+          </p>
+          <p className="text-xs text-text-muted">
+            Nobody sees these under their own customers, so nothing prompts anyone to get their
+            labels approved.
+          </p>
+          <div className="flex flex-wrap gap-2 pt-0.5">
+            {orphans.map(a => (
+              <CustomerLead key={a.name} customer={a.name} repId={null} repName={null}
+                reps={reps} canAssign={canAssign} onLoadReps={ensureReps} onAssign={assignRep}
+                prefix={a.name} />
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* The existing BarTender designs, offered as starting points. They land
           as drafts and still go round the approval loop — see the route. */}
       {can('can_design_labels') && unseeded.length > 0 && (
@@ -204,5 +311,82 @@ export default function LabelLibraryPage() {
         </div>
       )}
     </div>
+  )
+}
+
+/**
+ * The sales lead on a customer, and the control to change it.
+ *
+ * Reads as plain text until someone who can assign clicks it, so the library
+ * stays a reading surface for the people who only read it. A `<select>` rather
+ * than a bespoke menu: it is a single-choice list of people, and the native
+ * control already handles keyboard, typeahead and small screens.
+ *
+ * The rep list loads on first open, not on page load — see onLoadReps.
+ */
+function CustomerLead({
+  customer, repId, repName, reps, canAssign, onLoadReps, onAssign, prefix,
+}: {
+  customer: string
+  repId: string | null
+  repName: string | null
+  reps: AssignableRep[]
+  canAssign: boolean
+  onLoadReps: () => void | Promise<void>
+  onAssign: (customer: string, employeeId: string | null) => void | Promise<void>
+  /** Shown before the lead — used by the unassigned panel, where the customer
+   *  name is not already a heading above it. */
+  prefix?: string
+}) {
+  const [open, setOpen] = useState(false)
+  const [busy, setBusy] = useState(false)
+
+  // The name is only known for a rep who still has an active Staff Directory
+  // row. An id with no name is an offboarded person still holding an account,
+  // which is worth saying rather than rendering as blank.
+  const lead = repId ? (repName ?? 'Unknown (offboarded?)') : 'Unassigned'
+
+  if (!canAssign || !open) {
+    return (
+      <button
+        type="button"
+        disabled={!canAssign}
+        onClick={async () => { setOpen(true); await onLoadReps() }}
+        className={`text-[11px] ${repId ? 'text-text-muted' : 'text-text-faint italic'} ${
+          canAssign ? 'hover:text-brand underline decoration-dotted underline-offset-2' : 'cursor-default'
+        }`}
+        title={canAssign ? `Change the sales lead for ${customer}` : undefined}
+      >
+        {prefix ? `${prefix} · ` : ''}{lead}
+      </button>
+    )
+  }
+
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      {prefix && <span className="text-[11px] text-text-muted">{prefix}</span>}
+      <select
+        autoFocus
+        disabled={busy}
+        value={repId ?? ''}
+        onChange={async e => {
+          const next = e.target.value || null
+          if (next === repId) { setOpen(false); return }
+          setBusy(true)
+          await onAssign(customer, next)
+          setBusy(false)
+          setOpen(false)
+        }}
+        onBlur={() => setOpen(false)}
+        className="text-[11px] rounded border border-surface-rule bg-surface px-1.5 py-0.5 text-text"
+      >
+        <option value="">Unassigned</option>
+        {reps.map(r => (
+          <option key={r.id} value={r.id}>
+            {r.name}{r.jobTitle ? ` — ${r.jobTitle}` : ''}
+          </option>
+        ))}
+      </select>
+    </span>
   )
 }
