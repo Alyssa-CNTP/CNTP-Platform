@@ -56,6 +56,36 @@ split as **Conventional · Domestic/Local** (Morning) 6 544.0 in / 5 699.0 out /
 The two runs are each still outside ±1%, and that is now visible rather than hidden inside a day total: the bucket elevator crossing 16h00 belongs to neither run, which is exactly what the unattributable panel is for.
 
 No migration, no change to `lib/production/order-detail.ts`, and no change to what is captured — only to how the order is divided when it is read.
+## 2026-09-09 — Alyssa (PRODUCTION: `lib/core` and its gates arrive on main)
+
+**Files changed:** `lib/core/**` (39 files, new), `vitest.config.mts`, `eslint.boundaries.mjs`, `eslint.hooks.mjs`, `eslint.config.mjs`, `CODEOWNERS`, `ARCHITECTURE.md`, `CLAUDE.md`, `docs/capture-phases.md`, `docs/core-on-main.md` (new), `docs/ci.main.yml` (new), `package.json`, `app/(app)/admin/inventory-import/page.tsx`
+
+`main` had **none** of it: no `lib/core`, no test runner, no boundary lint, no CI workflow. Every shared rule the platform depends on existed only on `staging`, which is why production kept hitting problems the rules were written to prevent — most recently a production order that silently dropped 5 950 kg of input because it compared variant *strings* where `lib/core/variants.ts` compares *families*.
+
+### What landed, and why it changes nothing yet
+
+All 39 files of `lib/core/**`, plus the config that makes them enforceable. **Nothing outside `lib/core` imports it** — verified by grep and stated as the acceptance condition — so the bundle is unaffected and no screen behaves differently. This commit buys the harness; the wiring is separate work, deliberately.
+
+- `npm run test` — **472 tests over `lib/core/**`, all passing on main.** The first test runner this branch has ever had.
+- `npm run lint:boundaries` — the one-way rule from ARCHITECTURE.md §2 (`lib/core` may not import `features/` or `app/`). Clean.
+- `npm run lint:hooks` via `posttest` — the React error #310 gate.
+- Typecheck **32**, identical to the baseline measured in the same tree before the files were added. Build clean.
+- `ARCHITECTURE.md` and `docs/capture-phases.md` came too, and `CLAUDE.md` now `@`-references ARCHITECTURE.md, so anyone working on `main` actually reads the rules rather than rediscovering them. `CODEOWNERS` puts `lib/core/**`, `ARCHITECTURE.md` and `supabase/migrations/` behind two named reviewers.
+
+### The hooks gate found a live crash on its first run
+
+`app/(app)/admin/inventory-import/page.tsx` called `useCallback` **below** the non-admin early return. `useAuth()` does not know the role on the first render, so the component ran six hooks, took the early return, and then ran seven once the role resolved to `admin` — React error #310, *"Rendered more hooks than during the previous render"*. The page crashed for the only people permitted to open it.
+
+The `useCallback` moved above the early return. `handleFile` is a function declaration and is hoisted, so nothing else changed. This is the one behavioural change in the commit, and it is here because a gate cannot be a gate while it is red.
+
+### Not brought across
+
+`features/`, `e2e/`, `playwright.config.ts`, `@playwright/test`. Features are mounted by the capture page and `main`'s capture page is the forked one — that is rewiring work. Playwright needs a saved SSO session, so in CI it would skip every spec and report a green tick proving nothing.
+
+### Two things still needing a hand
+
+- **`docs/ci.main.yml` must be moved to `.github/workflows/ci.yml` by hand.** The token has no `workflow` scope, so any push touching that directory is rejected. Baselines inside it are measured: typecheck 32, lint 3035.
+- **`docs/core-on-main.md` is the map of what is inert and what is wired**, and carries the two warnings that matter: `capture-rows/**` was characterised against *staging's* capture page and is **not** a drop-in for `main`'s (some of what it would overwrite are data-loss hotfixes), and `main` currently runs **two mass-balance tolerance regimes at once** — a flat 15 kg (100 kg for refining2) on the capture screen and ±1% on the production order. `lib/core/mass-balance/tolerance.ts` resolves that, but adopting it changes which runs flag, so it needs to be its own announced change.
 
 ---
 
