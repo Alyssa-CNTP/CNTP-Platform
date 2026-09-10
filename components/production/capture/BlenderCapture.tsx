@@ -18,6 +18,7 @@ import ScanCameraButton from '@/components/shared/ScanCameraButton'
 import { SECTION_CONFIG } from '@/lib/production/live-types'
 import type { Variant as ShortVariant } from '@/lib/production/live-types'
 import type { ShiftAssignment, InventoryItem } from '@/lib/supabase/database.types'
+import { n } from '@/lib/core/num'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -86,7 +87,6 @@ export function emptyBlenderData(): BlenderData {
   return { bomId: null, outputRunNo: null, inputs: [], outputs: [] }
 }
 
-const n = (v: string) => parseFloat(String(v).replace(',', '.')) || 0
 
 export function blenderTotals(d: BlenderData) {
   const totalIn  = (d.inputs ?? []).reduce((s, r) => s + n(r.weight), 0)

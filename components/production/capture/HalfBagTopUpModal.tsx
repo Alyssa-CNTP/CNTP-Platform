@@ -51,8 +51,8 @@ import { printLabelAuto, buildLabelHtml } from '@/lib/production/label-print'
 import { expectedBagWeightFor, isUnusuallyHeavyBag, MAX_BAG_WEIGHT_KG, GRADE_TO_LOCAL_EXPORT, sectionMeta, VARIANT_OPTIONS } from '@/lib/production/capture-config'
 import { SECTION_CONFIG } from '@/lib/production/live-types'
 import { LEAF, debaggedBags, type DebaggedBagOption } from '@/lib/production/inventory'
+import { n } from '@/lib/core/num'
 
-const n = (v: string) => parseFloat(String(v).replace(',', '.')) || 0
 
 interface RebagBag {
   serial_number: string
