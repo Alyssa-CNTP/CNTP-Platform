@@ -1431,6 +1431,14 @@ Reported live on the floor: Sieving Tower operator saw "your data is saved but i
 
 - **Root cause:** `persist()` does delete-then-insert against `prod_debagging`/`prod_bagging` on every save. The debounce/hide-flush/backstop autosave paths were already serialized through `persistChainRef` (added in PR #830) so they couldn't race each other — but `saveDraft()` (the explicit "Save draft" button, and `submitSession()` which calls it) called `persist()` directly, bypassing that queue entirely. If the operator tapped Save/Submit while an autosave was mid-flight, the two delete-then-insert sequences interleaved: one call's insert landed, then the other's insert collided with it, tripping the unique constraints and dropping that save's rows (draft_data still had them; the structured tables didn't).
 - **Fix:** extracted the `persistChainRef` serialization into a shared `queuePersist()` helper and routed `saveDraft()` through it as well, so autosave and explicit Save/Submit can never run `persist()` concurrently for the same session. No schema change; self-healing for already-affected today's sessions since `persist()` rewrites both tables from the browser's current `draft_data` on every successful call.
+## 2026-08-28 — Alyssa (Capture landing page: fix shift/date going stale on an open tab)
+
+**Files changed:** `app/(app)/production/capture/page.tsx`
+
+Reported: a Capture tab left open overnight still showed "Thursday 27 August · Afternoon / Night shift" at 07h00 the next morning, even though the header clock had already rolled to Friday.
+
+- **Root cause:** `date`/`shift` were computed once via `useState(productionShiftNow())` on mount and never recomputed, so the page's data queries (and header text) stayed pinned to whatever shift was current when the tab was opened — a device left running across the 07h00/16h00 changeover never picked up the new shift without a manual reload.
+- **Fix:** added a 60s interval that recomputes `productionShiftNow()` and rolls the state forward the moment the resolved (date, shift) actually changes, which re-triggers the existing data-fetch effect.
 
 ## 2026-08-28 — Alyssa (Mass balance formula fix, checks VSD sign-off block, live AI summary)
 
