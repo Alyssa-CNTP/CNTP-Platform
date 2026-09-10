@@ -163,6 +163,9 @@ type errors at baseline, production build clean.
 
 ### Migrations pending
 
+> **Correction, 2026-09-10.** Both are already applied to staging AND production.
+> The order below still holds if either is ever re-run elsewhere.
+
 Run **`20260909_002` first, then `20260909_004`.** 004 widens the kind CHECK,
 adds the supervisor-call columns and creates `v_line_downtime`; it needs 002's
 table to exist. `v_machine_downtime` is left in place rather than dropped —
@@ -302,7 +305,12 @@ type-clean, production build clean.
 
 `20260909_002_timesheet_stoppages.sql` has **not been run** on staging or production. Until
 it is, the Timesheet tab shows a visible read error and capture carries on — the failure is
-contained, not silent. The optional backfill in the migration is commented and cannot
+contained, not silent.
+
+> **Correction, 2026-09-10.** It has been run — on **both** staging and production.
+> Verified by probing each project for `production.timesheet_stoppages`. The note above
+> was true when written and was never updated once the migration was applied. Do not
+> run it again. The optional backfill in the migration is commented and cannot
 attribute historic rows to a machine; they never carried one.
 ---
 
