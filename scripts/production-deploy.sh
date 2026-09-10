@@ -25,20 +25,27 @@ URL=https://cntpplatform.rooibostea.co.za
 CHECK_PATHS=(/production/roster /production/staff /production/capture/assign /dashboard)
 cd "$APP"
 
-echo "[1/6] clearing any stale deploy loops (pgrep self-match zombies)"
+echo "[1/7] clearing any stale deploy loops (pgrep self-match zombies)"
 pkill -f 'while [p]grep -f' 2>/dev/null || true
 
-echo "[2/6] waiting for any in-flight 'next build' to finish (bounded ~7.5 min)"
+echo "[2/7] waiting for any in-flight 'next build' to finish (bounded ~7.5 min)"
 for _ in $(seq 1 90); do
   if ps -eo cmd | grep -q "[n]ext build"; then sleep 5; else break; fi
 done
 
-echo "[3/6] syncing to origin/main"
+echo "[3/7] syncing to origin/main"
 git fetch origin main
 git reset --hard origin/main
 echo "      HEAD: $(git log --oneline -1)"
 
-echo "[4/6] building into .next-build (live .next untouched)"
+echo "[4/7] installing dependencies (--legacy-peer-deps, per CLAUDE.md)"
+# The workflow used to do this inline. It has to happen AFTER the reset above,
+# or a deploy that adds a dependency builds against the old node_modules and
+# fails at import time -- the reason "Fix staging deploy: run npm install
+# before build so new deps are not missing" exists in the history.
+npm install --legacy-peer-deps 2>&1 | tail -5
+
+echo "[5/7] building into .next-build (live .next untouched)"
 rm -rf .next-build
 NEXT_DIST_DIR=.next-build npm run build 2>&1 | tail -6
 if [ ! -f .next-build/BUILD_ID ]; then
@@ -47,7 +54,7 @@ if [ ! -f .next-build/BUILD_ID ]; then
   exit 1
 fi
 
-echo "[5/6] atomic swap + restart"
+echo "[6/7] atomic swap + restart"
 rm -rf .next-old
 [ -d .next ] && mv .next .next-old
 mv .next-build .next
@@ -64,7 +71,7 @@ else
 fi
 sleep 4
 
-echo "[6/6] verifying"
+echo "[7/7] verifying"
 ok=1
 for path in "${CHECK_PATHS[@]}"; do
   code=$(curl -s -o /dev/null -w "%{http_code}" "$URL$path" || echo 000)
