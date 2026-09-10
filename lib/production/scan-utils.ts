@@ -2,7 +2,6 @@
 import { useEffect, useRef, useCallback } from 'react'
 import * as React from 'react'
 import { getDb } from '@/lib/supabase/db'
-import { normaliseVariant } from '@/lib/constants/manufacturing'
 
 // ── sanitizeSerial — keystroke-level cleanup for every "scan or type serial"
 // input across capture. Real serials in this app are digits/dashes (section
@@ -21,12 +20,7 @@ export function sanitizeSerial(v: string): string {
 // CON + RA-CON  → 'conventional'  (can be blended together)
 // ORG + RA-ORG + FT-ORG → 'organic'  (can be blended together)
 // Families cannot be mixed in a single blend run.
-export function variantFamily(v: string): 'conventional' | 'organic' | null {
-  const n = normaliseVariant(v)
-  if (n === 'Conventional' || n === 'RA-Conventional') return 'conventional'
-  if (n === 'Organic' || n === 'RA-Organic' || n === 'FT-ORG') return 'organic'
-  return null
-}
+export { variantFamily } from '@/lib/core/variants'
 
 // ── useSerialLookup — fires bag_tags query when serial matches DD-MM-NN ───────
 // Works with USB scanner (types fast) AND manual entry (debounced).
