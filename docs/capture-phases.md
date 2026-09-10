@@ -6,7 +6,7 @@ status table in the same commit as the work.
 
 ---
 
-## Status — 2026-09-04
+## Status — 2026-09-09
 
 | Phase | State | Outstanding |
 |---|---|---|
@@ -14,7 +14,8 @@ status table in the same commit as the work.
 | **1** Populate core | **Done** | `n()`, `metrics`, `serials`, mass-balance, variant identity, `lookupSerial` all extracted — see the `n()` note below |
 | **1B** Serialization | **Built and provisioned; one env var from live** | Code wired in all four output sections (Sieving, Refining, Granule, Blender — Pasteuriser is out of the scheme by design, §5). **The migration IS applied on staging** — verified read-only 2026-09-04: `production.bag_serial_counters` returns `42501 permission denied`, which only an EXISTING table raises; a missing one gives `42P01`. So the only thing left is `NEXT_PUBLIC_FF_DB_SERIAL_ALLOCATION=sieving` in staging's env. Until then the race is still live. |
 | **2** Typed contracts | **Done, still regressing** | Duck-typing gone, `assertNever` in place. But `as any` in `[section]/page.tsx` is **62** as of 2026-09-04, measured — the "61" written here on 09-02 was already wrong. Trend: 58 on 08-25, 59 on 08-26, 62 now. It has gone **up** through the whole clean-up. The five section data types still live in component files — deliberately, now: core declares the shapes it reads instead (see the boundary note below), so this is no longer blocking anything. |
-| **3** Feature boundary | **Done** | Guardrails in place, proven by tests, mounted, **and the first capture feature actually moved** — `features/changeover/` (2026-09-04). `features/acumatica-items` was built out of sequence; the changeover is the first one done to the plan. |
+| **3** Feature boundary | **Done** | Guardrails in place, proven by tests, mounted, and two capture features moved to the plan — `features/changeover/` (2026-09-04) and `features/operator-timesheet/` (2026-09-09). `features/acumatica-items` was built out of sequence. |
+| **4a** Stoppage ledger | **Built, TWO migrations pending** | Done ahead of Phase 4 proper because it was a live data-loss bug, not a refactor — see below. `production.timesheet_stoppages` is append-only with per-row upsert and void-not-delete, i.e. the Phase 4 pattern, applied to timesheets rather than to bags. Run `20260909_002_timesheet_stoppages.sql` **then** `20260909_004_stoppage_coverage_and_supervisor_call.sql` — 004 needs 002 table to exist. |
 | **4** Ledger foundation | Not started | `lib/core/ledger/` absent; `scan_events` unextended; `live/capture/page.tsx` still bulk-deletes the ledger |
 | **5** Reconciliation | Not started | |
 | **6** Adjustment page | Not started | flag `supervisorAdjustments` exists, page does not |
@@ -43,6 +44,58 @@ event handlers, the scanner and anything browser-only are untested. This is a cr
 detector for the render pass, not an integration test, and it does not replace the
 Playwright suite — which still cannot run in CI, because the app signs in through
 Microsoft SSO and that must not be scripted with stored credentials.
+
+### The operator timesheet — 2026-09-09
+
+Taken out of phase order deliberately. This was not an extraction; it was a live bug
+losing data on the floor every shift, and the fix needed the ledger shape anyway.
+
+**What was wrong.** `TimesheetConfirm`'s load effect depended on `operatorName`, and the
+capture page passes it the sign-off name **input**. So every keystroke in that field
+re-ran the loader, which reset the stoppage list to the standard tea/lunch schedule.
+Start and end re-derived to the same values, so the sheet looked correct while every
+stoppage the operator had logged was gone. The floor reported it as "start and end are
+fine, the other stoppages don't save" — which is exactly what was happening, and the
+reason it read as a mystery is that the sheet never looked broken.
+
+Three more in the same file, all fixed:
+
+* `confirm()` set `confirmed: true` in a `finally`, so a failed write still showed a
+  green tick over data that never reached the database.
+* `if (!sessionId) return` with the button enabled — tapping did nothing and said nothing.
+* Overlapping breaks each subtracted from worked-time independently, so a breakdown
+  running through lunch subtracted the lunch twice. `mergeIntervals()` in core fixes it,
+  and that one was shorting operators' hours, not just a display bug.
+
+**What replaced it.** Stoppages are now an append-only ledger written as they happen, so
+a stoppage exists in the database from the moment it is logged — which is also what makes
+the rest possible: `deep_clean` and `breakdown` as first-class kinds, the supervisor
+attestation, downtime as a KPI, and the operator's note reaching the shift report.
+
+*Superseded in places by the second pass below — the maintenance job-card polling and the
+per-machine downtime view described in the original build are both gone.*
+
+### The timesheet, second pass — 2026-09-09
+
+Floor feedback on the deployed version, and three of the four points were about
+the same thing: **the capture screen must not pay for this feature.**
+
+* **Back on Sign-off.** It runs all shift, but is only finalised at the end.
+  That is what Sign-off is. Being back there is where the original bug lived, so
+  the fix now holds structurally — the loader is keyed on the session and reads
+  its identity from a ref, and the mount passes the session name, never the
+  input.
+* **No polling, anywhere.** The 45s `maintenance.job_cards` read is gone, with
+  the machine register and the untyped cross-schema client. Mid-shift logging is
+  a header button opening a dialog that reads nothing until opened.
+* **The operator says when the machine stopped.** A job card timestamp is when
+  maintenance was *engaged*, always later. The flow runs outward now.
+* **A way to call a supervisor**, repeatable and escalating, with the ask
+  recorded so a report can tell "nobody called" from "called and ignored".
+* **Every cause covered** — power, IT/system, no material, quality hold — each
+  routed to the team that can act. `changeover` retired but not deleted.
+* **Downtime keys on the LINE**, split by cause, since the section is known from
+  the production order and the machine is no longer asked for.
 
 ### The changeover — decided 2026-09-04
 

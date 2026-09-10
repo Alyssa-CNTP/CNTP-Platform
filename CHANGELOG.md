@@ -57,35 +57,345 @@ The two runs are each still outside ±1%, and that is now visible rather than hi
 
 No migration, no change to `lib/production/order-detail.ts`, and no change to what is captured — only to how the order is divided when it is read.
 ## 2026-09-09 — Alyssa (PRODUCTION: `lib/core` and its gates arrive on main)
+## 2026-09-09 — Alyssa (A stoppage that notified nobody said it had notified maintenance)
 
-**Files changed:** `lib/core/**` (39 files, new), `vitest.config.mts`, `eslint.boundaries.mjs`, `eslint.hooks.mjs`, `eslint.config.mjs`, `CODEOWNERS`, `ARCHITECTURE.md`, `CLAUDE.md`, `docs/capture-phases.md`, `docs/core-on-main.md` (new), `docs/ci.main.yml` (new), `package.json`, `app/(app)/admin/inventory-import/page.tsx`
+**Files changed:** `features/operator-timesheet/db.ts`, `features/operator-timesheet/OperatorTimesheet.tsx`, `features/operator-timesheet/StoppageQuickLog.tsx`, `app/api/production/stoppage/notify/route.ts`
 
-`main` had **none** of it: no `lib/core`, no test runner, no boundary lint, no CI workflow. Every shared rule the platform depends on existed only on `staging`, which is why production kept hitting problems the rules were written to prevent — most recently a production order that silently dropped 5 950 kg of input because it compared variant *strings* where `lib/core/variants.ts` compares *families*.
+Found while checking what the notification path depends on, after the timesheet
+migrations went in.
 
-### What landed, and why it changes nothing yet
+`reportStoppage()` returned a **boolean**, and the notify route answers `ok`
+even when it finds nobody to tell — deliberately, so the row gets stamped and
+the app stops retrying a send that can never succeed. The caller read `ok` as
+success and showed the operator **"Maintenance knows"** when nobody had been
+told.
 
-All 39 files of `lib/core/**`, plus the config that makes them enforceable. **Nothing outside `lib/core` imports it** — verified by grep and stated as the acceptance condition — so the bundle is unaffected and no screen behaves differently. This commit buys the harness; the wiring is separate work, deliberately.
+That is the silent no-op class this codebase keeps re-inventing, landed on the
+one screen where the consequence is a stopped machine nobody comes to.
 
-- `npm run test` — **472 tests over `lib/core/**`, all passing on main.** The first test runner this branch has ever had.
-- `npm run lint:boundaries` — the one-way rule from ARCHITECTURE.md §2 (`lib/core` may not import `features/` or `app/`). Clean.
-- `npm run lint:hooks` via `posttest` — the React error #310 gate.
-- Typecheck **32**, identical to the baseline measured in the same tree before the files were added. Build clean.
-- `ARCHITECTURE.md` and `docs/capture-phases.md` came too, and `CLAUDE.md` now `@`-references ARCHITECTURE.md, so anyone working on `main` actually reads the rules rather than rediscovering them. `CODEOWNERS` puts `lib/core/**`, `ARCHITECTURE.md` and `supabase/migrations/` behind two named reviewers.
+**Zero is a real answer and now travels.** The route returns the recipient count
+and a `reason`; `reportStoppage()` returns `number | null` (null = the call
+failed, still retried); and both screens say plainly that nobody was reached and
+that the operator should go and tell someone in person.
 
-### The hooks gate found a live crash on its first run
+The stamp behaviour is unchanged and still right — there is nobody to retry TO,
+and a line that is down does not need a render loop hammering an empty recipient
+list. What changed is only whether the operator is told the truth about it.
 
-`app/(app)/admin/inventory-import/page.tsx` called `useCallback` **below** the non-admin early return. `useAuth()` does not know the role on the first render, so the component ran six hooks, took the early return, and then ran seven once the role resolved to `admin` — React error #310, *"Rendered more hooks than during the previous render"*. The page crashed for the only people permitted to open it.
+**Worth checking regardless of this fix:** the recipients come from
+`shared.app_roles`, and if no active user holds `maintenance_manager` /
+`production_supervisor` / IT, every breakdown notification reaches nobody. That
+is a data question, not a code one.
 
-The `useCallback` moved above the early return. `handleFile` is a function declaration and is hoisted, so nothing else changed. This is the one behavioural change in the commit, and it is here because a gate cannot be a gate while it is red.
+---
 
-### Not brought across
+## 2026-09-09 — Alyssa (Timesheet: back on Sign-off, every stoppage covered, and a way to actually call a supervisor)
 
-`features/`, `e2e/`, `playwright.config.ts`, `@playwright/test`. Features are mounted by the capture page and `main`'s capture page is the forked one — that is rewiring work. Playwright needs a saved SSO session, so in CI it would skip every spec and report a green tick proving nothing.
+**Files changed:** `lib/core/timesheet/stoppages.ts`, `lib/core/timesheet/stoppages.test.ts`, `features/operator-timesheet/` (`OperatorTimesheet.tsx`, `StoppageQuickLog.tsx` (new), `prompts.ts`, `prompts.test.ts`, `areas.ts`, `areas.test.ts`, `db.ts`, `index.ts`), `app/api/production/stoppage/notify/route.ts` (renamed from `breakdown/`), `app/api/production/stoppage/call-supervisor/route.ts` (new), `supabase/migrations/20260909_004_stoppage_coverage_and_supervisor_call.sql` (new), `app/(app)/production/capture/[section]/page.tsx`, `lib/production/shift-report.ts`, `lib/production/shift-report-builder.ts`, `app/(app)/supervisor/report/page.tsx`, `lib/supabase/database.types.ts`, `docs/capture-phases.md`
 
-### Two things still needing a hand
+Follow-up to #948, all from floor feedback on the deployed version.
 
-- **`docs/ci.main.yml` must be moved to `.github/workflows/ci.yml` by hand.** The token has no `workflow` scope, so any push touching that directory is rejected. Baselines inside it are measured: typecheck 32, lint 3035.
-- **`docs/core-on-main.md` is the map of what is inert and what is wired**, and carries the two warnings that matter: `capture-rows/**` was characterised against *staging's* capture page and is **not** a drop-in for `main`'s (some of what it would overwrite are data-loss hotfixes), and `main` currently runs **two mass-balance tolerance regimes at once** — a flat 15 kg (100 kg for refining2) on the capture screen and ±1% on the production order. `lib/core/mass-balance/tolerance.ts` resolves that, but adopting it changes which runs flag, so it needs to be its own announced change.
+### The timesheet goes back on Sign-off
+
+It briefly had a step of its own. The practical answer is the other way round:
+the timesheet runs all shift but is only ever *finalised* at the end, which is
+what Sign-off is, and a seventh step is one more thing to walk past.
+
+Being back inside Sign-off is exactly where the original bug lived — the sheet
+sat next to the operator-name input whose value re-derived it on every
+keystroke — so the fix now has to hold **structurally**, not by being careful:
+the loader is keyed on the session and reads its identity from a ref, and the
+mount passes the session's operator name, never the input's. There is a comment
+at the mount saying so.
+
+**There is no latency cost.** It was lazily mounted either way, and this change
+removes the only background work the feature had.
+
+### The capture screen pays nothing for it
+
+Polling `maintenance.job_cards` every 45 seconds is gone, along with the machine
+register read and the untyped client that reaching another schema needed. The
+feature now touches **one schema and no timers.**
+
+What replaces it for mid-shift use is a **"Stopped" button in the capture
+header** → a dialog that reads nothing until it is opened, writes one row, and
+closes. A stoppage's start time is only accurate if it is recorded when the
+machine stops; that is the one thing that genuinely cannot wait for Sign-off.
+
+### The operator says when the machine stopped
+
+The polling had the direction backwards. A job card's `started_at` is when
+*maintenance* was engaged — always later than the stoppage, sometimes by hours —
+and using it meant maintenance's clock decided when the line went down. The
+operator stops the machine, so the operator is the source. The flow runs outward
+now: **operator logs it → the owning team is told → the operator calls a
+supervisor to sign it.**
+
+### There is now a way to call a supervisor
+
+The screen said "awaiting supervisor confirmation" and offered **no way to ask
+anybody** — a sheet sat unsigned until a supervisor happened to walk past the
+tablet. There is a button now, and it is **repeatable**, because being ignored is
+the case it exists for. A repeat ask escalates: the title says how many times,
+and it goes urgent instead of just email.
+
+`supervisor_requested_at` and `supervisor_request_count` are recorded, which
+lets the shift report distinguish **"nobody called"** (the operator's to fix)
+from **"called 15:42 — not signed"** (the supervisor's). Both read as "awaiting
+supervisor" if you only look at the verdict, and a report that conflates them
+blames the operator every time, because they are the one whose sheet is
+incomplete. `attestationState()` in core owns that rule.
+
+### Every cause of a stopped line, not just the mechanical ones
+
+Four things that stop a rooibos line had nowhere to go and were arriving as
+`other` with a note — which is exactly how breakdowns and deep cleans used to
+arrive, and exactly why neither could be analysed:
+
+**Power failure · System / IT down · Waiting for material · Quality hold.**
+
+Each routes to the team that can act, decided in core from the kind and applied
+**server-side** — the browser does not choose who it pages. IT for a system
+outage, not maintenance: paging a fitter for a network problem wastes the one
+person who could have fixed it.
+
+`other` is deliberately **not** downtime and pages nobody. It is the bucket for
+whatever the list failed to anticipate, so it cannot be trusted to mean the line
+was down — a recurring `other` in the shift reports is the signal to add a kind.
+
+### Changeover removed
+
+Retired pending a rebuild, and **retired is not deleted**: it stays in the type,
+the metadata and the DB CHECK because rows already carry it (historic
+`prod_timesheets.breaks`, and the optional backfill). Dropping it would make
+`STOPPAGE_META[kind]` come back undefined on a live capture screen. A row
+carrying it still renders and stays selectable; it cannot be chosen fresh.
+
+### The section is never asked for
+
+It is the production order the operator has open. The machine picker is gone —
+it was offering the whole maintenance register, including "Braai" — and the
+operator now only adds a **note**, with a prompt written per kind ("Whole
+factory, or just this line?" beats a generic "What happened?").
+
+Downtime therefore keys on the **line**, not a machine: `v_line_downtime`
+replaces `v_machine_downtime`, and the shift report's section is **"Downtime by
+line"**, split by cause. Two hours lost to `no_material` is a different problem,
+with a different owner, from two hours lost to `breakdown` — one total hides
+that. The `machine` column stays on the table, nullable, for if the floor ever
+wants machine-level attribution back.
+
+### Feeding the shift report
+
+Already added in #948 and now carrying the new fields: **Operator stoppages**
+(with who was called and whether they signed) and **Downtime by line**. Also
+fixed: the time inputs were clipping to `15:3` — the picker icon needed the
+room.
+
+**105 tests over this feature**, 881 passing overall. Lint back to 3021 exactly,
+type errors at baseline, production build clean.
+
+### Migrations pending
+
+Run **`20260909_002` first, then `20260909_004`.** 004 widens the kind CHECK,
+adds the supervisor-call columns and creates `v_line_downtime`; it needs 002's
+table to exist. `v_machine_downtime` is left in place rather than dropped —
+commented as superseded — because dropping a view something unknown selects from
+is a worse failure than an extra view nobody reads.
+
+---
+
+## 2026-09-09 — Alyssa (Operator timesheet: stoppages become a ledger)
+
+**Files changed:** `lib/core/timesheet/stoppages.ts` (new), `lib/core/timesheet/stoppages.test.ts` (new), `features/operator-timesheet/` (new — `OperatorTimesheet.tsx`, `db.ts`, `prompts.ts`, `areas.ts`, `index.ts`, `prompts.test.ts`, `areas.test.ts`), `app/api/production/breakdown/notify/route.ts` (new), `supabase/migrations/20260909_002_timesheet_stoppages.sql` (new), `app/(app)/production/capture/[section]/page.tsx`, `components/production/capture/TimesheetConfirm.tsx`, `lib/production/shift-report.ts`, `lib/production/shift-report-builder.ts`, `app/(app)/supervisor/report/page.tsx`, `lib/config/flags.ts`, `lib/supabase/database.types.ts`, `docs/capture-phases.md`, `components/production/TimesheetTab.tsx` (deleted)
+
+The floor's report was "operators' start and end times are fine, but the other stoppages
+don't save." That is exactly what was happening, and the reason nobody could find it is
+that the sheet never looked broken.
+
+### The bug
+
+`TimesheetConfirm`'s load effect depended on `operatorName` — and the capture page passes
+it the **sign-off name input**. So every keystroke in that field re-ran the loader, which
+called `setBreaks(d.breaks)` and reset the list to the standard tea/lunch schedule. Start
+and end re-derived to the same values, so they came back looking correct while every
+breakdown, changeover and "other" stoppage the operator had logged was silently gone.
+
+Three more defects in the same 320 lines:
+
+- `confirm()` set `confirmed: true` in a **`finally`**, so a failed write still showed a
+  green "Confirmed" tick over data that never reached the database.
+- `if (!sessionId) return` with the Confirm button enabled — tapping it did nothing and
+  said nothing.
+- Overlapping breaks each subtracted from worked-time **independently**. A breakdown
+  running 12:30–14:00 through a 13:00–13:30 lunch subtracted the lunch twice. That was
+  shorting operators' hours, not just a display error.
+
+All four are fixed in the old component too, because it is now the rollback path behind
+`flags.operatorTimesheet` and **a rollback must not be a rollback to data loss**.
+
+### Stoppages are now an append-only ledger
+
+`production.timesheet_stoppages`, written as things happen: per-row upsert on a stable
+client-minted uuid, and removal is a **void, never a delete** (ARCHITECTURE.md §4/§6).
+A stoppage exists in the database from the moment it is logged, so a reload mid-shift
+shows the same sheet — and that is what makes everything below possible. It was impossible
+before for one reason: data that only exists at sign-off cannot prompt anyone, cannot be
+matched to something happening now, and cannot become a KPI.
+
+`prod_timesheets.breaks` is still written at confirm as a **derived snapshot**, because the
+shift report, the production order detail and supervisor analytics all read it. The ledger
+is authoritative; nothing should query the snapshot for a machine or a job card.
+
+### Deep clean and breakdown are first-class kinds
+
+They were not in the old `BreakType` union at all — an operator had to file both as
+`other` with a free-text note, which is why neither could ever reach a KPI. Seven kinds
+now, with metadata deciding which need a description, which need a machine, and which
+count as downtime. **A Tuesday deep clean is not downtime**; folding planned cleaning in
+would make every Tuesday morning read as a breakdown.
+
+The deep-clean prompt appears on Tuesday mornings only and is an **offer, never a
+requirement** — a week where the clean happened on Wednesday must not leave operators
+unable to submit. That is the hidden-field validation trap from PRs #722/#752/#756.
+
+### The tracker is smart both ways
+
+`features/operator-timesheet/areas.ts` is the join nothing had before: capture's
+`section_id` to maintenance's `area`. The two vocabularies genuinely disagree — capture
+says "Granule Line", maintenance says "Granules - RB"; `smallblender` is "Unit 3 Blender";
+maintenance spells the Pasteuriser with a z. A drift-guard test asserts every mapped name
+exists in `AREAS`, because a near-miss returns nothing at all, silently.
+
+With that, cards on the line are polled every 45s and:
+
+- a live breakdown card nobody has logged **offers to log the stoppage**, starting from
+  when maintenance says the machine stopped, not from when the operator saw the prompt;
+- a linked card maintenance has **completed** offers to close the operator's stoppage at
+  that time;
+- anything still running is flagged at sign-off.
+
+Declining sticks for the shift. An area can hold machines that were not stopping this
+line, so re-asking every poll is how a prompt becomes something operators tap through
+blind.
+
+### A breakdown is signed, and maintenance is told
+
+Requested mid-build, and it changes what a breakdown is: the one stoppage kind that moves
+a number somebody is measured on, so the one kind that is not self-certifying.
+
+- **The supervisor signs it.** "Verify & Sign" against their Staff Directory signature,
+  the same identity job cards use. `disputed` is a stored verdict, not the absence of one
+  — otherwise an unsigned breakdown is ambiguous between "disputed" and "nobody has
+  looked", and the KPI cannot tell either. A disputed breakdown is excluded from downtime;
+  an **unsigned one still counts**, because downtime is real until someone says otherwise
+  and suppressing it would let a KPI be improved by nobody doing the paperwork.
+- Editing an attested breakdown's window **clears the signature**. A signature standing
+  over times the supervisor never saw is worse than none, because the KPI treats it as
+  verified.
+- **The maintenance manager is notified**, urgent, via `notify()` — in-app, email and
+  WhatsApp. De-duplicated on a `notified_at` stamp written only *after* the send is
+  accepted: stamping first would suppress the retry when it actually failed, and a manager
+  who gets the same breakdown six times stops reading them. The route is
+  notification-only and never writes a job card — that lifecycle belongs to maintenance.
+
+Only supervisors/IT/admin can sign. Operators see the pending panel and a "waiting for a
+supervisor" line, and **it never blocks their submission** — an operator at 01h00 with no
+supervisor on the floor must still be able to sign off.
+
+### Its own tab, and it reaches the production record
+
+The timesheet moved out of Sign-off into **its own step**, between Cleaning and Overview,
+because it is used *throughout* the shift. Living inside Sign-off is the structural reason
+stoppages were only ever recorded once the shift was already over. The tab carries a dot
+when a breakdown is waiting on a signature, and Sign-off now reports the timesheet's state
+rather than mounting the widget — which is what removed the name-input dependency at the
+root.
+
+The shift report gains **Operator stoppages** (with the operator's note, the machine, the
+linked card and who signed) and **Downtime by machine** — the per-machine figure the
+request asked for, independent of line or operator, with unsigned minutes shown separately
+so a total is never quietly presented as verified. The operator's shift note now saves on
+blur and appears in the report's notes; before, it lived in React state until sign-off and
+reached no report at all.
+
+`production.v_machine_downtime` is the same aggregate in SQL for live dashboards. It
+measures an open stoppage to `now()`; the shift report measures to the end of the shift
+window, which is why the report aggregates rather than reading the view.
+
+### Housekeeping
+
+`components/production/TimesheetTab.tsx` deleted — a second, unreferenced timesheet UI
+writing to `public.timesheet_events`, a table with no migration in this repo. Two timesheet
+implementations is exactly the confusion ARCHITECTURE.md §1A is about.
+
+**74 new tests** (54 core + 20 feature), 852 passing overall. `lint:boundaries` green,
+type-clean, production build clean.
+
+### Migration pending
+
+`20260909_002_timesheet_stoppages.sql` has **not been run** on staging or production. Until
+it is, the Timesheet tab shows a visible read error and capture carries on — the failure is
+contained, not silent. The optional backfill in the migration is commented and cannot
+attribute historic rows to a machine; they never carried one.
+---
+
+---
+
+## 2026-09-09 — Alyssa (PRODUCTION: a production order is divided by what was made, not by when)
+
+**Files changed:** `app/(app)/production/orders/[id]/page.tsx`
+
+Reported from the printed Sieving order for 7 September, which read **6 577 kg in against 12 892 kg out — a balance of +96.0% and a yield of 196%** — with the afternoon shift's own block showing `INPUT 0.0 kg`.
+
+### The 5 950 kg that was being dropped
+
+```ts
+const variant     = shifts.map(s => s.session.variant).find(Boolean) ?? null
+const sameVariant = (d) => !d.variant || !variant || d.variant === variant
+const inputRows   = debags.filter(d => !isCarriedOut(d) && sameVariant(d))
+```
+
+Two things were wrong with that guard and they compounded.
+
+- **It was applied to every debagging row**, though the comment directly above it described one case only: the bucket elevator carried in from the previous day, which is this run's input only when it is the same material.
+- **It compared the raw variant string**, and the day's `variant` is whatever the *first* shift recorded.
+
+The tower ran `Conventional` on the morning of 7 September and `RA-Conventional` in the afternoon. All 18 of the afternoon's farm-bag rows failed `d.variant === variant` and were dropped — from the inputs panel, from Total Input, and from the afternoon's own shift block. The output side has no equivalent filter, so all 47 bags still counted.
+
+It was silent. The panel prints a careful list of what it holds back — duplicate rows, bucket elevator carried to tomorrow, carried-in bucket of a different variant — and 5 950 kg of farm bags appeared in none of them, because the sentence that would have said so (`bucketInExcludedKg`) only ever covered bucket rows.
+
+Now: **bucket rows only, compared by variant FAMILY.** `Conventional` and `RA-Conventional` are one physical pool and blend freely; organic is the segregated one (ARCHITECTURE §5 — `lib/production/inventory.ts` already matches carry-over this way). Uses the existing `isOrganicVariant` rather than a fourth copy of the family rule.
+
+### The order is now divided into runs
+
+A production order covers one section for one day, and a day can run more than one thing. Rolled into a single pair of totals, 7 September read as one 12.5 t run of nothing in particular; 31 August was the same shape with grades — 14 385 kg in and 14 103 kg out, correct to the kilogram, with nothing on the page separating Export from Export Blend.
+
+**The division is now `(variant, grade)` — what was made.** The shift is *when*: it stays as a column on every row and is named in each run's header, but it no longer divides the order, because one run routinely spans the changeover and a changeover routinely happens mid-shift.
+
+Each run is a complete section of the report: its own inputs per batch and per type, its own output bags per product, and **its own mass balance**. Under them:
+
+- **Not attributable to one run** — the bucket elevator across the changeover, machine spillage, half-bag top-ups into older bags. None carries a grade, so none belongs to a run, but all are real and all are in the day totals. Listed with their weights instead of spread across the runs, because spreading them would be an apportionment and every other figure on the page is a measurement.
+- **Whole day — all runs combined**, with a per-run table, sitting *under* the runs rather than above them. One pair of totals for a day that ran two different materials is the figure that made this page unreadable in the first place.
+
+The header's **Variant & grade** now names every run the day held, not just the first shift's.
+
+**This reverses one earlier decision, deliberately.** The by-grade table it replaces withheld a per-grade balance on the grounds that the tower is one physical stream — material in the machine when the grade changed was fed by one run and bagged by the next. That reasoning is right and is kept, in the note under the per-run table. What changed is the conclusion: hiding the per-run balance did not make the problem go away, it just left one whole-day figure that was wrong in a way nobody could decompose.
+
+### What 7 September now reads
+
+| | Was | Now |
+|---|---|---|
+| Total input | 6 577.0 kg | **12 527.0 kg** |
+| Total output | 12 892.0 kg | 12 892.0 kg |
+| Balance | +6 315.0 kg (+96.0%) | **+365.0 kg (+2.9%)** |
+| Yield | 196% | **102.9%** |
+
+split as **Conventional · Domestic/Local** (Morning) 6 544.0 in / 5 699.0 out / −845.0 kg, **RA-Conventional · Domestic/Local** (Afternoon) 5 950.0 in / 7 053.0 out / +1 103.0 kg, and 33.0 kg in / 140.0 kg out attributable to neither.
+
+The two runs are each still outside ±1%, and that is now visible rather than hidden inside a day total: the bucket elevator crossing 16h00 belongs to neither run, which is exactly what the unattributable panel is for.
+
+No migration, no change to `lib/production/order-detail.ts`, and no change to what is captured — only to how the order is divided when it is read.
 
 ---
 
