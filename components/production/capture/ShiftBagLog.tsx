@@ -31,8 +31,8 @@ import { dustProductType, type GranuleData } from '@/components/production/captu
 import { type BlenderData } from '@/components/production/capture/BlenderCapture'
 import { type PasteuriserData } from '@/components/production/capture/PasteuriserCapture'
 import { VARIANT_OPTIONS, DESTINATION_OPTIONS } from '@/lib/production/capture-config'
+import { n as num } from '@/lib/core/num'
 
-const num = (v: unknown): number => parseFloat(String(v).replace(',', '.')) || 0
 const DEBAG_BLUE = '#1d4ed8'
 const BAG_ORANGE = '#d97706'
 

@@ -50,6 +50,7 @@ import { variantFromSuffix } from '@/lib/production/bom'
 import { SECTION_CONFIG } from '@/lib/production/live-types'
 import type { Variant as ShortVariant } from '@/lib/production/live-types'
 import type { ShiftAssignment, InventoryItem } from '@/lib/supabase/database.types'
+import { n } from '@/lib/core/num'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -122,7 +123,6 @@ export function emptyPasteuriserData(): PasteuriserData {
   }
 }
 
-const n = (v: string) => parseFloat(String(v).replace(',', '.')) || 0
 
 /**
  * Mass-balance decomposition, matching the paper's letters:
