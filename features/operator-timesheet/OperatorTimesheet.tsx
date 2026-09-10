@@ -59,6 +59,7 @@ import {
   pendingAttestations, pendingNotifications,
   type Stoppage, type StoppageKind, type SupervisorVerdict,
 } from '@/lib/core/timesheet/stoppages'
+import { loadActivity, deriveTimesheet } from '@/lib/production/timesheet'
 import {
   loadStoppages, saveStoppage, voidStoppage, seedScheduledStoppages,
   loadTimesheet, confirmTimesheet, saveTimesheetNote,
@@ -249,6 +250,10 @@ export function OperatorTimesheet({
   // exhaustive-deps is satisfied honestly instead of being silenced.
   const identity = useRef({ operatorId, operatorName, sectionId, date, shift })
   identity.current = { operatorId, operatorName, sectionId, date, shift }
+  // Its own ref, not part of `identity`: that object is spread into a
+  // StoppageScope and this is UI state, not ledger scope.
+  const atSignOffRef = useRef(atSignOff)
+  atSignOffRef.current = atSignOff
 
   // The callbacks go in a ref for the same reason. The capture page happens to
   // pass stable useState setters, but a caller passing an inline arrow would
@@ -272,9 +277,12 @@ export function OperatorTimesheet({
       const s: StoppageScope = { sessionId: sessionId!, ...identity.current }
       ledgerScope.current = s
       try {
-        const [existing, sheet] = await Promise.all([
+        const [existing, sheet, stamps] = await Promise.all([
           loadStoppages(s.sessionId, s.operatorName),
           loadTimesheet(s.sessionId, s.operatorName),
+          // The capture heartbeats. This is what makes the shift START when the
+          // operator opened their screen rather than at their first tea break.
+          loadActivity(s.sessionId, s.operatorId).catch(() => [] as string[]),
         ])
         const rows = await seedScheduledStoppages(s, existing)
         if (!alive) return
@@ -286,11 +294,27 @@ export function OperatorTimesheet({
         cb.current.onConfirmedChange?.(!!sheet?.confirmed)
 
         // Shift start is the operator's login (the first capture heartbeat),
-        // recorded on the confirmed sheet once it exists. Until then, fall back
-        // to the earliest thing we know happened.
+        // recorded on the confirmed sheet once it exists.
+        //
+        // The saved sheet still wins and the earliest-stoppage fallback below is
+        // still here. What was missing BETWEEN them is the activity: this
+        // component only ever read the sheet, so before the first save a shift
+        // appeared to start at the operator's first tea break and never to end
+        // at all. TimesheetConfirm -- the component this replaced -- derived
+        // both from capture_activity, and that derivation was lost in the move.
+        //
+        // endIso is supplied only at sign-off, because that is the operator
+        // wrapping up. Mid-shift the end is the last heartbeat, not `now`, or a
+        // sheet opened at 09h00 would claim the shift ended at 09h00.
+        const derived = sheet
+          ? null
+          : deriveTimesheet(stamps, {
+              shift: s.shift, date: s.date,
+              endIso: atSignOffRef.current ? new Date().toISOString() : null,
+            })
         const firstStop = rows.filter(isLive).map(r => r.startedAt).sort()[0] ?? null
-        setStartIso(sheet?.shiftStart ?? firstStop)
-        setEndIso(sheet?.shiftEnd ?? null)
+        setStartIso(sheet?.shiftStart ?? derived?.shiftStart ?? firstStop)
+        setEndIso(sheet?.shiftEnd ?? derived?.shiftEnd ?? null)
       } catch (e) {
         if (!alive) return
         setLoadError(errMessage(e) ?? 'Could not load your timesheet.')
