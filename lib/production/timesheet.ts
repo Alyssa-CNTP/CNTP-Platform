@@ -239,6 +239,11 @@ export async function saveTimesheet(args: SaveTimesheetArgs): Promise<void> {
  * anchor existed. A timesheet that fails to load because a scoping query
  * failed would be a worse bug than the one this fixes.
  */
+/** The two columns `loadShiftSessions` selects. */
+interface SessionIdRow { id: string; created_at: string | null }
+
+/** The one column the activity reads select. */
+interface StampRow { occurred_at: string }
 export async function loadShiftSessions(
   sectionId: string,
   date: string,
@@ -252,10 +257,8 @@ export async function loadShiftSessions(
       .is('deleted_at', null)
       .order('created_at', { ascending: true })
     if (error) throw error
-    return ((data as any[]) ?? []).map(r => ({
-      id: r.id as string,
-      createdAt: (r.created_at as string | null) ?? null,
-    }))
+    const rows = (data ?? []) as SessionIdRow[]
+    return rows.map(r => ({ id: r.id, createdAt: r.created_at ?? null }))
   } catch {
     return []
   }
@@ -283,16 +286,16 @@ export async function loadActivityForSessions(
   if (ids.length === 0) return []
   if (ids.length === 1) return loadActivity(ids[0], operatorId)
 
-  const rows = (r: any[] | null) => (r ?? []).map((x: any) => x.occurred_at as string)
+  const stamps = (r: StampRow[] | null) => (r ?? []).map(x => x.occurred_at)
 
   if (operatorId) {
     const { data } = await getDb().schema('production').from('capture_activity')
       .select('occurred_at').in('session_id', ids).eq('operator_id', operatorId)
       .order('occurred_at', { ascending: true })
-    if (data && data.length > 0) return rows(data as any[])
+    if (data && data.length > 0) return stamps(data as StampRow[])
   }
   const { data } = await getDb().schema('production').from('capture_activity')
     .select('occurred_at').in('session_id', ids)
     .order('occurred_at', { ascending: true })
-  return rows(data as any[])
+  return stamps(data as StampRow[])
 }

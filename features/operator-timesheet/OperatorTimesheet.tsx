@@ -229,10 +229,10 @@ export function OperatorTimesheet({
     return () => clearInterval(t)
   }, [])
 
-  const scope: StoppageScope | null = useMemo(
-    () => sessionId ? { sessionId, operatorId, operatorName, sectionId, date, shift } : null,
-    [sessionId, operatorId, operatorName, sectionId, date, shift],
-  )
+  // (There was an unused `scope` useMemo here that built a StoppageScope
+  //  straight from `sessionId`. Removed rather than left dead: it is a second
+  //  way to answer a question the anchor now owns, and the next person to
+  //  wire it up would bypass the anchor without noticing. ARCHITECTURE.md §1A.)
 
   // The scope the LEDGER is keyed on. Deliberately pinned to the operator name
   // this component first loaded with, so a keystroke in the sign-off name field
