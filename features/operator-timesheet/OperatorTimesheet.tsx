@@ -59,7 +59,9 @@ import {
   pendingAttestations, pendingNotifications,
   type Stoppage, type StoppageKind, type SupervisorVerdict,
 } from '@/lib/core/timesheet/stoppages'
-import { loadActivity, deriveTimesheet } from '@/lib/production/timesheet'
+import { loadActivityForSessions, loadShiftSessions, deriveTimesheet } from '@/lib/production/timesheet'
+import { anchorSessionId, shiftSessionIds } from '@/lib/core/timesheet/shift-scope'
+import { usesShiftScopedTimesheet } from '@/lib/config/flags'
 import {
   loadStoppages, saveStoppage, voidStoppage, seedScheduledStoppages,
   loadTimesheet, confirmTimesheet, saveTimesheetNote,
@@ -266,23 +268,53 @@ export function OperatorTimesheet({
 
   // ── Load ──────────────────────────────────────────────────────────────────
   //
-  // Keyed on the SESSION only — see the `identity` ref above for why that is
-  // the whole point and not an oversight.
+  // Keyed on the open session only — see the `identity` ref above for why
+  // that is the whole point and not an oversight.
+  //
+  // The session it is keyed ON is not necessarily the session it WRITES to.
+  // On a shift-scoped section the ledger is anchored to the earliest session
+  // of the shift, so re-running this effect for a second blend re-resolves to
+  // the same anchor and finds the operator's existing sheet rather than
+  // starting a second one.
   useEffect(() => {
     let alive = true
     if (!sessionId) { setLoading(false); return }
 
     async function load() {
       setLoading(true); setLoadError(null)
-      const s: StoppageScope = { sessionId: sessionId!, ...identity.current }
-      ledgerScope.current = s
       try {
+        const id = { ...identity.current }
+
+        // ── Which session owns this operator's shift ──────────────────────────
+        //
+        // Not necessarily the one they have open. A shift can hold several
+        // capture sessions -- a second blend gets its own record -- and the
+        // timesheet belongs to the SHIFT, so it is written against the earliest
+        // of them. lib/core/timesheet/shift-scope.ts owns that rule and explains
+        // why the anchor is stable.
+        //
+        // Rolled out per section (blender first). When it is off this resolves
+        // to `sessionId` and every line below behaves exactly as it did.
+        const scoped = usesShiftScopedTimesheet(id.sectionId)
+        const siblings = scoped
+          ? await loadShiftSessions(id.sectionId, id.date, id.shift)
+          : []
+        const anchorId = scoped ? anchorSessionId(siblings, sessionId!) : sessionId!
+        const activityIds = scoped ? shiftSessionIds(siblings, sessionId!) : [sessionId!]
+
+        const s: StoppageScope = { sessionId: anchorId, ...id }
+        ledgerScope.current = s
         const [existing, sheet, stamps] = await Promise.all([
           loadStoppages(s.sessionId, s.operatorName),
           loadTimesheet(s.sessionId, s.operatorName),
           // The capture heartbeats. This is what makes the shift START when the
           // operator opened their screen rather than at their first tea break.
-          loadActivity(s.sessionId, s.operatorId).catch(() => [] as string[]),
+          //
+          // Read across every session in the shift, not just the anchor: a
+          // heartbeat records which session was open when it was written, and
+          // moving them onto the anchor would falsify an audit row. So the
+          // stamps stay where they are and the READ widens.
+          loadActivityForSessions(activityIds, s.operatorId).catch(() => [] as string[]),
         ])
         const rows = await seedScheduledStoppages(s, existing)
         if (!alive) return
