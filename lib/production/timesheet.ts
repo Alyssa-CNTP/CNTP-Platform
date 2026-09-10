@@ -17,6 +17,7 @@
 // `prod_timesheets`.
 
 import { getDb } from '@/lib/supabase/db'
+import type { ShiftSessionRef } from '@/lib/core/timesheet/shift-scope'
 
 export type BreakType = 'tea' | 'lunch' | 'changeover' | 'maintenance' | 'other'
 export interface TimesheetBreak {
@@ -214,4 +215,84 @@ export async function saveTimesheet(args: SaveTimesheetArgs): Promise<void> {
     confirmed_at:   new Date().toISOString(),
     updated_at:     new Date().toISOString(),
   } as any, { onConflict: 'session_id,operator_name' })
+}
+
+
+// ── Shift scope ──────────────────────────────────────────────────────────────
+//
+// The I/O half of lib/core/timesheet/shift-scope.ts. Core decides WHICH
+// session anchors the shift; these two fetch what it needs to decide, and
+// read the heartbeats that could not be moved onto the anchor.
+
+/**
+ * Every live capture session for a (section, date, shift), oldest first.
+ *
+ * Soft-deleted sessions are excluded. The row still exists, so anchoring on
+ * one would not break the foreign key — but writing a shift's whole timesheet
+ * against a record someone deleted is not a thing to do quietly, and if every
+ * session is deleted core falls back to the open one anyway.
+ *
+ * Errors are swallowed to an empty list on purpose. This lookup is an
+ * IMPROVEMENT to where the timesheet is written, never a precondition for
+ * having one: an empty list makes core return the session the operator
+ * actually has open, which is exactly the behaviour that shipped before the
+ * anchor existed. A timesheet that fails to load because a scoping query
+ * failed would be a worse bug than the one this fixes.
+ */
+export async function loadShiftSessions(
+  sectionId: string,
+  date: string,
+  shift: string,
+): Promise<ShiftSessionRef[]> {
+  if (!sectionId || !date || !shift) return []
+  try {
+    const { data, error } = await getDb().schema('production').from('prod_sessions')
+      .select('id,created_at')
+      .eq('section_id', sectionId).eq('date', date).eq('shift', shift)
+      .is('deleted_at', null)
+      .order('created_at', { ascending: true })
+    if (error) throw error
+    return ((data as any[]) ?? []).map(r => ({
+      id: r.id as string,
+      createdAt: (r.created_at as string | null) ?? null,
+    }))
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Ordered activity timestamps across every session in a shift.
+ *
+ * Same operator-scoping rule as `loadActivity`, and for the same reason: two
+ * operators sharing a line must not have their heartbeats merged into one
+ * stream, or each one's real breaks are masked by whichever of them is still
+ * active. The fallback to every heartbeat covers stamps written before an
+ * operator was verified.
+ *
+ * Reading across sessions is what makes the shift START survive a second
+ * blend. The heartbeats themselves stay where they were written — they record
+ * which session was open at the time, and rewriting that to point at the
+ * anchor would falsify an audit row.
+ */
+export async function loadActivityForSessions(
+  sessionIds: readonly string[],
+  operatorId?: string | null,
+): Promise<string[]> {
+  const ids = sessionIds.filter(Boolean)
+  if (ids.length === 0) return []
+  if (ids.length === 1) return loadActivity(ids[0], operatorId)
+
+  const rows = (r: any[] | null) => (r ?? []).map((x: any) => x.occurred_at as string)
+
+  if (operatorId) {
+    const { data } = await getDb().schema('production').from('capture_activity')
+      .select('occurred_at').in('session_id', ids).eq('operator_id', operatorId)
+      .order('occurred_at', { ascending: true })
+    if (data && data.length > 0) return rows(data as any[])
+  }
+  const { data } = await getDb().schema('production').from('capture_activity')
+    .select('occurred_at').in('session_id', ids)
+    .order('occurred_at', { ascending: true })
+  return rows(data as any[])
 }
