@@ -216,6 +216,27 @@ function CaptureScreen() {
   const [rosterOps, setRosterOps] = useState<{ id: string; name: string; pin: string }[]>([])
   const [verifiedOp, setVerifiedOp] = useState<Operator | null>(null)
 
+  // -- Who the timesheet belongs to -----------------------------------------
+  //
+  // The session's operator, NOT whoever is standing at the tablet.
+  //
+  // `prod_timesheets` and the stoppage ledger are keyed on
+  // (session_id, operator_name), so this value decides which sheet is read
+  // and -- because the loader seeds the standard breaks when it finds none --
+  // which sheet gets CREATED. Passing `verifiedOp` unconditionally meant a
+  // supervisor who reopened a record and verified themselves on the device
+  // minted a fresh tea/lunch sheet under their own name against the
+  // operator's session; the operator's sign-off screen then showed that
+  // standard, unconfirmed sheet in place of the one they had filled in.
+  //
+  // A session can carry several operators (`operator_names` is an array) and
+  // each keeps their own sheet, so the verified person is still preferred --
+  // but only when they are one of the operators on shift. Anyone else falls
+  // back to the session's own operator, and can look without minting.
+  const verifiedName = verifiedOp ? (verifiedOp.display_name || verifiedOp.name) : null
+  const timesheetOwner =
+    verifiedName && opNames.includes(verifiedName) ? verifiedName : (opNames[0] ?? verifiedName ?? '')
+
   // ── Cleaner sign-in — a dedicated cleaner can sign into the Cleaning tab's
   // cleaner-only tasks without touching the operator's own identity/session.
   // While cleanerActor is set, the whole screen is restricted to Cleaning
@@ -2000,7 +2021,7 @@ function CaptureScreen() {
           <StoppageQuickLog
             open={stoppageOpen} onClose={() => setStoppageOpen(false)}
             sessionId={sessionId}
-            operatorName={verifiedOp ? (verifiedOp.display_name || verifiedOp.name) : (opNames[0] ?? '')}
+            operatorName={timesheetOwner}
             operatorId={verifiedOp?.user_id ?? user?.id ?? null}
             sectionId={sectionId} date={dateParam} shift={shift}
           />
@@ -2542,7 +2563,7 @@ function CaptureScreen() {
               onTimesheetConfirmed={setTsConfirmed}
               onPendingAttestations={setPendingAttestations}
               useLiveTimesheet={flags.operatorTimesheet}
-              operatorName={verifiedOp ? (verifiedOp.display_name || verifiedOp.name) : (opNames[0] ?? '')}
+              operatorName={timesheetOwner}
               balanceRows={balanceRows} balanceTolerance={massBalanceToleranceFor(sectionId)} balanceNote={balanceNote}
               sessionId={sessionId} operatorId={verifiedOp?.user_id ?? user?.id ?? null}
               sectionId={sectionId} date={dateParam} shift={shift}
