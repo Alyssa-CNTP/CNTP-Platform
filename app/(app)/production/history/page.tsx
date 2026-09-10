@@ -10,6 +10,12 @@ import {
 } from 'lucide-react'
 import { useAuth } from '@/lib/auth/context'
 import { getDb } from '@/lib/supabase/db'
+import { pinnedSectionForUser } from '@/lib/production/roster-pin'
+import { productionShiftNow } from '@/lib/production/shifts'
+import { loadMyScorecard } from '@/lib/production/capture-scorecard'
+import { operatorIdForUser } from '@/lib/production/roster-pin'
+import { MyScorecard } from '@/components/production/MyScorecard'
+import type { Scorecard } from '@/lib/core/production/scorecard'
 import { AcumaticaSummary } from '@/components/production/AcumaticaSummary'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -100,7 +106,17 @@ function SessionCard({ session, canDelete, onDelete }: { session: SessionRow; ca
       setDeleting(false)
     }
   }
-  const href = `/production/section?id=${session.section_id}&shift=${session.shift}&date=${session.date}`
+  // /production/section is a REDIRECT to the capture hub that drops its query
+  // string (it was retired in June 2026), so every card on this page used to
+  // land the reader on an empty capture screen with no session, date or shift.
+  //
+  // The real route takes all three, and `session` matters most: without it the
+  // capture page loads the most recently created session for that
+  // (section, date, shift), which is the WRONG one whenever a shift ran more
+  // than one -- exactly the case on the Blender.
+  const href =
+    `/production/capture/${session.section_id}` +
+    `?date=${session.date}&shift=${session.shift}&session=${session.id}`
 
   const orders: string[] = session.production_orders ?? []
   // Show the code before ' — ' separator
@@ -251,7 +267,7 @@ function SessionCard({ session, canDelete, onDelete }: { session: SessionRow; ca
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function ProductionHistoryPage() {
-  const { role, sectionId: authSectionId, isSupervisor, isIT } = useAuth()
+  const { user, role, sectionId: authSectionId, isSupervisor, isIT } = useAuth()
   const canDelete = isSupervisor || isIT || role === 'admin'
 
   const today     = format(new Date(), 'yyyy-MM-dd')
@@ -267,6 +283,62 @@ export default function ProductionHistoryPage() {
 
   // Section operators only see their own section
   const isSectionOp = role === 'section_operator'
+
+  // ── Today's line, pre-selected ────────────────────────────────────────────
+  //
+  // A SOFT pin: it sets the section dropdown's starting value, and the
+  // dropdown stays a switcher. It is not a restriction and must never become
+  // one -- `isSectionOp` above is the only thing that actually limits what a
+  // person can see here, and widening or narrowing that is a permissions
+  // change, not a default.
+  //
+  // Resolved from the SHIFT ROSTER, not from operators.section_ids: that
+  // column is the static list of lines someone is allowed on, and the
+  // question here is which one they are on today.
+  //
+  // Applied once, and only while the operator has not touched the dropdown --
+  // otherwise the pin would fight their own choice on every re-render.
+  const [pinApplied, setPinApplied] = useState(false)
+  useEffect(() => {
+    if (pinApplied || isSectionOp || !user?.id) return
+    let alive = true
+    const now = productionShiftNow()
+    pinnedSectionForUser(user.id, now.date, now.shift)
+      .then(section => {
+        if (!alive) return
+        // No roster row is ordinary (supervisors, leave, an unpublished week).
+        // Leaving the filter on 'All sections' is the right answer for them.
+        if (section) setSectionFilter(section)
+        setPinApplied(true)
+      })
+      .catch(() => { if (alive) setPinApplied(true) })
+    return () => { alive = false }
+  }, [user?.id, isSectionOp, pinApplied])
+
+  // ── Their own scorecard ───────────────────────────────────────────────────
+  //
+  // What a supervisor already recorded about their shifts, for them only.
+  // Follows the section filter, so switching lines re-scopes it; on
+  // 'All sections' it is their whole record, which matches what the list
+  // below is showing.
+  const [scorecard, setScorecard] = useState<Scorecard | null>(null)
+  useEffect(() => {
+    let alive = true
+    if (!user?.id) { setScorecard(null); return }
+    operatorIdForUser(user.id)
+      .then(opId => opId ? loadMyScorecard(opId, dateFrom, dateTo, sectionFilter || undefined) : null)
+      .then(card => { if (alive) setScorecard(card) })
+      // A missing scorecard is not an error worth showing. The record of what
+      // ran on the line is what the operator came here for.
+      .catch(() => { if (alive) setScorecard(null) })
+    return () => { alive = false }
+  }, [user?.id, dateFrom, dateTo, sectionFilter])
+
+  const scorecardDays = Math.max(
+    1,
+    Math.round((new Date(dateTo).getTime() - new Date(dateFrom).getTime()) / 86_400_000),
+  )
+  const sectionLabel = SECTIONS.find(x => x.id === sectionFilter)?.label ?? 'All sections'
 
   async function load() {
     setLoading(true)
@@ -351,6 +423,12 @@ export default function ProductionHistoryPage() {
           ← Back to production
         </Link>
       </div>
+
+      {scorecard && (
+        <div className="mb-4">
+          <MyScorecard card={scorecard} sectionLabel={sectionLabel} days={scorecardDays} />
+        </div>
+      )}
 
       {/* Filters bar — sticky */}
       <div className="sticky top-0 z-10 bg-white/95 backdrop-blur border border-stone-200 rounded-2xl shadow-sm p-4 space-y-3">
