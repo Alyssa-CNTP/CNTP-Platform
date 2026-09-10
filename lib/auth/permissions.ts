@@ -54,6 +54,9 @@ export type PermissionKey =
   | 'can_edit_count'
   | 'can_view_all_sections'
   | 'can_view_ops_dashboard'
+  // Production — Capture screen (route access)
+  | 'can_view_capture'
+  | 'can_assign_shifts'
   // Production — Live Capture
   | 'can_start_live_session'
   | 'can_scan_inputs'
@@ -157,6 +160,7 @@ export const ALL_PERMISSION_KEYS: PermissionKey[] = [
   'can_add_sieving_runs','can_delete_sieving_runs',
   'can_edit_sieving_specs','can_submit_count','can_edit_count','can_view_all_sections',
   'can_view_ops_dashboard',
+  'can_view_capture','can_assign_shifts',
   'can_start_live_session','can_scan_inputs','can_add_outputs','can_reset_operator_pin',
   'can_view_live_history','can_approve_session',
   'can_edit_session','can_delete_session','can_approve_reopen_request','can_edit_bag_tag','can_delete_bag_tag',
@@ -318,6 +322,7 @@ export const ROLE_PERMISSION_DEFAULTS: Record<string, Permissions> = {
   supervisor:       {                        // maps to production_supervisor
     can_submit_count: true, can_edit_count: true,
     can_view_all_sections: true, can_view_ops_dashboard: true,
+    can_view_capture: true, can_assign_shifts: true,
     can_start_live_session: true, can_scan_inputs: true,
     can_add_outputs: true, can_reset_operator_pin: true,
     can_approve_session: true, can_export_csv: true,
@@ -336,6 +341,7 @@ export const ROLE_PERMISSION_DEFAULTS: Record<string, Permissions> = {
   production_supervisor: {
     // Factory floor — runs production capture & sign-off. Does NOT do stock counts.
     can_view_all_sections: true, can_view_ops_dashboard: true,
+    can_view_capture: true, can_assign_shifts: true,
     can_start_live_session: true, can_scan_inputs: true,
     can_add_outputs: true, can_reset_operator_pin: true,
     can_approve_session: true, can_export_csv: true,
@@ -626,6 +632,8 @@ export const PERMISSION_GROUPS: {
     group: 'Production — Live Capture',
     department: 'Production',
     permissions: [
+      { key: 'can_view_capture',       label: 'Open the Production Capture screens' },
+      { key: 'can_assign_shifts',      label: 'Assign operators to sections; grant section + PIN access' },
       { key: 'can_start_live_session',  label: 'Start a live capture session' },
       { key: 'can_scan_inputs',         label: 'Scan bags in' },
       { key: 'can_add_outputs',         label: 'Add output bags & print labels' },
