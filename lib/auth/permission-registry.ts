@@ -82,6 +82,12 @@ export const PERMISSION_MATRIX: ModuleDef[] = [
           { key: 'can_edit_count', label: 'Edit a submitted count' },
           { key: 'can_view_all_sections', label: 'View all sections' },
         ] },
+      // Read-only by design: the page shows what already happened on a line.
+      // Deleting a session is done from Production Orders, which is why there is
+      // no delete here even though the same page renders a delete control for
+      // the roles that hold can_delete_session.
+      { key: 'production.history', label: 'History / Planning (per-section record)',
+        read: 'can_view_live_history' },
       { key: 'production.orders', label: 'Production orders (session history)',
         read: 'can_view_live_history', write: 'can_edit_session', delete: 'can_delete_session',
         manage: [{ key: 'can_approve_reopen_request', label: 'Decide a supervisor’s reopen request (Supervisor Hub)' }] },
