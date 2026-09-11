@@ -28,6 +28,17 @@ export type PermissionKey =
   | 'can_save_lab_results'
   | 'can_delete_lab_results'
   | 'can_edit_lab_comments'
+  // Quality's per-resource READ keys. Before these existed, VIEWING lab
+  // results/specs/runs/sieving was governed ENTIRELY by can_view_history — one
+  // key that opens the whole module — or by Quality department membership.
+  // There was no way to hand someone read access to just one of these pages.
+  // See app/(app)/layout.tsx's Quality ROUTE_GUARDS block for how each is
+  // wired in (each accepts can_view_history too, so nobody who could already
+  // see a page loses that).
+  | 'can_view_lab_results'
+  | 'can_view_specs'
+  | 'can_view_runs'
+  | 'can_view_sieving'
   // Quality — Specifications
   | 'can_edit_customer_specs'
   | 'can_delete_specs'
@@ -49,6 +60,9 @@ export type PermissionKey =
   | 'can_add_sieving_runs'
   | 'can_delete_sieving_runs'
   | 'can_edit_sieving_specs'
+  // Quality — COA Generator. A dedicated key rather than the can_save_lab_results
+  // / can_approve_runs the page's canUse borrowed until now — see coa/page.tsx.
+  | 'can_generate_coa'
   // Production — Ops
   | 'can_submit_count'
   | 'can_edit_count'
@@ -169,12 +183,15 @@ export type Permissions = Partial<Record<PermissionKey, boolean>>
 export const ALL_PERMISSION_KEYS: PermissionKey[] = [
   'can_upload_pdfs','can_save_records','can_edit_records','can_delete_records',
   'can_view_history','can_export_csv','can_save_lab_results','can_delete_lab_results',
-  'can_edit_lab_comments','can_edit_customer_specs','can_delete_specs','can_edit_sieve_specs',
+  'can_edit_lab_comments',
+  'can_view_lab_results','can_view_specs','can_view_runs','can_view_sieving',
+  'can_edit_customer_specs','can_delete_specs','can_edit_sieve_specs',
   'can_edit_granule_specs','can_create_runs','can_edit_runs','can_finalise_runs',
   'can_reopen_runs','can_delete_runs','can_add_samples','can_edit_samples',
   'can_add_tastings','can_edit_tastings','can_approve_runs','can_signoff_day',
   'can_add_sieving_runs','can_delete_sieving_runs',
-  'can_edit_sieving_specs','can_submit_count','can_edit_count','can_view_all_sections',
+  'can_edit_sieving_specs','can_generate_coa',
+  'can_submit_count','can_edit_count','can_view_all_sections',
   'can_view_ops_dashboard',
   'can_start_live_session','can_scan_inputs','can_add_outputs','can_reset_operator_pin',
   'can_view_live_history','can_approve_session',
@@ -275,6 +292,20 @@ export const DEPARTMENT_ROLES: Record<Department, { role: string; label: string;
     { role: 'senior_developer', label: 'Senior Developer', desc: 'Full access to everything — 45/45 permissions' },
     { role: 'co_developer',     label: 'Co-Developer',     desc: 'Full access except destructive ops & migrations' },
     { role: 'it_admin',         label: 'IT Admin',         desc: 'User management only — no data or dev access' },
+    // Real IT staff, added to ROLE_PERMISSION_DEFAULTS below for the first
+    // time — until now these two role strings existed only in the database
+    // (set outside this system, probably during onboarding before it existed)
+    // and were never in this picker list or in ROLE_PERMISSION_DEFAULTS. With
+    // no entry here, resolvePermission() falls through to false for every
+    // key, and IT department membership alone grants nothing (deliberately —
+    // see the "IT is NOT a blanket key" note above ROUTE_GUARDS), so anyone on
+    // either role had ZERO permissions unless individually overridden — the
+    // same gap `store_default` had. `it_management` is the production
+    // spelling; `it-management` (hyphen) is how the same role is stored on
+    // staging — both are wired below so the defaults apply regardless of
+    // which environment the person is in.
+    { role: 'bis_manager',      label: 'BIS Manager',      desc: 'Business information systems — can open the COA Generator' },
+    { role: 'it_management',    label: 'IT Management',    desc: 'Can open the COA Generator' },
   ],
   Quality: [
     { role: 'quality_default',       label: 'Quality (Default)',    desc: 'All permissions off — toggle on what they need' },
@@ -491,6 +522,25 @@ export const ROLE_PERMISSION_DEFAULTS: Record<string, Permissions> = {
     can_view_audit_log: true,
   },
 
+  // ── IT — BIS Manager / IT Management: previously undefined roles ───────────
+  // These two hold real people (see DEPARTMENT_ROLES.IT above for the full
+  // story) but had never been given any default. Wiring only what was
+  // explicitly asked for — the ability to open and use the COA Generator —
+  // rather than inventing a broader permission set nobody has specified.
+  // `can_generate_coa` alone is enough: the dedicated /quality/coa route guard
+  // accepts it without requiring can_view_history, so this does not open any
+  // other part of Quality.
+  bis_manager: {
+    can_generate_coa: true,
+  },
+  it_management: {
+    can_generate_coa: true,
+  },
+  // Same role, stored with a hyphen on staging (see the comment above).
+  'it-management': {
+    can_generate_coa: true,
+  },
+
   // ── Quality — Lab Assistant: PIN-based capture only ───────────────────────
   quality_lab_assistant: {
     can_save_records:     true,
@@ -615,6 +665,7 @@ export const PERMISSION_GROUPS: {
     group: 'Quality — Lab Results',
     department: 'Quality',
     permissions: [
+      { key: 'can_view_lab_results',   label: 'View lab results (without full can_view_history)' },
       { key: 'can_save_lab_results',   label: 'Save lab results' },
       { key: 'can_delete_lab_results', label: 'Delete lab results' },
       { key: 'can_edit_lab_comments',  label: 'Edit comments on lab results' },
@@ -624,6 +675,7 @@ export const PERMISSION_GROUPS: {
     group: 'Quality — Specifications',
     department: 'Quality',
     permissions: [
+      { key: 'can_view_specs',          label: 'View specifications (without full can_view_history)' },
       { key: 'can_edit_customer_specs', label: 'Edit customer specifications' },
       { key: 'can_delete_specs',        label: 'Delete specification rows' },
       { key: 'can_edit_sieve_specs',    label: 'Edit sieving specs & overrides' },
@@ -634,6 +686,7 @@ export const PERMISSION_GROUPS: {
     group: 'Quality — Runs',
     department: 'Quality',
     permissions: [
+      { key: 'can_view_runs',     label: 'View granule / pasteuriser runs (without full can_view_history)' },
       { key: 'can_create_runs',   label: 'Create new runs' },
       { key: 'can_edit_runs',     label: 'Edit run details & batch numbers' },
       { key: 'can_finalise_runs', label: 'Finalise runs (Pass / Fail)' },
@@ -651,9 +704,20 @@ export const PERMISSION_GROUPS: {
     group: 'Quality — Sieving',
     department: 'Quality',
     permissions: [
+      { key: 'can_view_sieving',        label: 'View sieving (without full can_view_history)' },
       { key: 'can_add_sieving_runs',    label: 'Add new sieving runs' },
       { key: 'can_delete_sieving_runs', label: 'Delete sieving runs' },
       { key: 'can_edit_sieving_specs',  label: 'Edit sieving specs' },
+    ],
+  },
+  {
+    group: 'Quality — COA Generator',
+    department: 'Quality',
+    permissions: [
+      // The only gate. See coa-gating.ts / coa/page.tsx's canUse — this key is
+      // additive alongside the pre-existing can_save_lab_results /
+      // can_approve_runs so nobody who already had access loses it.
+      { key: 'can_generate_coa', label: 'Open & build a COA (view and edit are not yet separated for this screen)' },
     ],
   },
   {
