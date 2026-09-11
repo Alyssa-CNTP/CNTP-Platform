@@ -13,6 +13,7 @@ import {
 } from 'recharts'
 import { useAuth } from '@/lib/auth/context'
 import { getDb } from '@/lib/supabase/db'
+import type { ScanAction } from '@/lib/supabase/database.types'
 import { isoDate } from '@/lib/utils/formatDate'
 import { checkOutlier, mean, stdDev } from '@/lib/utils/outliers'
 import { isNegative } from '@/lib/utils/validation'
@@ -1591,22 +1592,9 @@ export default function SievingPage() {
       const serial = form.serialNumber.trim().toUpperCase()
       const now = new Date().toISOString()
       const passLabel = newRun.pass_status === 'Pass' ? 'Pass' : 'Fail'
-      try {
-        await getDb().schema('production').from('bag_tags')
-          .update({ qc_initials: form.qcName || null, qc_signed_at: now } as any)
-          .eq('serial_number', serial)
-      } catch { /* non-fatal */ }
-      try {
-        await getDb().schema('production').from('scan_events').insert({
-          serial_number: serial,
-          action: 'qc_check',
-          section_id: 'sieving',
-          session_id: null,
-          operator_id: null,
-          weight_kg: null,
-          notes: `${passLabel} · QC: ${form.qcName || '—'} · ${activeProduct} ${form.grade} ${form.variant}${newRun.violations?.length ? ' · ' + newRun.violations.join('; ') : ''}`,
-        } as any)
-      } catch { /* non-fatal */ }
+      await setBagQcStamp(serial, form.qcName || null, now)
+      await appendBagEvent(serial, 'qc_check',
+        `${passLabel} · QC: ${form.qcName || '—'} · ${activeProduct} ${form.grade} ${form.variant}${newRun.violations?.length ? ' · ' + newRun.violations.join('; ') : ''}`)
     }
 
     // A Final QC clears that bag from the pending queue; an out-of-spec
@@ -1615,6 +1603,27 @@ export default function SievingPage() {
     if (form.runType === 'final') setPrintBag({ ...mapped, bag: selectedBag, residue: rLookup[lotKeyOf(mapped.lotNumber)] || null })
     setShowForm(false); setGramValues({}); setForm(blankForm()); setErrors({}); setIsRetest(false); setAnomalyWarn(''); setConfirmAnomaly(false); setLotMsg(''); setTagLookupState('idle'); setBagHint(null); setSelectedBagId('')
     setLastSaved(new Date()); setSaving(false)
+  }
+
+  // The bag side of a QC result: an append-only ledger event, and the bag's
+  // current QC stamp. Both the save path and the delete path write them, so the
+  // cast supabase-js needs for the untyped `production` schema lives here once
+  // rather than at every call site.
+  async function appendBagEvent(serial: string, action: ScanAction, notes: string) {
+    try {
+      await getDb().schema('production').from('scan_events').insert({
+        serial_number: serial, action, section_id: 'sieving',
+        session_id: null, operator_id: null, weight_kg: null, notes,
+      } as never)
+    } catch { /* non-fatal — the ledger entry must never block the run itself */ }
+  }
+
+  async function setBagQcStamp(serial: string, initials: string | null, signedAt: string | null) {
+    try {
+      await getDb().schema('production').from('bag_tags')
+        .update({ qc_initials: initials, qc_signed_at: signedAt } as never)
+        .eq('serial_number', serial)
+    } catch { /* non-fatal */ }
   }
 
   async function deleteRun(id: any) {
@@ -1626,7 +1635,7 @@ export default function SievingPage() {
     // record of it and it sat back in the awaiting-QC queue — the exact state
     // STFL-210826-005 is in (run id 3853, saved 21 Aug 09:10, since deleted;
     // the gap in the id sequence is still there).
-    const gone = (runs[activeProduct] || []).find((r: any) => r.id === id)
+    const gone = (runs[activeProduct] || []).find(r => r.id === id)
     const serial = (gone?.serialNumber || '').trim().toUpperCase()
 
     await db.schema('qms').from('sd_runs').delete().eq('id', id)
@@ -1635,21 +1644,10 @@ export default function SievingPage() {
     if (serial) {
       // scan_events is an append-only ledger (ARCHITECTURE.md §4) — undo by
       // appending a reversing event, never by deleting the original.
-      try {
-        await getDb().schema('production').from('scan_events').insert({
-          serial_number: serial,
-          action: 'void',
-          section_id: 'sieving',
-          session_id: null, operator_id: null, weight_kg: null,
-          notes: `QC record withdrawn — the ${gone?.runType || ''} run captured by ${gone?.qcName || '—'} was deleted. This bag needs QC again.`.replace(/\s+/g, ' '),
-        } as any)
-      } catch { /* non-fatal — the run is already gone */ }
+      await appendBagEvent(serial, 'void',
+        `QC record withdrawn — the ${gone?.runType || ''} run captured by ${gone?.qcName || '—'} was deleted. This bag needs QC again.`.replace(/\s+/g, ' '))
       // bag_tags is current state, not a ledger, so the stale stamp is cleared.
-      try {
-        await getDb().schema('production').from('bag_tags')
-          .update({ qc_initials: null, qc_signed_at: null } as any)
-          .eq('serial_number', serial)
-      } catch { /* non-fatal */ }
+      await setBagQcStamp(serial, null, null)
     }
     loadPendingBags()
   }
