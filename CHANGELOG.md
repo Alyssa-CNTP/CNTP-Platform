@@ -2,15 +2,17 @@
 
 All changes deployed to staging are logged here automatically.  
 
-## 2026-09-11 — Gustav (Leaf Shade: the Docker container starting was a fully manual step nobody automated — made it self-healing on deploy)
+## 2026-09-11 — Gustav (Leaf Shade: made the Docker container self-healing on deploy, production-only)
 
-**Files changed:** `.github/workflows/deploy-staging.yml`, `ml/leafshade/README.md`
+**Files changed:** `.github/workflows/deploy-production.yml`, `ml/leafshade/README.md`
 
-- **Diagnosed "Leaf shade service is not running" as an operations gap, not a code bug.** Checked the git history for the module first: every known defect (the `libxcb1` crash-loop, the stale pm2-era error message, the half-resolution CR3 decode giving wrong predictions) is already fixed and live on staging. What was never fixed — because nothing ever ran it — is that starting the Python container has always been a fully manual SSH step (`cd ml/leafshade && docker compose up -d --build`, per the module's own README). `deploy-staging.yml` builds and restarts the Next.js app on every push but has never once touched this service. The compose file's `restart: unless-stopped` only protects against a crash or a VPS reboot — it does nothing if the container was manually stopped, hit disk/OOM pressure during its one build, or was simply never started, and any of those leaves the Raw Material → Leaf Shade tab silently broken until someone happens to open it and notice.
-- **The deploy workflow now runs `docker compose up -d` (no `--build`) after every staging deploy.** Deliberately not a rebuild — that stays a manual step after a real `leaf_shade_api.py`/model change, exactly as documented — but it guarantees the container is actually up after every deploy without anyone having to remember to check. Wrapped so a problem with this one Python micro-service can never mark the Next.js deploy itself as failed; the two are unrelated failure domains.
-- No code in `ml/leafshade/*` changed — the model, the Flask app, and the Dockerfile are untouched. This is a CI/CD gap being closed, not an ML fix.
+- **Diagnosed "Leaf shade service is not running" as an operations gap, not a code bug.** Every known code defect in `ml/leafshade` (the `libxcb1` crash-loop, the stale pm2-era error message, the half-resolution CR3 decode giving wrong predictions) was already fixed on staging before this. What was never fixed — because nothing ever ran it — is that starting the Python container has always been a fully manual SSH step. `deploy-production.yml` builds and restarts the Next.js app on every push but never touched this service. The compose file's `restart: unless-stopped` only protects against a crash or a VPS reboot — it does nothing if the container was manually stopped, hit disk/OOM pressure during its one build, or was simply never started, and any of those leaves the Raw Material → Leaf Shade tab silently broken until someone happens to open it and notice.
+- **The production deploy workflow now runs `docker compose up -d` (no `--build`) after every push to `main`.** Deliberately not a rebuild — that stays a manual step after a real `leaf_shade_api.py`/model change, exactly as documented — but it guarantees the container is actually up after every deploy without anyone having to remember to check. Wrapped so a problem with this one Python micro-service can never mark the Next.js deploy itself as failed; the two are unrelated failure domains.
+- **Production-only, not staging.** Staging and production share one VPS, and `ml/leafshade/docker-compose.yml` pins a fixed `container_name` and a fixed host port (`network_mode: host`) — only one instance can exist on the box. Leaf Shade is wanted on production; staging's deploy workflow does not touch it, so the two environments cannot end up fighting over ownership of the same container.
+- No code in `ml/leafshade/*` changed — the model, the Flask app, and the Dockerfile are untouched. This closes a CI/CD gap, not an ML fix.
 
 ---
+
 
 ## 2026-09-11 — Gustav (COA: glyphosate forced onto organic COAs, no way back down the sign-off chain, specs never refreshed)
 
