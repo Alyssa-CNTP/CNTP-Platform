@@ -10,14 +10,16 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { getCallerPermissions } from '@/lib/auth/server-helpers'
+// The voice prompt must offer the SAME maintenance types as the form. This was a
+// second hand-maintained copy of the list, so a type added to the form was
+// unreachable by voice until someone remembered to edit it here too.
+import { PLANNED_TYPES } from '@/lib/maintenance/constants'
 
 const GEMINI_MODEL = 'gemini-2.5-flash'           // robust audio understanding
 // gemini-3.1-flash-lite-preview was retired ("no longer available to new
 // users") — see app/api/upload/route.ts for the same fix and why.
 const FALLBACK_MODEL = 'gemini-3.5-flash-lite'
 const MAX_AUDIO_BYTES = 4 * 1024 * 1024           // ~30s of opus is well under this
-
-const PLANNED_TYPES = ['Planned Maintenance', 'Safety Related', 'Engineering', 'Repair', 'Temporary Repair', 'Improvement', 'Audit/Inspection Finding']
 
 const PROMPTS: Record<string, string> = {
   jobcard: `You are helping a Cape Natural Tea Products factory worker raise a maintenance job card by voice.

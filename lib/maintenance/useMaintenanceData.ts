@@ -466,6 +466,21 @@ export function useMaintenanceData() {
     }
   }
 
+  // Technician declares the repair they just made TEMPORARY (or takes it back).
+  // Logged as an event either way: "we ran it on a temporary fix" is a
+  // food-safety / reliability statement, and un-ticking it must not erase that
+  // it was once claimed.
+  const setTempRepair = async (j: JobCard, temp: boolean) => {
+    if (!!j.temp_repair === temp) return
+    const who = j.assigned_to ?? actor ?? displayName ?? ''
+    await upJC(j.id, temp
+      ? { temp_repair: true, temp_repair_at: new Date().toISOString(), temp_repair_by: who }
+      : { temp_repair: false, temp_repair_at: null, temp_repair_by: null, temp_repair_note: null })
+    await addLog(j.id, 'event', j.status, who, temp
+      ? 'Declared a TEMPORARY repair — a permanent-repair job card will be raised when this card is signed off.'
+      : 'Temporary-repair flag removed — recorded as a permanent repair.')
+  }
+
   // Add a machine to the catalogue (free-type entry on the raise form). Returns
   // the saved name so the form can select it immediately.
   const addMachine = async (name: string, area = ''): Promise<string | null> => {
@@ -547,6 +562,7 @@ export function useMaintenanceData() {
         ? (displayName || existing?.completed_by || '')
         : (existing?.completed_by ?? ''),
       assigned_to: patch.assigned_to !== undefined ? patch.assigned_to : (existing?.assigned_to ?? null),
+      assigned_user_id: patch.assigned_user_id !== undefined ? patch.assigned_user_id : (existing?.assigned_user_id ?? null),
       assigned_by: patch.assigned_by !== undefined ? patch.assigned_by : (existing?.assigned_by ?? null),
       assigned_at: patch.assigned_at !== undefined ? patch.assigned_at : (existing?.assigned_at ?? null),
       submitted_at: patch.submitted_at !== undefined ? patch.submitted_at : (existing?.submitted_at ?? null),
@@ -571,8 +587,14 @@ export function useMaintenanceData() {
   // blocks the allocation itself). Covers both the manual picker and auto-allocate.
   const allocateChecklist = async (tpl: Template, techName: string) => {
     const period = tpl.frequency === 'weekly' ? weekKey : moKey
-    await saveComp(tpl, { assigned_to: techName || null, assigned_by: actor || displayName || '', assigned_at: new Date().toISOString() })
-    const techUserId = staff.find(s => s.name === techName)?.id
+    // Store the technician's USER ID alongside the name. Matching on name alone
+    // silently failed whenever the roster spelling and the person's profile name
+    // differed, so an allocated checklist never showed up on their screen.
+    const techUserId = staff.find(s => s.name === techName)?.id ?? null
+    await saveComp(tpl, {
+      assigned_to: techName || null, assigned_user_id: techUserId,
+      assigned_by: actor || displayName || '', assigned_at: new Date().toISOString(),
+    })
     if (techName && techUserId) {
       fetch('/api/maintenance/checklists/notify-assignment', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -680,6 +702,38 @@ export function useMaintenanceData() {
     if (err) { setPopup('Could not save reading: ' + err.message); return false }
     setterFor[table]?.(p => [...p, data].sort((a, b) => String(a[sortKey]).localeCompare(String(b[sortKey]))))
     return true
+  }
+
+  // ── Weekly reading checklists → the readings registers ───────────────────
+  // The reading checklists (IP Measurement, Generator / Diesel, Water Meters)
+  // were only ever storing their numbers inside the checklist's own task_states,
+  // so the trend graphs — which read ip_readings / diesel_readings /
+  // water_readings — never saw them. This maps each checklist's task index onto
+  // the register column it belongs to and writes one row per save, so a number
+  // captured on the checklist shows up on the graph.
+  //
+  // Keyed by template AREA (stable) rather than id. Index order must match the
+  // template's task list.
+  const READING_MAP: Record<string, { table: string; cols: (string | null)[] }> = {
+    'IP Measurement':     { table: 'ip_readings',     cols: ['flow_meter_l', null, 'tank_dip_l', 'fuel_received_l', 'cost_r'] },
+    'Generator / Diesel': { table: 'diesel_readings', cols: ['run_hours', 'fuel_l'] },
+    'Water Meters':       { table: 'water_readings',  cols: ['main_meter', 'unit1', 'unit2_w1', 'boiler', null] },
+  }
+
+  /** Save a reading checklist's numbers into its register (one row per period). */
+  const saveChecklistReadings = async (tpl: Template, values: Record<number, string>) => {
+    const map = READING_MAP[tpl.area]
+    if (!map) return true                                   // JoJo etc. — checklist-only
+    const row: Record<string, number> = {}
+    map.cols.forEach((col, i) => {
+      if (!col) return                                      // derived/calculated line, not a column
+      const raw = (values[i] ?? '').trim()
+      if (raw === '') return
+      const n = parseFloat(raw)
+      if (!isNaN(n)) row[col] = n
+    })
+    if (Object.keys(row).length === 0) return true          // nothing numeric entered
+    return saveReading(map.table, { ...row, reading_date: new Date().toISOString().slice(0, 10) })
   }
 
   // ── Calibration: mark done (next due recomputed from interval) ──
@@ -853,6 +907,81 @@ export function useMaintenanceData() {
     return { cfg, latest, due, days: Math.ceil((due.getTime() - Date.now()) / 86400000) }
   }).sort((a, b) => a.days - b.days)
 
+  // ── Service tracking for run-hour equipment (compressor, generator) ──
+  // Three facts the floor actually needs: the current meter reading (and when it
+  // was taken), how many hours it has run since the last service, and the DATE
+  // the next service falls due.
+  //
+  // The due date is whichever comes first of:
+  //   • hours   — remaining hours to the interval, projected forward at the
+  //               equipment's hours_per_workday rate;
+  //   • calendar— last service + service_interval_days (the generator is also a
+  //               yearly service regardless of how little it has run).
+  // A service is recorded as a reading with serviced=true / hours_since_service=0,
+  // which is what resets the counter.
+  const serviceRows = eqConfig.map(cfg => {
+    const readings = eqHours
+      .filter(h => h.equipment === cfg.equipment)
+      .slice()
+      .sort((a, b) => String(a.reading_date).localeCompare(String(b.reading_date)))
+    const latest = readings[readings.length - 1] ?? null
+    // Last service = newest reading explicitly marked serviced. Failing that, the
+    // service is INFERRED from the point the hours-since-service counter dropped:
+    // a reading of 636 following one of 1773 can only mean the machine was
+    // serviced somewhere in between. That is how the compressor's August service
+    // reached the register — the reading was captured, the service date was not.
+    //
+    // The exact date is unknown, so it is reported as a window (after the previous
+    // reading, before this one) rather than asserted. Taking the newest zero row
+    // instead — the old rule — pointed at January and quietly contradicted the
+    // 636 hours sitting next to it.
+    let resetIdx = -1
+    for (let i = 0; i < readings.length; i++) {
+      const cur = readings[i].hours_since_service
+      const prev = i > 0 ? readings[i - 1].hours_since_service : null
+      const dropped = cur != null && prev != null && cur < prev
+      if (readings[i].serviced || cur === 0 || dropped) resetIdx = i
+    }
+    const resetRow = resetIdx >= 0 ? readings[resetIdx] : null
+    const exactService = resetRow?.serviced || (resetRow?.hours_since_service ?? null) === 0
+    const lastServiceRow = resetRow
+    // Where the date is only inferred, assume the EARLIER bound for calendar
+    // scheduling — it brings the next service forward rather than pushing it out.
+    const serviceWindow = resetRow && !exactService && resetIdx > 0
+      ? { after: readings[resetIdx - 1].reading_date, before: resetRow.reading_date }
+      : null
+    const serviceDateForCalendar = serviceWindow?.after ?? resetRow?.reading_date ?? null
+
+    const sinceService = latest?.hours_since_service ?? null
+    const totalHours = latest?.total_hours ?? null
+
+    let dueByHours: Date | null = null
+    if (latest && sinceService != null && cfg.hours_per_workday > 0) {
+      const remaining = cfg.service_interval_hours - sinceService
+      dueByHours = workdayAdd(new Date(latest.reading_date), remaining / cfg.hours_per_workday)
+    }
+    const dueByDays = cfg.service_interval_days && serviceDateForCalendar
+      ? addDays(serviceDateForCalendar, cfg.service_interval_days)
+      : null
+
+    const candidates = [dueByHours, dueByDays].filter(Boolean) as Date[]
+    const due = candidates.length ? new Date(Math.min(...candidates.map(d => d.getTime()))) : null
+    return {
+      cfg, latest, totalHours, sinceService,
+      // Only a real service record gives a date; an inferred one gives a window.
+      lastServiceDate: exactService ? (lastServiceRow?.reading_date ?? null) : null,
+      serviceWindow,
+      due, dueByHours, dueByDays,
+      // Which limit triggers first — so the UI can say WHY it is due.
+      dueReason: due && dueByDays && due.getTime() === dueByDays.getTime() ? 'calendar' as const : 'hours' as const,
+      days: due ? Math.ceil((due.getTime() - Date.now()) / 86400000) : 9999,
+    }
+  }).sort((a, b) => a.days - b.days)
+
+  // The two headline machines the dashboard reports on by name.
+  const compressorService = serviceRows.find(r => /compressor/i.test(r.cfg.equipment)) ?? null
+  const generatorService  = serviceRows.find(r => /generator/i.test(r.cfg.equipment)) ?? null
+
   // Calibration register with computed next-due (last done + interval days)
   const calRows = calAssets.filter(a => !a.weekly_check).map(a => {
     const next = a.last_done ? addDays(a.last_done, a.interval_days) : null
@@ -909,11 +1038,11 @@ export function useMaintenanceData() {
     actions: {
       addLog, upJC, onDutyTech, createJC, allocate, sendForClarify, resubmit,
       logSpare, completeWork, acceptJob, startJob, pauseJob, resumeJob, editCard, cancelCard,
-      qcSubmit, verifyCard, postComment,
+      qcSubmit, verifyCard, postComment, setTempRepair,
       getComp, saveComp, toggleTask, setTaskField, answerTask, allocateChecklist, submitChecklist, verifyChecklist, saveAnnualNotes, updateAnnual, calibrateAnnual,
       addPart, updatePart, adjustPartQty, deletePart, findPartByBarcode, addOffsite, updateOffsite, returnOffsite,
       addRoster, delRoster, qcFor, saveAreaQc, addSlot, delSlot, addSlotFor,
-      raiseFromChecklist, saveReading, calDone, calDoneOn, eqServiced, addMachine,
+      raiseFromChecklist, saveReading, saveChecklistReadings, calDone, calDoneOn, eqServiced, addMachine,
       createRequest, setRequestStatus, cancelRequest, setBoilerStartup,
     },
 
@@ -922,6 +1051,7 @@ export function useMaintenanceData() {
       completed, totalMins, avgCloseDays, techCounts, areaCounts, reopens,
       breakdowns, completionRate, statuses: STATUSES,
       lastComp, eqLatest, calRows, waterUsage, ipUsage, outstandingChecklists,
+      serviceRows, compressorService, generatorService,
     },
 
     reload: loadAll,

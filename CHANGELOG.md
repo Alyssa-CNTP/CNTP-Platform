@@ -2,6 +2,132 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-11 — Gustav (Sieving QC: the QC types when the run happened; changing it afterwards is IT's)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`, `supabase/migrations/20260911_020_sd_runs_when_it_happened_it_only.sql` (new, applied to staging)
+
+The table has always had two columns for two different facts, and was not keeping them straight:
+
+- **`date` + `time_of_run` — when the sieve was actually done.** The QC knows this; for a back-capture it is days or weeks ago. It was being overwritten with the clock at save time, so a run recaptured on 11 Sep for work done on 21 Aug read **11:25 instead of 09:08** — an instant that never happened, and one that sorted the row into the wrong day in a table ordered on date + time. The TIME field is now typed by the QC, defaulting to now for a run captured as it is done, and validated as HH:MM.
+- **`run_timestamp` — when the record was created.** Nobody types it. The database now stamps it itself on insert, so a client cannot claim one. It is what makes a back-capture legible as one: a run dated 21 Aug carrying a `run_timestamp` of 11 Sep was plainly entered after the fact.
+
+**Changing either afterwards is restricted to IT**, enforced by `qms.sd_runs_when_it_happened_guard` rather than by the screen — a disabled input stops the screen and nothing else, and the edit path was in fact still sending `date` and `time_of_run` on every save despite a comment claiming they were locked. An unchanged value passes untouched, so ordinary QC edits of anything else are unaffected; a *changed* one is refused unless the caller is IT, the full admin, or a server-side connection.
+
+Verified against staging, all six cases: a claimed `run_timestamp` is overridden on insert; a QC may edit other fields and may re-send the same time; a QC changing the time or the date is refused with a message naming what they tried to change; IT changes both successfully.
+
+Two bugs found in the guard while testing it, both of which had made it useless in opposite directions: `changed || 'date'` resolves as array-concat and threw `malformed array literal` before the IT check was reached (refusing everyone, IT included), and `SECURITY DEFINER` made `current_user` the function's owner rather than the caller, so the server-side allowance matched every caller (refusing nobody).
+## 2026-09-11 — Gustav (Sieving QC: a bag is only stamped by a run that actually names it; five orphaned bags corrected)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`
+
+### The bag stamp followed the form, not the run
+
+Saving a run wrote the bag's `qc_check` event and `bag_tags` stamp off `form.serialNumber`. That is not the same value the run stores: an **In-Process** run deliberately saves `serial_number = null` (a bag is only serialised at bagging), while the form may still be holding a serial from an earlier Final QC — *"Sample now →"* pre-fills one, and switching product tabs leaves it behind.
+
+So an in-process reading that was never about that bag could still mark it QC-checked. `STFL-270826-001` collected **three** such marks, one of them captured on the **Rooibos Blocks** tab against a Fine Leaf bag. Both writes now key off `saved.serial_number` — the serial the run itself recorded — so the bag's ledger cannot disagree with the run behind it.
+
+### The five orphaned bags, corrected in production
+
+Bags carrying a `qc_check` mark with no quality record behind it. Four were deleted runs, each still visible as a gap in the `qms.sd_runs` id sequence; the fifth is the stale-serial case above.
+
+| Bag | Cause | Evidence |
+|---|---|---|
+| STFL-210826-005 | run deleted | id 3853 missing (21 Aug 09:10) |
+| STFL-270826-025 | run deleted | id 4128 missing (27 Aug 19:25) |
+| STFL-270826-026 | run deleted | id 4129 missing (27 Aug 19:27) |
+| STCL-080926-012 | run deleted | id 4694 missing (9 Sep 06:00) |
+| STFL-270826-001 | stale serial in the form | 3 marks from in-process runs, one on the Rooibos Blocks tab |
+
+Each received a reversing `void` event naming the cause (the original `qc_check` rows stay — the ledger is append-only, ARCHITECTURE.md §4) and had its stale `bag_tags` QC stamp cleared. The pending-QC queue reads `sd_runs`, not the stamp, so all five were already queued for QC; what was wrong was each bag's own history claiming it had been checked.
+
+---
+
+## 2026-09-11 — Gustav (Sieving QC: grade and variant are Quality's call, and a deleted run no longer leaves the bag looking checked)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`, `lib/supabase/database.types.ts`
+
+### Why a bag showed "Qc Check · Pass" with no quality record
+
+`STFL-210826-005` carries a `qc_check` event in its own scan history — *Pass · QC: Rose Tsatsi* — while the Quality screen has no run for it and it sits in the awaiting-QC queue. Saving a Final QC writes **three** things: the `qms.sd_runs` row, a `qc_check` event on the bag's ledger, and the QC stamp on `bag_tags`. `deleteRun` removed only the first.
+
+The deleted run is still visible in the evidence: `sd_runs` id **3853 is missing**, and the gap sits exactly between id 3852 (21 Aug 09:09:55) and 3854 (09:30:05) — the orphaned scan event is timestamped 09:10:32. Scale across production: **5 of 643** bags with a QC scan event have no matching run.
+
+Deleting a run now appends a reversing `void` event (`scan_events` is append-only — ARCHITECTURE.md §4, so the original is never removed) and clears the stale `bag_tags` QC stamp, so the bag's history says the record was withdrawn instead of implying it still exists.
+
+### Grade and variant are no longer guessed
+
+The same bag's scan event reads *Export Conventional*, while the Sieving Tower has it as **Domestic** — and nearly every other run captured that day is Domestic. Three separate things were filling those fields in:
+
+- the new-run form defaulted to **Export** + **Conventional**;
+- the edit form defaulted a missing grade to `SD_GRADES[0]` (Export) and variant to Conventional;
+- looking up a bag tag pulled the grade from the bag's `destination` **and fell through to `?? 'Export'`** when the destination did not map — applied unconditionally, so it overwrote a grade the QC had already picked.
+
+Because the defaults are also the commonest real values, a wrong one was indistinguishable from a deliberate one. Grade and variant now **start blank and stay blank until the QC picks them** — in the new-run form, the edit form, and after a bag lookup. `validate()` already required both, so a blank start simply makes the choice explicit rather than assumed. What the bag tag claims is still shown, as a line to confirm or contradict — *"Bag tag says Domestic · Conventional — confirm it or set the correct one"* — never written into the form.
+
+### Recapturing a backlog
+
+The duplicate-time guard (same lot + date + run type + minute) is now scoped to **In-Process** runs. The time is stamped at capture, so catching up on a backlog — several bags off one lot, all backdated to the day they ran, saved inside the same minute — tripped it on every save after the first and told the QC to "mark as Re-test", which would be false: they are different bags. A Final run already has the exact guard it needs in `_dupSerial` (the same bag twice), which catches real duplicates without catching the backlog.
+
+`ScanAction` also gained `void`, `topped_up` and `drawn_down` — all three were allowed by the database's CHECK constraint but missing from the type.
+
+*Follow-up:* the first merge tripped CI's lint ratchet — the new ledger writes added their own `as any` casts. The bag-side writes (the ledger event and the bag's QC stamp) now go through one helper each, shared by the save and delete paths, so the cast the untyped `production` schema needs lives in one place instead of four. That leaves the repo **2 errors below** where it stood before any of this work.
+
+---
+
+## 2026-09-11 — Gustav (Maintenance: NPD type, temporary repairs, and the notifications that were never being sent)
+
+**Files changed:** `lib/notifications/recipients.ts`, `app/api/maintenance/staff/route.ts`, `app/api/maintenance/job-cards/[id]/verify/route.ts`, `app/api/maintenance/transcribe/route.ts`, `lib/maintenance/constants.ts`, `lib/maintenance/types.ts`, `lib/maintenance/useMaintenanceData.ts`, `components/maintenance/JobCardItem.tsx`, `app/(app)/maintenance/my-jobs/page.tsx`, `app/(app)/maintenance/job-cards/page.tsx`, `supabase/migrations/20260911_010_jobcard_temporary_repair_followup.sql` (new, applied to staging)
+
+### One root cause behind two of these: privileged reads on the caller's session
+
+`shared.app_roles` carries RLS that shows an ordinary user **exactly one row — their own**; the whole table is visible only to admin / IT / `can_manage_users`. Several places asked it "who works here" through the **caller's** session, so the answer came back as one row, or none, and nothing said so. Two reported faults were the same bug wearing different clothes:
+
+- **The lab was never told a job card needed QC sign-off.** The hand-off fires from the *technician's* browser; `getQualityUserIds()` could not see the Quality department from a technician's session, returned an empty list, and `notify()` did exactly what it was asked — told nobody. It failed silently because "no recipients" and "nobody to tell" are the same thing to that code. Confirmed against production: **not one `qc_check` notification existed** in `shared.notifications` while four cards sat in the QC queue. The same fault was suppressing the *parts-required*, *parts-issued*, *job-paused* and *new-card* notifications to the maintenance manager.
+- **Allocation only ever offered the manager himself.** `maintenance_manager` holds `can_allocate_jobs` and `can_verify_jobs` but **not** `can_manage_users`, so the staff directory read returned his own row alone — hence one name in the technician picker, nothing under "assign someone else (off duty)", and an empty second-technician list. The picker was never broken; the directory behind it was one row long.
+
+Both now read through the admin client, which is the correct tool for the job: these queries answer *"who should be told"* / *"who works in Maintenance"* — decisions the server makes on the caller's behalf, gated by the permission check already at the top of each route — not a peek at what the caller may see. The comment claiming `service_role` has no PostgREST access to `shared` was wrong (`notify()` has been writing `shared.notifications` through that client all along) and is what pushed these reads onto the session client in the first place. The same fix repairs the manager's ability to onboard a technician, whose role write RLS was rejecting after the auth account had already been created.
+
+### The rest
+
+- **NPD (New Product Development)** added to the maintenance types. The voice-capture prompt held a second hand-maintained copy of that list, so a type added to the form was unreachable by voice; it now imports the one list.
+- **Temporary repair, ticked by the technician when they make one.** Distinct from the `Temporary Repair` *type* chosen at raise time — that is a guess made before anyone has looked at the machine; this is the later finding that the line is running on a stopgap. Signing the card off raises the permanent-repair card automatically, carrying the machine, the urgency, the original fault and whatever the technician said is still outstanding, and notifies the manager to allocate it. Raised at **sign-off** so it happens once, for work that actually happened; `follow_up_card_id` is the guard against a retried sign-off raising a second card. Both cards link to each other, and the manager is warned before signing that this will happen.
+- **A finished job card no longer vanishes from the technician's screen.** `My job cards` tabbed on `assigned` / `in_progress` / `complete`, so a card in `qc_check` or `mgr_verify` matched **no tab at all** — from the moment work was submitted until the manager signed off, hours or days later, it looked to the technician as though their work had disappeared. New **Awaiting sign-off** tab covers that gap.
+- **"Assigned to me" now matches on user id**, name only as a fallback for older cards — the same name-matching failure that used to stop allocated checklists reaching technicians.
+- *Follow-up:* the first merge of this work turned CI's lint ratchet red — the new follow-up code added `db.schema('maintenance' as any)` casts of its own. The verify route now hoists **one** handle for the schema instead of re-casting at every call site, which puts the repo 9 errors **below** the baseline rather than over it.
+- **The QC request is a popup on the lab's screen, not an email.** Quality works at a bench with the app open, and there are ~17 of them — a mail per job card is noise they learn to ignore. The hand-off is now **in-app only**, and it surfaces through a new `WorkRequestPopup` rather than the notification bell's toast: the toast clears itself after six seconds, so a request raised while nobody was looking at the screen was simply gone, leaving only a number on a bell nobody had a reason to open. The popup **loads unread requests on mount** (so one raised while the lab was away appears when they come back), stays up until it is opened or deferred, and deferring leaves it **unread** — it returns next visit and still counts on the bell. The bell skips its own toast for these kinds so the same request never appears twice.
+## 2026-09-07 — Gustav (Maintenance: compressor & generator run-hours captured; service date no longer guessed)
+
+**Files changed:** `lib/maintenance/useMaintenanceData.ts`, `components/maintenance/ServiceCard.tsx`
+
+**Data recorded (staging + production):**
+
+| Machine | Reading date | Total hours | Since service |
+|---|---|---|---|
+| 500L Factory Compressor | 2026-08-31 | 8 935 | 636 |
+| Generator GKSD-440 | 2026-09-07 | 1 618 | — |
+
+Both figures were reported by Gustav. The compressor's previous reading was 08/06/2026 at 7 836 total / 1 773 since service, so a service happened between the two — but its date was never captured. The generator had **no** run-hours rows at all; this is its first, and its hours-since-service is left empty (the 676 originally quoted is most likely a start count, not run hours, so it is not recorded rather than recorded wrongly). Production's compressor service interval was also corrected 350 → 2 000 hours and the generator added to `equipment_config` (500 hours), matching what staging already had.
+
+- **The "last serviced" date is now inferred from the counter reset, not from the newest zero row.** A reading of 636 hours-since-service following one of 1 773 can only mean the machine was serviced in between; the old rule instead reported the last row that happened to sit at zero, which for the compressor pointed at **21/01/2026** and flatly contradicted the 636 printed next to it. Where the date is inferred rather than recorded, the card now says so — *"serviced 08/06/2026–31/08/2026 · date not logged"* — instead of asserting a date nobody entered.
+- **Calendar-interval scheduling takes the earlier bound of that window**, so an unknown service date brings the next service forward rather than pushing it out.
+- **A machine with no service history reads NO SERVICE DATA, not OK.** With no hours-since-service and no service record there is no due date, and the urgency badge fell through to a green OK — the generator would have looked healthy purely because nothing about it had ever been captured.
+
+---
+
+## 2026-09-05 — Gustav (Maintenance: checklist allocation reaches technicians, period locking, checklist history, run-hour service tracking)
+
+**Files changed:** `lib/maintenance/useMaintenanceData.ts`, `lib/maintenance/types.ts`, `app/(app)/maintenance/scheduled/page.tsx`, `app/(app)/maintenance/page.tsx`, `components/maintenance/TrendsPanel.tsx`, `components/maintenance/ServiceCard.tsx` (new), `supabase/migrations/20260905_010_generator_checklist_service_tracking.sql` (new, applied to staging)
+
+- **Weekly Generator / Diesel checklist trimmed to the two readings actually captured** — *Generator run hours* and *Generator fuel level*. The other three lines (flow meter, start capability, run for 20 min) were prompts, not measurements.
+- **FIXED: an allocated checklist never reached the technician.** Allocation was matched on the technician's NAME only, so it silently failed whenever the roster spelling and the person's profile name differed. Allocation now records `assigned_user_id` and the technician's view matches on that (name kept as a fallback for older rows). A technician signed in now sees exactly the weekly/monthly checklists allocated to them.
+- **Auto-allocate now spreads work across EVERY maintenance technician**, not just whoever is on duty — a checklist is a whole-period job, and rostering only the on-duty crew left most of the team idle and overloaded the rest.
+- **A period locks once allocated.** Auto-allocate is disabled for that week/month (re-running would reshuffle work people had already started); the maintenance manager can still move any individual checklist to someone else from its card — the override for sick leave.
+- **Checklist history by period.** Weekly now has a week picker alongside the monthly month picker, so you can go back to any past week or month and see the checklists as they were filled in, including who completed them and a partial-progress line for ones left incomplete.
+- **Readings captured on a checklist now reach the graphs.** IP Measurement, Generator / Diesel and Water Meters were only writing into the checklist's own task state, so the trend charts — which read `ip_readings` / `diesel_readings` / `water_readings` — never saw them. Saving a reading checklist now also writes the numbers into the matching register.
+- **Compressor and generator now show service status instead of a sparkline** — current meter reading and its date, hours run since the last service, and the **date the next service falls due**. The due date is the earlier of the hours projection and any calendar interval. The compressor's configured interval was wrong (350 hours) and is now **2000**; the generator was missing from the run-hours register entirely and is now tracked at **500 hours or 12 months, whichever comes first**. Shown on the maintenance dashboard, in Utilities & trends, and in the Annual / Calibration tab.
+
+---
+
 ## 2026-09-11 — Gustav (COA: glyphosate forced onto organic COAs, no way back down the sign-off chain, specs never refreshed)
 
 **Files changed:** `app/(app)/quality/coa/page.tsx`, `lib/quality/coa-gating.ts`, `lib/quality/coa-gating.test.ts`, `app/api/quality/coa-signoff/route.ts`
