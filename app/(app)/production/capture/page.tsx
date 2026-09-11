@@ -11,6 +11,10 @@ import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
 import { SECTION_ORDER, sectionMeta } from '@/lib/production/capture-config'
 import { SHIFT_LABEL, shiftValuesFor, productionShiftNow } from '@/lib/production/shifts'
+import {
+  shiftRecordCards, sectionStatus,
+  type ShiftSessionRecord, type ShiftRecordCard,
+} from '@/lib/core/production/shift-records'
 import type { Operator, ShiftAssignment } from '@/lib/supabase/database.types'
 
 const STATUS_META: Record<string, { label: string; cls: string; icon: any }> = {
@@ -18,6 +22,37 @@ const STATUS_META: Record<string, { label: string; cls: string; icon: any }> = {
   draft:     { label: 'In progress',    cls: 'bg-warn/10 text-warn',         icon: Pen },
   submitted: { label: 'Awaiting sign-off', cls: 'bg-info/10 text-info',      icon: Clock },
   approved:  { label: 'Signed off',     cls: 'bg-ok/10 text-ok',             icon: CheckCircle2 },
+}
+
+/**
+ * The session columns this screen reads. Named rather than `any` so a renamed
+ * column fails here instead of silently rendering a blank chip.
+ */
+interface SessionRow {
+  id: string
+  section_id: string
+  status: string | null
+  record_no: string | null
+  variant: string | null
+  lot_number: string | null
+  production_orders: string[] | null
+  created_at: string | null
+  deleted_at: string | null
+}
+
+/** snake_case row → the shape the core rule reasons over. */
+function toRecord(r: SessionRow): ShiftSessionRecord {
+  return {
+    id: r.id,
+    sectionId: r.section_id,
+    status: r.status,
+    recordNo: r.record_no,
+    variant: r.variant,
+    lotNumber: r.lot_number,
+    productionOrders: r.production_orders,
+    createdAt: r.created_at,
+    deletedAt: r.deleted_at,
+  }
 }
 
 export default function CaptureLandingPage() {
@@ -43,7 +78,7 @@ export default function CaptureLandingPage() {
   }, [])
   const [assignments, setAssignments] = useState<ShiftAssignment[]>([])
   const [opMap, setOpMap] = useState<Record<string, string>>({})
-  const [statusMap, setStatusMap] = useState<Record<string, string>>({})
+  const [records, setRecords] = useState<ShiftSessionRecord[]>([])
   const [myOperatorId, setMyOperatorId] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
 
@@ -53,15 +88,17 @@ export default function CaptureLandingPage() {
       const [{ data: ops }, { data: assigns }, { data: sessions }] = await Promise.all([
         db.schema('production').from('operators').select('id,name,display_name,user_id').eq('active', true),
         db.schema('production').from('shift_assignments').select('*').eq('date', date).in('shift', shiftValuesFor(shift)),
-        db.schema('production').from('prod_sessions').select('section_id,status').eq('date', date).in('shift', shiftValuesFor(shift)),
+        // Every column a card needs. This used to select `section_id,status`
+        // only, which is why two records could not be told apart.
+        db.schema('production').from('prod_sessions')
+          .select('id,section_id,status,record_no,variant,lot_number,production_orders,created_at,deleted_at')
+          .eq('date', date).in('shift', shiftValuesFor(shift)),
       ])
       const m: Record<string, string> = {}
       ;(ops as Operator[] ?? []).forEach(o => { m[o.id] = o.display_name || o.name })
       setOpMap(m)
       setAssignments((assigns as ShiftAssignment[]) ?? [])
-      const sm: Record<string, string> = {}
-      ;(sessions ?? []).forEach((s: any) => { sm[s.section_id] = s.status })
-      setStatusMap(sm)
+      setRecords(((sessions ?? []) as SessionRow[]).map(toRecord))
       // Resolve which operator record belongs to the logged-in user
       if (user?.id) {
         const me = (ops as Operator[] ?? []).find(o => o.user_id === user.id)
@@ -81,6 +118,27 @@ export default function CaptureLandingPage() {
     if (!myOperatorId) return true   // operator record not found — show all as fallback
     return (a.operator_ids ?? []).includes(myOperatorId)
   })
+
+  /**
+   * The cards, derived ONCE. The sign-off queue and the grid below both read
+   * this, so they cannot disagree about how many records a shift has — which is
+   * the drift ARCHITECTURE.md §4 keeps naming.
+   */
+  const cardsBySection: [string, ShiftRecordCard[]][] = assignedSections.map(sectionId => {
+    const a = assignments.find(x => x.section_id === sectionId)!
+    return [sectionId, shiftRecordCards(records, {
+      sectionId,
+      variant: a.variant ?? null,
+      lotNumber: a.lot_number ?? null,
+      productionOrders: (a.production_orders as string[] | null) ?? null,
+    })]
+  })
+
+  /** A card links to its OWN record — without `session` the page opens the
+   *  newest one, which is the wrong half of a changeover as often as not. */
+  const hrefFor = (c: ShiftRecordCard) =>
+    `/production/capture/${c.sectionId}?date=${date}&shift=${shift}` +
+    (c.sessionId ? `&session=${c.sessionId}` : '')
 
   return (
     <div className="px-4 py-5 max-w-[900px] space-y-5">
@@ -117,21 +175,31 @@ export default function CaptureLandingPage() {
 
       {/* Supervisor approvals queue */}
       {!loading && canAssign && (() => {
-        const pending = assignedSections.filter(id => statusMap[id] === 'submitted')
+        // One row per RECORD awaiting sign-off, not per section. A shift that
+        // changed over has two, and they are signed off separately — listing
+        // the section once sent the supervisor to whichever record the page
+        // happened to open and left the other one waiting, invisibly.
+        const pending = cardsBySection.flatMap(([, cards]) =>
+          cards.filter(c => c.status === 'submitted'))
         if (!pending.length) return null
         return (
           <div className="bg-info/5 border border-info/30 rounded-2xl p-4 space-y-2">
             <div className="flex items-center gap-2 text-[13px] font-medium text-info"><Pen size={14} /> Needs your sign-off ({pending.length})</div>
-            {pending.map(id => {
-              const m = sectionMeta(id)
+            {pending.map(c => {
+              const m = sectionMeta(c.sectionId)
               return (
-                <Link key={id} href={`/production/capture/${id}?date=${date}&shift=${shift}`}
+                <Link key={c.key} href={hrefFor(c)}
                   className="flex items-center gap-3 px-3 py-2.5 bg-white border border-stone-200 rounded-xl hover:border-info/40 transition-colors">
                   <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0" style={{ background: m.colorHex }}>
                     <span className="font-mono font-bold text-[10px] text-white">{m.code}</span>
                   </div>
-                  <span className="flex-1 text-[13px] font-medium text-text">{m.name}</span>
-                  <span className="text-[11px] text-info flex items-center gap-1">Review &amp; approve <ChevronRight size={13} /></span>
+                  <span className="flex-1 text-[13px] font-medium text-text truncate">
+                    {m.name}
+                    {c.total > 1 && (
+                      <span className="text-text-muted font-normal"> · {c.recordNo ?? `record ${c.ordinal}`}</span>
+                    )}
+                  </span>
+                  <span className="text-[11px] text-info flex items-center gap-1 shrink-0">Review &amp; approve <ChevronRight size={13} /></span>
                 </Link>
               )
             })}
@@ -158,9 +226,14 @@ export default function CaptureLandingPage() {
         {/* At-a-glance overview */}
         <div className="grid grid-cols-3 gap-3 mb-1">
           {(() => {
+            // Still counted per SECTION — an operator thinks in lines, not in
+            // records. What changed is that a section counts as finished only
+            // when every one of its records is, instead of whichever row the
+            // query happened to return last.
             const total = assignedSections.length
-            const done  = assignedSections.filter(id => statusMap[id] === 'approved').length
-            const active = assignedSections.filter(id => statusMap[id] === 'draft' || statusMap[id] === 'submitted').length
+            const statuses = assignedSections.map(id => sectionStatus(records, id))
+            const done   = statuses.filter(st => st === 'approved').length
+            const active = statuses.filter(st => st === 'draft' || st === 'submitted').length
             const tiles = [
               { label: 'My sections', value: total,  cls: 'text-text' },
               { label: 'In progress', value: active, cls: 'text-warn' },
@@ -176,16 +249,20 @@ export default function CaptureLandingPage() {
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          {assignedSections.map(sectionId => {
+          {cardsBySection.flatMap(([sectionId, cards]) => cards.map(rec => {
             const meta   = sectionMeta(sectionId)
             const assign = assignments.find(a => a.section_id === sectionId)!
             const names  = (assign.operator_ids ?? []).map(id => opMap[id] ?? '—')
-            const status = statusMap[sectionId] ?? 'none'
+            const status = rec.status
             const sm     = STATUS_META[status] ?? STATUS_META.none
             const Icon   = sm.icon
             const locked = status === 'approved'
+            // A shift that changed over shows one card per record. Each carries
+            // its OWN variant, lot and status and opens its OWN session — the
+            // second blend is Organic even when the roster row says Conventional.
+            const multi  = rec.total > 1
 
-            const href = `/production/capture/${sectionId}?date=${date}&shift=${shift}`
+            const href = hrefFor(rec)
             const card = (
               <div className={`relative flex flex-col gap-3 p-4 rounded-2xl border bg-white shadow-sm transition-all ${meta.built ? 'hover:shadow-md hover:border-stone-300 active:scale-[0.99]' : 'opacity-60'}`}>
                 <div className="flex items-center gap-3">
@@ -193,7 +270,17 @@ export default function CaptureLandingPage() {
                     <span className="font-mono font-bold text-[12px] text-white">{meta.code}</span>
                   </div>
                   <div className="flex-1 min-w-0">
-                    <div className="font-semibold text-[15px] text-text leading-tight">{meta.name}</div>
+                    <div className="font-semibold text-[15px] text-text leading-tight flex items-baseline gap-1.5">
+                      <span className="truncate">{meta.name}</span>
+                      {multi && (
+                        <span className="text-[11px] font-mono font-medium text-text-muted shrink-0">
+                          {rec.ordinal}/{rec.total}
+                        </span>
+                      )}
+                    </div>
+                    {multi && rec.recordNo && (
+                      <div className="text-[10px] font-mono text-text-faint truncate mt-0.5">{rec.recordNo}</div>
+                    )}
                     <div className="flex items-center gap-1.5 mt-1 text-[11px] text-text-muted font-mono truncate">
                       <Users size={11} className="shrink-0" />
                       {names.join(', ') || 'No operators'}
@@ -205,18 +292,28 @@ export default function CaptureLandingPage() {
                   <span className={`inline-flex items-center gap-1.5 text-[10px] font-medium px-2 py-1 rounded-lg ${sm.cls}`}>
                     <Icon size={11} /> {sm.label}
                   </span>
-                  {assign.variant && <span className="text-[10px] font-mono text-text-muted px-2 py-1 rounded-lg bg-stone-50 border border-stone-100">{assign.variant}</span>}
-                  {assign.lot_number && <span className="text-[10px] font-mono text-text-muted px-2 py-1 rounded-lg bg-stone-50 border border-stone-100">{assign.lot_number}</span>}
+                  {/* The RECORD's own identity, not the roster row's. */}
+                  {rec.variant && <span className="text-[10px] font-mono text-text-muted px-2 py-1 rounded-lg bg-stone-50 border border-stone-100">{rec.variant}</span>}
+                  {rec.lotNumber && <span className="text-[10px] font-mono text-text-muted px-2 py-1 rounded-lg bg-stone-50 border border-stone-100">{rec.lotNumber}</span>}
+                  {rec.productionOrders.slice(0, 2).map(po => (
+                    <span key={po} className="text-[10px] font-mono text-text-muted px-2 py-1 rounded-lg bg-stone-50 border border-stone-100">{po}</span>
+                  ))}
                   {!meta.built && <span className="text-[10px] font-medium text-amber-700 ml-auto">Coming soon</span>}
-                  {locked && <span className="text-[10px] font-medium text-ok ml-auto">Tap to add another batch</span>}
+                  {/* Only on the LAST record of the section. On an earlier one
+                      it read as an invitation to add a batch that already
+                      exists, which is how a shift ends up with an empty third
+                      record nobody meant to open. */}
+                  {locked && rec.ordinal === rec.total && (
+                    <span className="text-[10px] font-medium text-ok ml-auto">Tap to add another batch</span>
+                  )}
                 </div>
               </div>
             )
 
             return meta.built
-              ? <Link key={sectionId} href={href}>{card}</Link>
-              : <div key={sectionId}>{card}</div>
-          })}
+              ? <Link key={rec.key} href={href}>{card}</Link>
+              : <div key={rec.key}>{card}</div>
+          }))}
         </div>
         </>
       )}
