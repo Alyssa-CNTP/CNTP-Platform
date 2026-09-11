@@ -2,6 +2,35 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-11 — Alyssa (A handover note reaches the next shift, and then it is finished)
+
+**Files changed:** `lib/core/production/handover.ts` + test (new), `app/(app)/production/capture/[section]/page.tsx`
+
+A handover note is a message between two shifts, not a log entry, and the difference matters: the message stops being true almost immediately. A changeover note read three shifts later describes a line that has since changed over twice.
+
+Asked for in those words — *"the handover to communicate to the next shifts operators and expires thereafter."*
+
+### What it replaces
+
+A **seven calendar day** window. That is fourteen handovers, so the banner routinely showed a stranger's message about a run that finished days earlier. The window existed to hide seeded demo notes rather than to express a rule.
+
+### The rule
+
+```
+morning   D  →  afternoon  D
+afternoon D  →  morning    D+1
+```
+
+One shift, then gone. Never the shift that wrote it, never anything later. The afternoon shift runs past midnight and still belongs to day D, which is why the next morning is D+1 and not "tomorrow by the clock".
+
+`afternoon` and `night` are one shift with two spellings — `night` is the legacy value on old rows — and `sameShift()` is the only place that comparison happens, so a third spelling would be added once rather than everywhere.
+
+The page's read stays a plain "recent notes on this line"; deciding which of them still applies is the rule's job, not a date filter's. That is how the seven-day window ended up living in a page in the first place.
+
+**One consequence, stated rather than hidden:** if the next shift does not run, nobody reads the note. That is correct — a message to whoever is on the line next is not a message to whoever is on it on Thursday.
+
+**Gates:** tests 1072 (26 new) · boundaries clean · hooks clean · typecheck 28, at baseline · lint 3010, at baseline · `next build` exit 0.
+
 ## 2026-09-11 — Alyssa (History is read-only, and the record knows who may change it)
 
 **Files changed:** `lib/core/production/record-access.ts` + test (landed inert in #984), `app/(app)/production/history/page.tsx`, `app/(app)/production/capture/[section]/page.tsx`
