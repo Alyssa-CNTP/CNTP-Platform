@@ -23,6 +23,13 @@ export interface JobCard {
   assigned_to_2?: string | null; assigned_user_id_2?: string | null
   // Food-grade lubricant declaration, recorded on completion.
   fg_lubricant?: boolean | null; fg_lubricant_note?: string | null
+  // Temporary repair declared by the TECHNICIAN while doing the work (distinct
+  // from the 'Temporary Repair' maint_type the raiser may have guessed at up
+  // front). Signing the card off raises the permanent-repair card and records it
+  // in follow_up_card_id; that card points back with follow_up_of_card_id.
+  temp_repair?: boolean | null; temp_repair_note?: string | null
+  temp_repair_at?: string | null; temp_repair_by?: string | null
+  follow_up_card_id?: number | null; follow_up_of_card_id?: number | null
   accepted_at: string | null; started_at: string | null; completed_at: string | null
   // Manager urgency label (null → derived priority); cancellation audit fields.
   urgency: Urgency | null; cancelled_at: string | null; cancelled_by: string | null

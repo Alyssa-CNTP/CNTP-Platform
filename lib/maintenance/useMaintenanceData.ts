@@ -466,6 +466,21 @@ export function useMaintenanceData() {
     }
   }
 
+  // Technician declares the repair they just made TEMPORARY (or takes it back).
+  // Logged as an event either way: "we ran it on a temporary fix" is a
+  // food-safety / reliability statement, and un-ticking it must not erase that
+  // it was once claimed.
+  const setTempRepair = async (j: JobCard, temp: boolean) => {
+    if (!!j.temp_repair === temp) return
+    const who = j.assigned_to ?? actor ?? displayName ?? ''
+    await upJC(j.id, temp
+      ? { temp_repair: true, temp_repair_at: new Date().toISOString(), temp_repair_by: who }
+      : { temp_repair: false, temp_repair_at: null, temp_repair_by: null, temp_repair_note: null })
+    await addLog(j.id, 'event', j.status, who, temp
+      ? 'Declared a TEMPORARY repair — a permanent-repair job card will be raised when this card is signed off.'
+      : 'Temporary-repair flag removed — recorded as a permanent repair.')
+  }
+
   // Add a machine to the catalogue (free-type entry on the raise form). Returns
   // the saved name so the form can select it immediately.
   const addMachine = async (name: string, area = ''): Promise<string | null> => {
@@ -1023,7 +1038,7 @@ export function useMaintenanceData() {
     actions: {
       addLog, upJC, onDutyTech, createJC, allocate, sendForClarify, resubmit,
       logSpare, completeWork, acceptJob, startJob, pauseJob, resumeJob, editCard, cancelCard,
-      qcSubmit, verifyCard, postComment,
+      qcSubmit, verifyCard, postComment, setTempRepair,
       getComp, saveComp, toggleTask, setTaskField, answerTask, allocateChecklist, submitChecklist, verifyChecklist, saveAnnualNotes, updateAnnual, calibrateAnnual,
       addPart, updatePart, adjustPartQty, deletePart, findPartByBarcode, addOffsite, updateOffsite, returnOffsite,
       addRoster, delRoster, qcFor, saveAreaQc, addSlot, delSlot, addSlotFor,

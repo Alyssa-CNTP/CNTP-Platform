@@ -29,7 +29,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     const db = await getSessionClient()
 
     const { data: existing } = await db.schema('maintenance' as any).from('job_cards')
-      .select('card_no, area, description, status, assigned_to, assigned_user_id, reopen_count, raised_by').eq('id', cardId).single()
+      .select('card_no, area, machine, description, long_desc, status, assigned_to, assigned_user_id, reopen_count, raised_by, urgency, temp_repair, temp_repair_note, temp_repair_by, follow_up_card_id')
+      .eq('id', cardId).single()
     if (!existing) return NextResponse.json({ error: 'Card not found' }, { status: 404 })
 
     if (ok) {
@@ -47,6 +48,69 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         const { data: files } = await admin.storage.from(BUCKET).list(`card/${cardId}`, { limit: 1000 })
         if (files?.length) await admin.storage.from(BUCKET).remove(files.map(f => `card/${cardId}/${f.name}`))
       } catch (e: any) { console.warn('[verify] photo cleanup skipped:', e?.message) }
+      // ── Temporary repair → raise the permanent-repair card ──
+      // A temporary fix closing as "complete" would otherwise be the last word
+      // on that machine. Raising the follow-up HERE, at sign-off, means it is
+      // created exactly once, by the same action that closes the temporary one,
+      // and only for work that actually happened — not the moment a technician
+      // ticks a box on a job they might still abandon.
+      //
+      // follow_up_card_id is the guard: if a sign-off is ever retried, the link
+      // is already set and no second card is raised.
+      if (existing.temp_repair && !existing.follow_up_card_id) {
+        try {
+          const detail = (existing.temp_repair_note ?? '').trim()
+          const { data: followUp, error: fErr } = await db.schema('maintenance' as any).from('job_cards')
+            .insert({
+              workflow: 'planned',
+              area: existing.area,
+              machine: existing.machine,
+              maint_types: ['Repair'],
+              description: `Permanent repair — ${existing.description}`.slice(0, 200),
+              long_desc:
+                `Raised automatically because ${existing.card_no} was closed as a TEMPORARY repair` +
+                `${existing.temp_repair_by ? ` by ${existing.temp_repair_by}` : ''}.\n\n` +
+                (detail ? `Still outstanding: ${detail}\n\n` : '') +
+                `Original fault: ${existing.description}` +
+                (existing.long_desc ? `\n${existing.long_desc}` : ''),
+              // The permanent repair inherits the temporary card's urgency — the
+              // machine is running on a stopgap, so this is not fresh low-priority work.
+              urgency: existing.urgency ?? null,
+              raised_by: 'System (temporary repair follow-up)',
+              raised_by_user_id: caller.userId,
+              follow_up_of_card_id: cardId,
+            })
+            .select('id, card_no').single()
+          if (fErr) throw fErr
+
+          await db.schema('maintenance' as any).from('job_cards')
+            .update({ follow_up_card_id: followUp.id }).eq('id', cardId)
+
+          await db.schema('maintenance' as any).from('job_card_logs').insert([
+            { card_id: cardId, kind: 'event', stage: 'complete', author: 'System',
+              body: `Closed as a TEMPORARY repair — permanent-repair job card ${followUp.card_no} raised automatically.` },
+            { card_id: followUp.id, kind: 'event', stage: 'raised', author: 'System',
+              body: `Raised automatically from temporary repair ${existing.card_no}. Awaiting maintenance manager allocation.` },
+          ])
+
+          // The manager who just signed off is the one who must allocate it.
+          const mgrs = await resolveRecipients(await getMaintenanceManagerIds())
+          if (mgrs.length) await notify({
+            recipients: mgrs, kind: 'assignment', cardId: followUp.id,
+            url: `/maintenance/job-cards/${followUp.id}`,
+            title: `Permanent repair ${followUp.card_no} to allocate`,
+            body: `${existing.card_no} on ${existing.machine || existing.area} was closed as a temporary repair. ` +
+                  (detail ? `Outstanding: ${detail}. ` : '') + 'This follow-up card needs allocating.',
+            channels: ['inApp', 'email'],
+          })
+        } catch (e: any) {
+          // Best-effort: never block the sign-off the manager just made. The
+          // temporary-repair flag stays set with no follow-up link, so the card
+          // is still findable as an outstanding temporary repair.
+          console.error('[verify] permanent-repair follow-up failed:', e?.message)
+        }
+      }
+
       // Technicians don't see the verify/sign-off screens — let them know the
       // job they worked on is done.
       if (existing.assigned_user_id) {
