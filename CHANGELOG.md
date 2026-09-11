@@ -30,6 +30,8 @@ The duplicate-time guard (same lot + date + run type + minute) is now scoped to 
 
 `ScanAction` also gained `void`, `topped_up` and `drawn_down` — all three were allowed by the database's CHECK constraint but missing from the type.
 
+*Follow-up:* the first merge tripped CI's lint ratchet — the new ledger writes added their own `as any` casts. The bag-side writes (the ledger event and the bag's QC stamp) now go through one helper each, shared by the save and delete paths, so the cast the untyped `production` schema needs lives in one place instead of four. That leaves the repo **2 errors below** where it stood before any of this work.
+
 ---
 
 ## 2026-09-11 — Gustav (Permissions: real per-page Read toggles for Quality, a dedicated COA key, and two IT roles that had never been wired)
