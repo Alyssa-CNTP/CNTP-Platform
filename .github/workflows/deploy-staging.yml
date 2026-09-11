@@ -26,36 +26,10 @@ jobs:
             /home/cntpdev/.nvm/versions/node/v24.16.0/bin/pm2 restart cntp-staging
             echo "✅ Deployed successfully"
 
-            # Leaf Shade Classifier (ml/leafshade) — self-healing, not a rebuild.
-            # This never ran anywhere in CI/CD before: the ONLY way the container
-            # started was a human SSHing in and running `docker compose up -d
-            # --build` by hand (see ml/leafshade/README.md), and nothing here ever
-            # re-checked it. `restart: unless-stopped` in the compose file only
-            # protects against a crash or a VPS reboot — it does nothing if the
-            # container was manually stopped, hit disk/OOM pressure during its one
-            # and only build, or was simply never started in the first place. Any
-            # of those leaves the Raw Material → Leaf Shade tab reporting "service
-            # is not running" indefinitely, with no signal to anyone until a person
-            # happens to open that tab.
-            #
-            # `docker compose up -d` (no --build) is what's run here on purpose:
-            # it builds the image only if one doesn't exist yet, otherwise starts
-            # the existing image unchanged — cheap and safe on every deploy. It
-            # does NOT pick up a code/model change in ml/leafshade/* automatically;
-            # that still needs an explicit `docker compose up -d --build` by hand,
-            # exactly as the README already says. This step only guarantees the
-            # container is actually UP, on every deploy, without that requiring
-            # anyone to remember it.
-            #
-            # Wrapped in `if`, not left to `set -eo pipefail` above: a problem with
-            # this Python micro-service must never mark the Next.js deploy itself
-            # as failed — the two are unrelated failure domains.
-            if command -v docker >/dev/null 2>&1; then
-              if (cd ml/leafshade && docker compose up -d); then
-                echo "✅ Leaf Shade service is running"
-              else
-                echo "⚠️  Leaf Shade service failed to start — check manually: cd ml/leafshade && docker compose logs --tail=50"
-              fi
-            else
-              echo "⚠️  Docker not found on VPS — Leaf Shade service was not started"
-            fi
+            # Leaf Shade Classifier (ml/leafshade) is a PRODUCTION-only service —
+            # deliberately not started/managed from here. See deploy-production.yml
+            # for the self-healing `docker compose up -d` step and why it lives
+            # there instead: the compose file pins a fixed container_name and a
+            # fixed host port (network_mode: host), so only ONE instance can run
+            # on this VPS at a time — staging and production must not both try to
+            # own it.

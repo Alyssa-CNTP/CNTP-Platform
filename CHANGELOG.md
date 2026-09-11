@@ -2,6 +2,16 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-11 — Gustav (Leaf Shade moved to production-only — staging and prod share one VPS and can't both own the container)
+
+**Files changed:** `.github/workflows/deploy-staging.yml`, `.github/workflows/deploy-production.yml`, `ml/leafshade/README.md`
+
+- **The self-healing `docker compose up -d` step added earlier today moves from `deploy-staging.yml` to `deploy-production.yml`.** `ml/leafshade/docker-compose.yml` pins a fixed `container_name` and a fixed host port (`network_mode: host`), and staging and production run on the **same VPS** — only one instance of this container can exist on the box at all. Leaving the self-heal step on both workflows would have had staging and production deploys fighting over ownership of the same container: whichever one deployed most recently would silently decide what code/model the *other* environment's Leaf Shade tab was actually running against. Leaf Shade is a production feature; staging doesn't need it, so ownership now lives only in `deploy-production.yml`.
+- `ml/leafshade/README.md` updated throughout — every path example now points at the production app directory, not staging's.
+- **Manual cleanup needed once, on the VPS, by whoever has SSH access:** earlier today's staging deploy already started a container named `cntp-leafshade`. Before production's next deploy tries to claim that same name, it needs to be removed first — `cd /home/cntpdev/apps/staging/app/cntp-ops/ml/leafshade && docker compose down` (or `docker rm -f cntp-leafshade`). The image itself (`cntp-leafshade:latest`) does not need rebuilding — production's `docker compose up -d` will reuse it.
+
+---
+
 ## 2026-09-11 — Gustav (Sieving QC: the QC types when the run happened; changing it afterwards is IT's)
 
 **Files changed:** `app/(app)/quality/sieving/page.tsx`, `supabase/migrations/20260911_020_sd_runs_when_it_happened_it_only.sql` (new, applied to staging)
