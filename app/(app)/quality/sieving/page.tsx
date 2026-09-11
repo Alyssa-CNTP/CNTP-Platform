@@ -815,7 +815,9 @@ function InlineEditForm({ run, specDef, activeSpecs, onSave, onCancel, qcNames, 
   const [fields, setFields] = useState({
     date: run.date||'', lotNumber: run.lotNumber||'', serialNumber: run.serialNumber||'',
     qcName: run.qcName||'', time: run.time||'',
-    bulkDensity: run.bulkDensity||'', grade: run.grade||SD_GRADES[0], variant: run.variant||'Conventional',
+    // Blank, not a default — an old run saved without a grade must show as
+    // missing so the QC sets it, rather than silently reading as Export.
+    bulkDensity: run.bulkDensity||'', grade: run.grade||'', variant: run.variant||'',
     runType: run.runType||'in-process', needleCount: run.needleCount||'',
     leafShade: run.leafShade||'', comment: run.comment||'', paLevel: run.paLevel||'',
   })
@@ -940,12 +942,14 @@ function InlineEditForm({ run, specDef, activeSpecs, onSave, onCancel, qcNames, 
         <div>
           <label style={{ fontSize:9, fontWeight:700, color:'#374151', display:'block', marginBottom:2, textTransform:'uppercase' }}>Grade</label>
           <select value={fields.grade} onChange={e=>setF('grade',e.target.value)} style={{ ...inputSt, background:'#fff' }}>
+            <option value="">— select —</option>
             {SD_GRADES.map(g=><option key={g}>{g}</option>)}
           </select>
         </div>
         <div>
           <label style={{ fontSize:9, fontWeight:700, color:'#374151', display:'block', marginBottom:2, textTransform:'uppercase' }}>Variant</label>
           <select value={fields.variant} onChange={e=>setF('variant',e.target.value)} style={{ ...inputSt, background:'#fff' }}>
+            <option value="">— select —</option>
             {SD_VARIANTS.map(v=><option key={v}>{v}</option>)}
           </select>
         </div>
@@ -1186,7 +1190,13 @@ export default function SievingPage() {
       // SAST, not the raw UTC slice — between 00:00 and 01:59 SAST the UTC date
       // is still yesterday, which would file the run against the wrong day.
       date: sastDateStr(new Date().toISOString()),
-      lotNumber:'', serialNumber:'', grade:'Export', variant:'Conventional',
+      // Grade and variant start BLANK and stay blank until the QC picks them.
+      // They used to default to Export/Conventional, which meant an untouched
+      // form saved a grade nobody had actually looked at — and because the
+      // defaults are also the commonest real values, a wrong one was
+      // indistinguishable from a deliberate one. validate() requires both, so a
+      // blank start makes the choice explicit instead of assumed.
+      lotNumber:'', serialNumber:'', grade:'', variant:'',
       runType:'in-process', qcName: myName, time: nowHHMM(), needleCount:'', leafShade:'',
       // The raw-material's suggested shade for this lot, captured separately
       // from leafShade (the QC's own entry) — see raw_material_leaf_shade.
@@ -1467,9 +1477,19 @@ export default function SievingPage() {
       const mismatch = serialTabMismatch(f.serialNumber, activeProduct)
       if (mismatch) errs.serialNumber = mismatch
     }
-    if (!retest&&f.time&&f.time.trim()&&f.lotNumber&&f.date) {
+    // Guards against a double-submit: the same lot, date, run type and MINUTE.
+    //
+    // Scoped to In-Process, because that is the only run type this check can
+    // still tell apart. The time is stamped at capture (nowHHMM), so catching
+    // up on a backlog — several bags off the same lot, all backdated to the day
+    // they were run, saved within the same minute — trips this on every save
+    // after the first and tells the QC to "mark as Re-test", which would be a
+    // lie: they are different bags, not a repeat measurement. A Final run
+    // already has a stronger, exact guard in _dupSerial below, which catches
+    // the real duplicate (the same bag twice) without catching the backlog.
+    if (!retest&&f.runType==='in-process'&&f.time&&f.time.trim()&&f.lotNumber&&f.date) {
       const dup = productRuns.find((r:any)=>r.lotNumber===f.lotNumber&&r.date===f.date&&r.time===f.time.trim()&&r.runType===f.runType)
-      if (dup) errs._dupTime=`A ${f.runType} run for lot ${f.lotNumber} already exists at ${f.time} on ${f.date}. Mark as Re-test.`
+      if (dup) errs._dupTime=`An in-process run for lot ${f.lotNumber} already exists at ${f.time} on ${f.date}. Mark as Re-test.`
     }
     // A bag can only be sampled once at Final QC — a second "final" run against
     // the same serial is always a mistake (duplicate save, wrong bag picked
@@ -1593,14 +1613,45 @@ export default function SievingPage() {
     // in-process run changes which bags are flagged, so refresh either way.
     loadPendingBags()
     if (form.runType === 'final') setPrintBag({ ...mapped, bag: selectedBag, residue: rLookup[lotKeyOf(mapped.lotNumber)] || null })
-    setShowForm(false); setGramValues({}); setForm(blankForm()); setErrors({}); setIsRetest(false); setAnomalyWarn(''); setConfirmAnomaly(false); setLotMsg(''); setTagLookupState('idle'); setSelectedBagId('')
+    setShowForm(false); setGramValues({}); setForm(blankForm()); setErrors({}); setIsRetest(false); setAnomalyWarn(''); setConfirmAnomaly(false); setLotMsg(''); setTagLookupState('idle'); setBagHint(null); setSelectedBagId('')
     setLastSaved(new Date()); setSaving(false)
   }
 
   async function deleteRun(id: any) {
     if (!confirm('Delete this sieving run? This cannot be undone.')) return
+    // Saving a Final QC writes THREE things: the qms.sd_runs row, a qc_check
+    // event on the bag's ledger, and the QC stamp on bag_tags. Deleting only
+    // the first left the other two behind, so the bag went on showing
+    // "Qc Check · Pass" in its own history while the Quality screen had no
+    // record of it and it sat back in the awaiting-QC queue — the exact state
+    // STFL-210826-005 is in (run id 3853, saved 21 Aug 09:10, since deleted;
+    // the gap in the id sequence is still there).
+    const gone = (runs[activeProduct] || []).find((r: any) => r.id === id)
+    const serial = (gone?.serialNumber || '').trim().toUpperCase()
+
     await db.schema('qms').from('sd_runs').delete().eq('id', id)
     setRuns(prev=>({ ...prev, [activeProduct]: (prev[activeProduct]||[]).filter((r:any)=>r.id!==id) }))
+
+    if (serial) {
+      // scan_events is an append-only ledger (ARCHITECTURE.md §4) — undo by
+      // appending a reversing event, never by deleting the original.
+      try {
+        await getDb().schema('production').from('scan_events').insert({
+          serial_number: serial,
+          action: 'void',
+          section_id: 'sieving',
+          session_id: null, operator_id: null, weight_kg: null,
+          notes: `QC record withdrawn — the ${gone?.runType || ''} run captured by ${gone?.qcName || '—'} was deleted. This bag needs QC again.`.replace(/\s+/g, ' '),
+        } as any)
+      } catch { /* non-fatal — the run is already gone */ }
+      // bag_tags is current state, not a ledger, so the stale stamp is cleared.
+      try {
+        await getDb().schema('production').from('bag_tags')
+          .update({ qc_initials: null, qc_signed_at: null } as any)
+          .eq('serial_number', serial)
+      } catch { /* non-fatal */ }
+    }
+    loadPendingBags()
   }
 
   async function saveSpecs(newSpecs: any) {
@@ -1629,30 +1680,42 @@ export default function SievingPage() {
   const setF = (k: string, v: any) => setForm((f: any) => ({ ...f, [k]: v }))
 
   const [tagLookupState, setTagLookupState] = React.useState<'idle'|'loading'|'found'|'notfound'>('idle')
+  // What the bag tag claims its grade/variant are. Displayed for the QC to
+  // confirm or contradict; deliberately never written into the form.
+  const [bagHint, setBagHint] = React.useState<{ grade: string|null; variant: string|null }|null>(null)
   const DEST_TO_GRADE: Record<string, string> = { A: 'Export', B: 'Export Blend', C: 'Domestic' }
 
   async function lookupBagTag(serial: string) {
     const s = serial.trim().toUpperCase()
-    if (!s) { setTagLookupState('idle'); return }
+    if (!s) { setTagLookupState('idle'); setBagHint(null); return }
     setTagLookupState('loading')
     try {
       const { data } = await getDb().schema('production').from('bag_tags')
         .select('lot_number,variant,destination,created_at').eq('serial_number', s).maybeSingle()
       if (!data) { setTagLookupState('notfound'); return }
-      const grade = DEST_TO_GRADE[data.destination ?? ''] ?? 'Export'
+      // What the BAG says. Shown to the QC as something to confirm — never
+      // written into the form. Pulling it in was wrong twice over: the bag's
+      // destination is what production intended, not what Quality has verified,
+      // and an unmapped destination fell through to `?? 'Export'`, so a bag the
+      // tower had as Domestic silently arrived here as Export and saved that way
+      // (STFL-210826-005 is exactly this). The QC picks grade and variant.
+      setBagHint({
+        grade:   DEST_TO_GRADE[data.destination ?? ''] ?? null,
+        variant: data.variant ? normProdVariant(data.variant) : null,
+      })
       // created_at is a UTC timestamptz — slicing it directly would show the
       // wrong calendar day for any bag tagged between 00:00-01:59 SAST (still
       // "yesterday" in UTC). Format in Africa/Johannesburg instead.
       const date  = data.created_at ? sastDateStr(data.created_at) : ''
+      // Lot number and date are facts about the bag, so they still pre-fill.
+      // Grade and variant are Quality's call and are left for the QC.
       setForm((f: any) => ({
         ...f,
         ...(data.lot_number ? { lotNumber: data.lot_number } : {}),
-        ...(data.variant    ? { variant: normProdVariant(data.variant) } : {}),
-        grade,
         ...(date            ? { date }                        : {}),
       }))
       setTagLookupState('found')
-    } catch { setTagLookupState('idle') }
+    } catch { setTagLookupState('idle'); setBagHint(null) }
   }
 
   // Pre-fills the Final QC form from a bag record (a row of qms.v_bag_qc_status
@@ -1662,6 +1725,10 @@ export default function SievingPage() {
   // which is always the capture moment.
   function applyBagToForm(bag: any) {
     setSelectedBagId(bag.bagging_id)
+    setBagHint({
+      grade:   DEST_TO_GRADE[bag.destination ?? ''] ?? null,
+      variant: bag.variant ? normProdVariant(bag.variant) : null,
+    })
     const lotKey  = (bag.lot_number || '').trim().toUpperCase().replace(/\s*-\s*/g,'-')
     const shade   = leafShadeLookup[lotKey]
     const pa      = paLookup[lotKey]
@@ -1671,7 +1738,8 @@ export default function SievingPage() {
       baggingId:    bag.bagging_id,
       serialNumber: bag.bag_serial_no || '',
       lotNumber:    bag.lot_number || '',
-      variant:      normProdVariant(bag.variant) || f.variant,
+      // Variant is NOT pulled from the bag — see lookupBagTag. What the bag
+      // carries is shown as a hint beside the field for the QC to confirm.
       // The run's date is WHEN THE QC WAS DONE, to match the time beside it,
       // which is always stamped at capture. Previously this took the bag's
       // bagging date instead, so a bag made yesterday and sampled this morning
@@ -1869,7 +1937,7 @@ export default function SievingPage() {
       <div style={{display:'flex',gap:4,marginBottom:14,flexWrap:'wrap'}}>
         {SD_PRODUCTS.map(p=>(
           <button key={p} onClick={()=>{setActiveProduct(p);setShowForm(false);setShowSpecEditor(false);setFilter('all');setEditRunId(null)
-            setSelectedBagId('');setLotMsg('');setTagLookupState('idle');setErrors({})
+            setSelectedBagId('');setLotMsg('');setTagLookupState('idle'); setBagHint(null);setErrors({})
             setForm((f:any)=>({...f, serialNumber:'', baggingId:''}))}}
             style={{padding:'7px 16px',borderRadius:8,border:'none',cursor:'pointer',fontSize:12,fontWeight:600,
               background:activeProduct===p?'#1f4e79':'#f3f4f6',color:activeProduct===p?'#fff':'#374151'}}>
@@ -1898,12 +1966,12 @@ export default function SievingPage() {
             you pick In-Process vs Final QC inside the form — the run type is
             set the moment the form opens. */}
         {canWrite && <button onClick={()=>{setShowForm(true);setShowSpecEditor(false);setEditRunId(null)
-          setSelectedBagId('');setLotMsg('');setTagLookupState('idle');setRecoveredDraft(null)
+          setSelectedBagId('');setLotMsg('');setTagLookupState('idle'); setBagHint(null);setRecoveredDraft(null)
           setForm((f:any)=>({...blankForm(), runType:'in-process'}))
           setTimeout(()=>document.getElementById('sieving-new-run-form')?.scrollIntoView({behavior:'smooth',block:'start'}),50)}}
           style={{padding:'6px 14px',borderRadius:6,border:'none',background:'#1f4e79',color:'#fff',fontSize:11,fontWeight:700,cursor:'pointer'}}>+ New In-Process QC</button>}
         {canWrite && <button onClick={()=>{setShowForm(true);setShowSpecEditor(false);setEditRunId(null)
-          setSelectedBagId('');setLotMsg('');setTagLookupState('idle');setRecoveredDraft(null)
+          setSelectedBagId('');setLotMsg('');setTagLookupState('idle'); setBagHint(null);setRecoveredDraft(null)
           setForm((f:any)=>({...blankForm(), runType:'final'}))
           setTimeout(()=>document.getElementById('sieving-new-run-form')?.scrollIntoView({behavior:'smooth',block:'start'}),50)}}
           style={{padding:'6px 14px',borderRadius:6,border:'none',background:'#166534',color:'#fff',fontSize:11,fontWeight:700,cursor:'pointer'}}>+ New Output Bag QC</button>}
@@ -2016,7 +2084,7 @@ export default function SievingPage() {
             <div style={{fontWeight:700,fontSize:15,color:'#1f4e79'}}>
               ⊕ New {activeProduct} {form.runType==='final'?'Output Bag QC':'In-Process'} Run
             </div>
-            <button onClick={()=>{setShowForm(false);setErrors({});setGramValues({});setForm(blankForm());setAnomalyWarn('');setConfirmAnomaly(false);setLotMsg('');setTagLookupState('idle');clearDraft(draftKey)}}
+            <button onClick={()=>{setShowForm(false);setErrors({});setGramValues({});setForm(blankForm());setAnomalyWarn('');setConfirmAnomaly(false);setLotMsg('');setTagLookupState('idle'); setBagHint(null);clearDraft(draftKey)}}
               style={{background:'none',border:'none',fontSize:22,cursor:'pointer',color:'#6b7280',lineHeight:1,padding:'0 4px'}}>×</button>
           </div>
           {/* Run type is fixed by which toolbar button opened this form — see
@@ -2140,7 +2208,7 @@ export default function SievingPage() {
                 Serial No. {form.serialNumber&&<span style={{fontSize:9,color:'#166534',fontWeight:400}}>✓ from bag</span>}
               </label>
               <input value={form.serialNumber}
-                onChange={e=>{setF('serialNumber',e.target.value);setTagLookupState('idle')}}
+                onChange={e=>{setF('serialNumber',e.target.value);setTagLookupState('idle'); setBagHint(null)}}
                 onBlur={e=>lookupBagTag(e.target.value)}
                 onKeyDown={e=>{ if (e.key==='Enter') { e.preventDefault(); lookupBagTag(form.serialNumber) } }}
                 placeholder="Type or scan barcode"
@@ -2167,9 +2235,19 @@ export default function SievingPage() {
             </div>
           </div>
 
-          {/* Grade tabs */}
+          {/* Grade tabs — nothing is selected until the QC picks one. */}
           <div style={{marginBottom:14}}>
-            <label style={{fontSize:10,fontWeight:700,color:errors.grade?'#dc2626':'#374151',display:'block',marginBottom:6,textTransform:'uppercase'}}>Grade *</label>
+            <label style={{fontSize:10,fontWeight:700,color:errors.grade?'#dc2626':'#374151',display:'block',marginBottom:6,textTransform:'uppercase'}}>
+              Grade * {!form.grade && <span style={{fontSize:9,color:'#b45309',fontWeight:600}}>— select</span>}
+            </label>
+            {/* What the bag tag says, for the QC to confirm or contradict. It is
+                not applied to the form: the tag records what production intended,
+                not what Quality has verified. */}
+            {bagHint && (bagHint.grade || bagHint.variant) && (
+              <div style={{fontSize:11,color:'#6b7280',marginBottom:6}}>
+                Bag tag says <strong style={{color:'#374151'}}>{bagHint.grade ?? 'no grade'}{bagHint.variant ? ` · ${bagHint.variant}` : ''}</strong> — confirm it or set the correct one.
+              </div>
+            )}
             <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
               {SD_GRADES.map(g=>(
                 <button key={g} type="button" onClick={()=>setF('grade',g)}
@@ -2188,6 +2266,9 @@ export default function SievingPage() {
             <div>
               <label style={{fontSize:10,fontWeight:700,color:errors.variant?'#dc2626':'#374151',display:'block',marginBottom:4,textTransform:'uppercase'}}>Variant *</label>
               <select value={form.variant} onChange={e=>setF('variant',e.target.value)} style={{...inputSt,background:'#fff',borderColor:errors.variant?'#fca5a5':'#d1d5db',padding:'9px 10px',fontSize:13}}>
+                {/* Blank until chosen — Conventional as the default meant an
+                    untouched form saved a variant nobody had confirmed. */}
+                <option value="">— select —</option>
                 {SD_VARIANTS.map(v=><option key={v}>{v}</option>)}
               </select>
               <ErrMsg field="variant"/>
@@ -2296,7 +2377,7 @@ export default function SievingPage() {
               Mark as Re-test
             </label>
             <div style={{marginLeft:'auto',display:'flex',gap:8}}>
-              <button onClick={()=>{setShowForm(false);setErrors({});setGramValues({});setForm(blankForm());setAnomalyWarn('');setConfirmAnomaly(false);setLotMsg('');setTagLookupState('idle');clearDraft(draftKey)}}
+              <button onClick={()=>{setShowForm(false);setErrors({});setGramValues({});setForm(blankForm());setAnomalyWarn('');setConfirmAnomaly(false);setLotMsg('');setTagLookupState('idle'); setBagHint(null);clearDraft(draftKey)}}
                 style={{padding:'10px 20px',borderRadius:7,border:'1px solid #d1d5db',background:'#fff',fontSize:13,cursor:'pointer'}}>Cancel</button>
               <button onClick={addRun} disabled={saving || (outlierWarnings.length>0 && !confirmAnomaly)}
                 style={{padding:'10px 26px',borderRadius:7,border:'none',background:(saving||(outlierWarnings.length>0 && !confirmAnomaly))?'#9ca3af':'#166534',color:'#fff',fontSize:13,fontWeight:700,cursor:(saving||(outlierWarnings.length>0 && !confirmAnomaly))?'default':'pointer'}}>

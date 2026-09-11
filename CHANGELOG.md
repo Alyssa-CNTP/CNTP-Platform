@@ -2,6 +2,36 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-11 — Gustav (Sieving QC: grade and variant are Quality's call, and a deleted run no longer leaves the bag looking checked)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`, `lib/supabase/database.types.ts`
+
+### Why a bag showed "Qc Check · Pass" with no quality record
+
+`STFL-210826-005` carries a `qc_check` event in its own scan history — *Pass · QC: Rose Tsatsi* — while the Quality screen has no run for it and it sits in the awaiting-QC queue. Saving a Final QC writes **three** things: the `qms.sd_runs` row, a `qc_check` event on the bag's ledger, and the QC stamp on `bag_tags`. `deleteRun` removed only the first.
+
+The deleted run is still visible in the evidence: `sd_runs` id **3853 is missing**, and the gap sits exactly between id 3852 (21 Aug 09:09:55) and 3854 (09:30:05) — the orphaned scan event is timestamped 09:10:32. Scale across production: **5 of 643** bags with a QC scan event have no matching run.
+
+Deleting a run now appends a reversing `void` event (`scan_events` is append-only — ARCHITECTURE.md §4, so the original is never removed) and clears the stale `bag_tags` QC stamp, so the bag's history says the record was withdrawn instead of implying it still exists.
+
+### Grade and variant are no longer guessed
+
+The same bag's scan event reads *Export Conventional*, while the Sieving Tower has it as **Domestic** — and nearly every other run captured that day is Domestic. Three separate things were filling those fields in:
+
+- the new-run form defaulted to **Export** + **Conventional**;
+- the edit form defaulted a missing grade to `SD_GRADES[0]` (Export) and variant to Conventional;
+- looking up a bag tag pulled the grade from the bag's `destination` **and fell through to `?? 'Export'`** when the destination did not map — applied unconditionally, so it overwrote a grade the QC had already picked.
+
+Because the defaults are also the commonest real values, a wrong one was indistinguishable from a deliberate one. Grade and variant now **start blank and stay blank until the QC picks them** — in the new-run form, the edit form, and after a bag lookup. `validate()` already required both, so a blank start simply makes the choice explicit rather than assumed. What the bag tag claims is still shown, as a line to confirm or contradict — *"Bag tag says Domestic · Conventional — confirm it or set the correct one"* — never written into the form.
+
+### Recapturing a backlog
+
+The duplicate-time guard (same lot + date + run type + minute) is now scoped to **In-Process** runs. The time is stamped at capture, so catching up on a backlog — several bags off one lot, all backdated to the day they ran, saved inside the same minute — tripped it on every save after the first and told the QC to "mark as Re-test", which would be false: they are different bags. A Final run already has the exact guard it needs in `_dupSerial` (the same bag twice), which catches real duplicates without catching the backlog.
+
+`ScanAction` also gained `void`, `topped_up` and `drawn_down` — all three were allowed by the database's CHECK constraint but missing from the type.
+
+---
+
 ## 2026-09-11 — Gustav (Permissions: real per-page Read toggles for Quality, a dedicated COA key, and two IT roles that had never been wired)
 
 **Files changed:** `lib/auth/permissions.ts`, `lib/auth/permission-registry.ts`, `lib/auth/permissions.test.ts` (new), `app/(app)/layout.tsx`, `app/(app)/quality/coa/page.tsx`
