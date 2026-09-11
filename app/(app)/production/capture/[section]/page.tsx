@@ -46,6 +46,7 @@ import { variantForDb } from '@/lib/core/variants'
 import FeatureBoundary from '@/components/shared/FeatureBoundary'
 import { buildDebagRows, buildBagRows } from '@/lib/core/capture-rows'
 import { planChangeover, isPastShiftChangeover, isEarlyChangeoverLikely } from '@/lib/core/changeover'
+import { recordAccess } from '@/lib/core/production/record-access'
 import { ChangeoverTrigger, ChangeoverDialog } from '@/features/changeover'
 import { flags } from '@/lib/config/flags'
 import { upperCode } from '@/lib/production/normalize-code'
@@ -234,7 +235,7 @@ function CaptureScreen() {
   const params = useParams()
   const sp     = useSearchParams()
   const router = useRouter()
-  const { user, role, isSupervisor, isIT, signOut, displayName, p: hasPerm } = useAuth()
+  const { user, role, isSupervisor, isIT, isFullAdmin, signOut, displayName, p: hasPerm } = useAuth()
 
   const sectionId = (params.section as string) ?? ''
   // Refining 1/2 and Blender have no machine checks configured (nothing on the
@@ -359,6 +360,15 @@ function CaptureScreen() {
   // afternoon operator confirms by PIN — audit trail of who captured after 16h00.
   const [afternoonOps, setAfternoonOps]     = useState<{ id: string; name: string; pin: string }[]>([])
   const [takenOver, setTakenOver]           = useState(false)
+  /**
+   * Is the open record the one the line is currently on?
+   *
+   * False for the earlier half of a changeover — still a draft, so its status
+   * cannot distinguish it. Defaults TRUE: a page that has not finished loading
+   * must not read as a closed record and lock an operator out of their own
+   * capture screen.
+   */
+  const [isCurrentRecord, setIsCurrentRecord] = useState(true)
   const [changeoverNeeded, setChangeoverNeeded] = useState(false)
   // A draft that still carries submitted_at was signed off and then REOPENED
   // (the reopen endpoints only flip status back to 'draft'). That is somebody
@@ -494,6 +504,10 @@ function CaptureScreen() {
         .order('created_at', { ascending: false })
       const shiftRows = (shiftSess as any[]) ?? []
       const sess = sessionParam ? (shiftRows.find(r => r.id === sessionParam) ?? null) : (shiftRows[0] ?? null)
+      // The newest row IS the record the line is on — it is what this page
+      // opens when no ?session is named. Deep-linking to an earlier one is
+      // exactly the changeover case, and it must read as closed.
+      setIsCurrentRecord(!sess || sess.id === shiftRows[0]?.id)
       const siblingRows = shiftRows.filter(r => r.id !== sess?.id)
       const activeMatchKeys = new Set(
         (((sess as any)?.draft_data?.productions ?? []) as Production[]).map(p => productionMatchKey(p, sectionId))
@@ -651,6 +665,7 @@ function CaptureScreen() {
         .order('created_at', { ascending: false })
       const shiftRows = (shiftSess as any[]) ?? []
       const sess = sid ? (shiftRows.find(r => r.id === sid) ?? null) : (shiftRows[0] ?? null)
+      setIsCurrentRecord(!sess || sess.id === shiftRows[0]?.id)
       const siblingRows = shiftRows.filter(r => r.id !== sess?.id)
       const activeMatchKeys = new Set(
         (((sess as any)?.draft_data?.productions ?? []) as Production[]).map(p => productionMatchKey(p, sectionId))
@@ -1729,7 +1744,40 @@ function CaptureScreen() {
     )
   }
 
-  const locked = status === 'approved'
+  /**
+   * Signed off — a fact about the RECORD.
+   *
+   * Timesheets and checks follow this and only this. They are not part of the
+   * record the access rule opens and closes: an operator whose record is
+   * submitted still owns their own hours and their own machine checks, and
+   * locking those behind a supervisor would be a different change nobody asked
+   * for.
+   */
+  const signedOff = status === 'approved'
+
+  /**
+   * May THIS person type into THIS record, right now — the rule from
+   * lib/core/production/record-access.ts, asked once here and read everywhere
+   * below. Four screens used to answer it with four expressions.
+   *
+   * `isCurrentRecord` is the record the page opens by default, which is the
+   * newest for the shift. After a changeover the earlier record is still a
+   * draft, so status alone cannot tell them apart.
+   */
+  const access = recordAccess({
+    surface: 'capture',
+    status,
+    isCurrentRecord,
+    recordProductionDay: dateParam,
+    todayProductionDay: productionShiftNow().date,
+    isSupervisor: canApprove,
+    canReopenSignedOff: isFullAdmin || hasPerm('can_approve_reopen_request'),
+  })
+
+  // Everything that asks "can I type here" reads this. Everything that means
+  // "the record is signed off" reads `signedOff` above — they were the same
+  // boolean until a submitted record stopped being editable by its operator.
+  const locked = !access.canEdit
 
   const at = active ? prodTotals(active) : { totalIn: 0, totalOut: 0, carryOverIn: 0, carryOverOut: 0, balance: 0 }
   const totalIn = at.totalIn   // active batch — only used for the "machine running" cue
@@ -2000,7 +2048,7 @@ function CaptureScreen() {
             is only accurate if it is recorded when the machine stops.
             Costs this screen nothing until it is tapped: the dialog reads
             nothing on mount and there is no polling anywhere in the feature. */}
-        {!cleanerActor && !locked && flags.operatorTimesheet && (
+        {!cleanerActor && !signedOff && flags.operatorTimesheet && (
           <button onClick={() => setStoppageOpen(true)} title="Log that production has stopped"
             className="flex items-center gap-1.5 px-2.5 py-2 rounded-lg shrink-0 border border-err/30 bg-err/5 text-err hover:bg-err/10 transition-colors">
             <OctagonAlert size={16} />
@@ -2146,6 +2194,25 @@ function CaptureScreen() {
           )}
           {tab === 'production' && active && (
             <>
+              {/* Why this record cannot be typed into, and whose door to knock
+                  on. Shown only on the production tab: the timesheet and the
+                  checks are still this operator's to fill in, so a banner over
+                  the whole screen would be a lie.
+
+                  The sentence comes from core — the same object that disabled
+                  the fields — so the explanation and the lock cannot disagree
+                  about the reason (ARCHITECTURE.md §4). */}
+              {access.readOnlyReason && (
+                <div className="flex items-start gap-2.5 px-4 py-3 bg-stone-50 border border-stone-200 rounded-2xl text-[13px] text-text-muted">
+                  <Lock size={15} className="shrink-0 mt-0.5 text-stone-400" />
+                  <div>
+                    <span className="font-medium text-text">Read-only. </span>
+                    {access.readOnlyReason}
+                    {access.askWho === 'supervisor' && ' Ask your supervisor.'}
+                    {access.askWho === 'management' && ' The production manager can reopen it.'}
+                  </div>
+                </div>
+              )}
               {/* ── The next record ──────────────────────────────────────────
                   One control, on every section, in both post-submit states.
 
@@ -2159,9 +2226,9 @@ function CaptureScreen() {
                   says which step is outstanding: submit it, or fetch someone
                   who can open the next one. A control that silently does
                   nothing gets tapped repeatedly and then reported as broken. */}
-              {flags.changeover && (locked || status === 'submitted') && (
-                <div className={`rounded-2xl p-4 space-y-3 border ${locked ? 'bg-ok/5 border-ok/30' : 'bg-info/5 border-info/30'}`}>
-                  {locked ? (
+              {flags.changeover && (signedOff || status === 'submitted') && (
+                <div className={`rounded-2xl p-4 space-y-3 border ${signedOff ? 'bg-ok/5 border-ok/30' : 'bg-info/5 border-info/30'}`}>
+                  {signedOff ? (
                     <div className="flex items-center gap-2 text-[14px] font-medium text-ok"><Lock size={16} /> This batch record is signed off &amp; locked.</div>
                   ) : (
                     <div className="flex items-center gap-2 text-[14px] font-medium text-info"><CheckCircle2 size={16} /> Submitted — awaiting supervisor sign-off.</div>
@@ -2183,17 +2250,17 @@ function CaptureScreen() {
                   button was pulled. With it off, the old operator-available
                   path stays — removing both at once would leave no way to open
                   the next record at all. */}
-              {!flags.changeover && (locked || status === 'submitted') && (
-                <div className={`rounded-2xl p-4 space-y-3 border ${locked ? 'bg-ok/5 border-ok/30' : 'bg-info/5 border-info/30'}`}>
-                  {locked ? (
+              {!flags.changeover && (signedOff || status === 'submitted') && (
+                <div className={`rounded-2xl p-4 space-y-3 border ${signedOff ? 'bg-ok/5 border-ok/30' : 'bg-info/5 border-info/30'}`}>
+                  {signedOff ? (
                     <div className="flex items-center gap-2 text-[14px] font-medium text-ok"><Lock size={16} /> This batch record is signed off &amp; locked.</div>
                   ) : (
                     <div className="flex items-center gap-2 text-[14px] font-medium text-info"><CheckCircle2 size={16} /> Submitted — awaiting supervisor sign-off.</div>
                   )}
                   <p className="text-[12px] text-text-muted">To capture a different variant or grade on this line, create a <strong>new batch record</strong>. This one stays saved.</p>
                   <button onClick={startNewProduction}
-                    className={`w-full flex items-center justify-center gap-2 py-3 rounded-xl text-white font-medium text-[14px] transition-colors ${locked ? 'bg-brand hover:bg-brand-mid' : 'bg-info hover:opacity-90'}`}>
-                    <Plus size={16} /> {locked ? 'Create new batch record' : 'Start new batch record'}
+                    className={`w-full flex items-center justify-center gap-2 py-3 rounded-xl text-white font-medium text-[14px] transition-colors ${signedOff ? 'bg-brand hover:bg-brand-mid' : 'bg-info hover:opacity-90'}`}>
+                    <Plus size={16} /> {signedOff ? 'Create new batch record' : 'Start new batch record'}
                   </button>
                 </div>
               )}
@@ -2201,7 +2268,7 @@ function CaptureScreen() {
               {/* Routine guide: until start-up checks are done, lead with a clear
                   "do checks first" gate. Strong but not blocking — capture is still
                   below for the cases where they must proceed. */}
-              {hasChecks && !locked && !checksSigned && (
+              {hasChecks && !signedOff && !checksSigned && (
                 <button onClick={() => setTab('checks')}
                   className="w-full flex items-center gap-3 px-4 py-3.5 bg-warn/8 border-2 border-warn/30 rounded-2xl text-left hover:bg-warn/12 transition-colors">
                   <div className="w-9 h-9 rounded-xl bg-warn/15 flex items-center justify-center shrink-0"><Gauge size={18} className="text-warn" /></div>
@@ -2213,7 +2280,7 @@ function CaptureScreen() {
                 </button>
               )}
 
-              {hasChecks && !locked && checksSigned && (
+              {hasChecks && !signedOff && checksSigned && (
                 <ChecksStatusStrip sectionId={sectionId} date={dateParam} shift={shift}
                   running={totalIn > 0} onOpen={() => setTab('checks')} />
               )}
@@ -2440,7 +2507,7 @@ function CaptureScreen() {
 
           {tab === 'checks' && hasChecks && (
             <ChecksPanel
-              sectionId={sectionId} date={dateParam} shift={shift} sessionId={sessionId} locked={locked}
+              sectionId={sectionId} date={dateParam} shift={shift} sessionId={sessionId} locked={signedOff}
               operators={candidateOps}
               variant={active?.variant ?? ''} grade={active?.grade ?? 'A'}
               massBalance={{
@@ -2453,7 +2520,7 @@ function CaptureScreen() {
 
           {tab === 'cleaning' && (
             <CleaningPanel
-              sectionId={sectionId} date={dateParam} shift={shift} sessionId={sessionId} locked={locked}
+              sectionId={sectionId} date={dateParam} shift={shift} sessionId={sessionId} locked={signedOff}
               operators={candidateOps}
               viewer={cleanerActor ? 'cleaner' : 'operator'}
               presignedActor={cleanerActor}

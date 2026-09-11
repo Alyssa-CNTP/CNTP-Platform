@@ -2,6 +2,46 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-11 — Alyssa (History is read-only, and the record knows who may change it)
+
+**Files changed:** `lib/core/production/record-access.ts` + test (landed inert in #984), `app/(app)/production/history/page.tsx`, `app/(app)/production/capture/[section]/page.tsx`
+
+The access rules, wired in. The matrix, as confirmed:
+
+| Record | Operator | Supervisor | Production Manager / IT |
+|---|---|---|---|
+| **In History** — any record, any state | read-only | read-only | read-only |
+| Today, the open record | **edit (capture)** | edit | edit |
+| Today, the earlier record after a changeover | read-only → ask supervisor | **edit** | edit |
+| Submitted, not yet signed | read-only → ask supervisor | **edit** | edit |
+| Signed off | read-only → ask management | read-only → ask management | **edit** |
+| Any earlier production day | read-only → ask supervisor | edit until signed | edit |
+
+### The History delete is gone
+
+Rule 4 settles what was already the worst thing on that page. It ran six client-side deletes in a row — `session_signatures`, **`scan_events`**, `prod_mass_balance`, `prod_debagging`, `prod_bagging`, then the session — behind a `confirm()`. ARCHITECTURE §4 names one of those outright: *never blanket-delete `scan_events`, it is an append-only audit ledger*. No audit row, no transaction, and `prod_sessions` already carries `deleted_at` / `deleted_by` that nothing there used.
+
+What replaces it is not nothing. Each card now says **who** could change the record. Rule 4 says no buttons, not no answers — a reader who spots a mistake still has to know whose door to knock on.
+
+### Capture splits one boolean into two
+
+```
+signedOff = status === 'approved'    a fact about the RECORD
+locked    = !access.canEdit          may THIS person type, right now
+```
+
+They were the same boolean until a submitted record stopped being editable by its operator. Everything asking "can I type here" reads `locked`; everything meaning "the record is signed off" reads `signedOff` — including the changeover panel's caption, which would otherwise label a submitted record "signed off & locked".
+
+**Timesheets, checks and cleaning stay out**, on `signedOff` exactly as before. The first two were named; cleaning follows for a stronger reason — it is signed by a *cleaner*, a different actor, and locking them out because an operator submitted would be the same mistake.
+
+`isCurrentRecord` is now tracked, because after a changeover both records are drafts and status cannot tell them apart. It defaults **true**: a page still loading must not read as a closed record and lock an operator out of their own screen.
+
+### One limit, stated plainly
+
+The capture screen saves **directly to Supabase from the browser** — there is no route between it and `prod_sessions`. So this is a client-side gate with RLS as the only backstop, not the server-side "decide from a fresh read" that §6 asks for. Making it that means putting the save behind a route, which is a larger change than this one.
+
+**Gates:** tests 1046 · boundaries clean · hooks clean · typecheck 28, at baseline · lint 3010, six **under** baseline · `next build` exit 0.
+
 ## 2026-09-11 — Alyssa (The changeover follows the submit, and reaches every line)
 
 **Files changed:** `lib/core/changeover.ts` + test, `features/changeover/ChangeoverDialog.tsx`, `features/changeover/changeover-ui.test.tsx`, `app/(app)/production/capture/[section]/page.tsx`
