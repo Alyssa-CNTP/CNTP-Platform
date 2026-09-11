@@ -1503,6 +1503,11 @@ export default function SievingPage() {
     if (!specDef.noLotNumber&&!f.lotNumber.trim()) errs.lotNumber='Lot number is required'
     if (!f.date)              errs.date='Date is required'
     if (!f.qcName.trim())     errs.qcName='QC controller is required'
+    // The time is typed now, so it has to be checked. Blank or malformed would
+    // otherwise reach the database as the run's official time and stay there —
+    // the column is immutable once written.
+    if (!f.time || !f.time.trim()) errs.time='Time of run is required'
+    else if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(f.time.trim())) errs.time='Time must be HH:MM (24-hour)'
     if (!f.grade)             errs.grade='Grade is required'
     if (!f.variant)           errs.variant='Variant is required'
     if (!f.runType)           errs.runType='Run type is required'
@@ -1605,13 +1610,20 @@ export default function SievingPage() {
       variant:       form.variant||null,
       run_type:      form.runType||null,
       qc_name:       form.qcName||null,
-      // Always the capture moment — the QC cannot type or edit this.
-      time_of_run:   nowHHMM(),
-      // The tamper-resistant record of when this run was actually captured —
-      // a real UTC instant, set once here and never touched by the edit path
-      // below (see the onSave handler's dbRow, which omits it entirely). The
-      // human-facing date/time_of_run fields stay locked in the edit screen
-      // too, but this is the one nothing in the app can ever rewrite.
+      // WHEN THE RUN HAPPENED, as typed by the QC. For a run captured as it is
+      // done this is simply now; for a back-capture it is the time the sieve was
+      // actually run. It used to be forced to the save clock, which produced
+      // date+time pairs that never happened and sorted the row into the wrong
+      // day. Changing it later is restricted to IT.
+      time_of_run:   form.time,
+      // WHEN IT WAS CAPTURED. The database stamps this itself
+      // (qms.sd_runs_when_it_happened_guard), but the value is still sent: the
+      // column is nullable with no default, so a client that ships ahead of the
+      // trigger would otherwise write NULL. The trigger overwrites whatever
+      // arrives, so this is a fallback, never a claim.
+      //
+      // It is what makes a back-capture legible as one: a run dated 21 Aug
+      // carrying a run_timestamp of 11 Sep was plainly entered after the fact.
       run_timestamp: new Date().toISOString(),
       bagging_id:    form.baggingId || null,
       needle_count:  form.needleCount||null,
@@ -2335,13 +2347,24 @@ export default function SievingPage() {
               <QCNameField value={form.qcName} onChange={v=>setF('qcName',v)} names={qcNames} style={{...inputSt,borderColor:errors.qcName?'#fca5a5':'#d1d5db',padding:'9px 10px',fontSize:13}}/>
               <ErrMsg field="qcName"/>
             </div>
-            {/* Time is stamped when the QC saves — deliberately not editable. */}
+            {/* WHEN THE RUN HAPPENED — typed by the QC, because only they know
+                it. Defaults to now for a run being captured as it is done; for a
+                back-capture it is set to the time the sieve was actually run.
+                Stamping it with the save clock instead produced date+time pairs
+                that never happened (a run done 21 Aug 09:08 reading 11:25 on the
+                day it was recaptured) and sorted the row into the wrong place.
+                Separately and invisibly, the database stamps run_timestamp with
+                the real capture instant. Correcting either afterwards is
+                restricted to IT (qms.sd_runs_when_it_happened_guard). */}
             <div>
-              <label style={{fontSize:10,fontWeight:700,color:'#374151',display:'block',marginBottom:4,textTransform:'uppercase'}}>
-                Time <span style={{fontSize:9,color:'#6b7280',fontWeight:400}}>🔒 stamped at capture</span>
+              <label style={{fontSize:10,fontWeight:700,color:errors.time?'#dc2626':'#374151',display:'block',marginBottom:4,textTransform:'uppercase'}}>
+                Time of run * <span style={{fontSize:9,color:'#6b7280',fontWeight:400}}>when the sieve was done</span>
               </label>
-              <input type="text" value={form.time} readOnly title="The time is recorded automatically when you save this run"
-                style={{...inputSt,padding:'9px 10px',fontSize:13,background:'#f3f4f6',color:'#6b7280',cursor:'not-allowed'}}/>
+              <input type="time" value={form.time} onChange={e=>setF('time',e.target.value)}
+                title="The time the run was actually done. Once saved, only IT can change it."
+                style={{...inputSt,padding:'9px 10px',fontSize:13,borderColor:errors.time?'#fca5a5':'#d1d5db'}}/>
+              <ErrMsg field="time"/>
+              <div style={{fontSize:9,color:'#6b7280',marginTop:2}}>🔒 only IT can change it later</div>
             </div>
           </div>
 
@@ -2659,6 +2682,11 @@ export default function SievingPage() {
                             if (sp[1]!==0&&v>sp[1]) vios.push(`${m} ${v.toFixed(1)}% > max ${sp[1]}%`)
                           })
                           const dbRow: any = {
+                            // date and time_of_run still travel with the edit.
+                            // The database lets an unchanged value through and
+                            // refuses a CHANGED one unless the caller is IT
+                            // (qms.sd_runs_when_it_happened_guard), so an
+                            // ordinary QC edit of anything else is unaffected.
                             date: updated.date, lot_number: updated.lotNumber||null,
                             serial_number: updated.serialNumber||null, grade: updated.grade,
                             variant: updated.variant, run_type: updated.runType,
