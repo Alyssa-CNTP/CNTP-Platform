@@ -8,6 +8,7 @@ import { createClient }       from '@supabase/supabase-js'
 import { cookies }            from 'next/headers'
 import { queryGeminiDetailed } from '@/lib/intelligence/gemini'
 import { houseStyleBlock }     from '@/lib/intelligence/house-style'
+import { getCallerPermissions } from '@/lib/auth/server-helpers'
 
 export const maxDuration = 60
 
@@ -69,6 +70,22 @@ export async function POST(req: Request) {
 
   const body   = await req.json().catch(() => ({}))
   const action = body.action as string
+
+  // The three actions here that WRITE take the full-use key. Reading, listing
+  // and the AI brief generators stay on the rule above.
+  //
+  // can_view_marketing (what the read-only grant hands out for this module)
+  // deliberately does not pass, and neither does department membership on its
+  // own any more — a Management user who genuinely needs to save a campaign or
+  // bookmark a signal gets can_access_marketing ticked, which is one toggle and
+  // leaves a record of the decision. can_access_sales is not accepted because it
+  // is the Sales module's READ key, so the grant resolves it for viewers.
+  if (action === 'save_campaign' || action === 'save_report' || action === 'bookmark_signal') {
+    const caller = await getCallerPermissions()
+    if (!caller.can('can_access_marketing')) {
+      return NextResponse.json({ error: 'Read-only access — cannot save marketing records' }, { status: 403 })
+    }
+  }
 
   // ── Non-AI actions ──────────────────────────────────────────────────────────
 

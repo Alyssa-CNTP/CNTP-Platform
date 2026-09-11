@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
+import { useAuth } from '@/lib/auth/context'
 import {
   FileSpreadsheet, Upload, CheckCircle2, AlertCircle,
   Loader2, ChevronDown, ChevronUp, Search,
@@ -560,6 +561,8 @@ function HistoryTab({ imports, loading }: { imports: PastImport[]; loading: bool
 type Tab = 'overview' | 'history'
 
 export default function GlobalWitsPage() {
+  const { p } = useAuth()
+  const canImport = p('can_access_intelligence')
   const [tab,          setTab]          = useState<Tab>('overview')
   const [loading,      setLoading]      = useState(false)
   const [status,       setStatus]       = useState('')
@@ -630,7 +633,11 @@ export default function GlobalWitsPage() {
         <div className="max-w-[960px] mx-auto p-6 space-y-5">
           {tab === 'overview' && (
             <>
-              <DropZone onFile={handleFile} loading={loading} status={status} />
+              {/* Import is the one WRITE on this page, so it takes the full-use
+                  key. A read-only viewer (can_view_intelligence) reads the
+                  overview and history without being shown a drop zone the API
+                  would refuse — /api/global-wits enforces the same key. */}
+              {canImport && <DropZone onFile={handleFile} loading={loading} status={status} />}
               {result && <ResultBanner result={result} onDismiss={() => setResult(null)} />}
               <OverviewTab stats={stats} topCountries={topCountries} topBuyers={topBuyers} loading={overLoading} />
             </>

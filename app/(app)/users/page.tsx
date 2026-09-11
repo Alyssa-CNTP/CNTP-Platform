@@ -14,7 +14,7 @@ import {
   resolvePermission, resolveAllPermissions,
   type Department, type PermissionKey, type Permissions,
 } from '@/lib/auth/permissions'
-import { PERMISSION_MATRIX } from '@/lib/auth/permission-registry'
+import { PERMISSION_MATRIX, moduleReadKey } from '@/lib/auth/permission-registry'
 import { Plus, Trash2, KeyRound, RefreshCw, ChevronDown, ChevronUp, Check, Mail, Activity, Shield, Clock } from 'lucide-react'
 
 const ALYSSA_UUID = 'df6cc2b1-c0ec-47ed-bb2e-b07771f3bf0e'
@@ -367,6 +367,20 @@ function PermissionMatrix({ role, department, overrides, onChange, readOnly }: {
             <span style={{ ...FONT, fontSize: 13, fontWeight: 700, color: '#111827' }}>{m.module}</span>
             {m.department && m.department !== department && (
               <span style={{ ...FONT, fontSize: 9, fontWeight: 700, color: '#6B7280', background: '#F3F4F6', borderRadius: 20, padding: '1px 7px' }}>cross-dept</span>
+            )}
+            {/* One switch for "read-only across this module". It grants every
+                Read cell in the table below without ticking them one by one,
+                and keeps granting them as resources are added — the keys come
+                from PERMISSION_MATRIX at resolve time, not from a snapshot
+                taken when the box was ticked. Administration has no switch
+                (readGrant: false) because none of its rows is a plain view. */}
+            {m.readGrant !== false && (
+              <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ ...FONT, fontSize: 9, fontWeight: 700, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                  Read-only
+                </span>
+                <CellToggle pk={moduleReadKey(m.slug)} />
+              </span>
             )}
           </div>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
