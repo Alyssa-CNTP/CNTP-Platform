@@ -53,6 +53,53 @@ One rough edge, stated rather than hidden: on the Alara and Marketing pages the 
 
 ---
 
+## 2026-09-11 — Alyssa (A shift that changed over showed one card, one variant and one status — for two records)
+
+**Files changed:** `lib/core/production/shift-records.ts` + test (new), `app/(app)/production/capture/page.tsx`
+
+Reported from the floor: after a changeover the capture page doesn't show it, and the operator gets a variant-mismatch error on a scan that is perfectly correct.
+
+Both halves of that are true, and the data was never the problem.
+
+### The records existed; three bits of UI hid them
+
+A line that switches grade or variant opens a **second `prod_sessions` row**. It has to — appending a batch to the open session is what doubled Sieving's debagging on 2026-09-01 (8 → 16 → 32 → … → 262 rows for 17 bags actually debagged), because the debag self-heal is scoped to `session_id` with no batch discriminator. The database already numbers them: `ST-040826-01`, `ST-040826-02`.
+
+The hub never read them.
+
+- The variant and lot chips came from **`shift_assignments`** — the supervisor's roster row, which has one variant and one lot no matter what the shift went on to do. On 23 July the Blender ran Conventional then Organic; the card said Conventional.
+- The status came from `statusMap[section_id] = status`, built by looping the rows. **With two records the last one read won, arbitrarily.** A section with an approved first record and a draft second one showed "Signed off" about half the time.
+- The card linked without a `session` parameter, so the page opened whichever record was newest. Land on the wrong half of a changeover and a legitimate bag is refused — the error is right and unexplainable at the same time.
+
+### One card per record
+
+`lib/core/production/shift-records.ts` answers "which records does this shift have, in what order, and is the section finished". It is core because it is a rule, and because the changeover rules taught this exact lesson: they lived as four inline expressions until they drifted (ARCHITECTURE.md §4).
+
+Ordering is by the **record number's trailing sequence**, anchored at the end rather than split on `-` — a Granule-style lot carries its own hyphens and `split('-')` mis-reads it, the same trap serials have (§5). `created_at` is the fallback, an unparseable timestamp sorts last rather than first, and ties break on `id` so two tablets cannot disagree about the order.
+
+Each card now carries its own variant, lot, production order and status, shows `2/2` and its record number when the shift has more than one, and links to its **own** session. A record falls back to the roster only where its own field is blank — never over a value it has, which is what made the Organic blend read as Conventional.
+
+`sectionStatus()` replaces the last-wins map: a section is finished only when **every** record is, and otherwise reports the most urgent thing outstanding — something awaiting sign-off outranks something still being captured, because it is waiting on a person rather than on the line.
+
+The **sign-off queue** is now per record too. Two records are signed off separately; listing the section once sent the supervisor to whichever record the page happened to open and left the other waiting, invisibly.
+
+### Checked against the real data
+
+All 11 multi-record shifts on staging render correctly. The ones worth naming:
+
+| Shift | Now shows |
+|---|---|
+| Blender 23 Jul | `BL-230726-01` Conventional · `BL-230726-02` **Organic** (roster said Conventional) |
+| Refining 1, 6 Jul | four cards, `1/4`–`4/4`, section reads **submitted** — previously one card with a coin-flip status |
+| Sieving 12 Jun afternoon | `ST-120626-03` approved · `-04` draft — numbering continues across shifts and still sorts right |
+| Sieving 18 Jun | `-01` and `-03`; the gap from a deleted record is handled |
+
+### Not fixed here
+
+The mid-shift **Changeover button still does not exist on production**. It was removed from `main` when the duplication was found; the rebuilt version lives in `features/changeover/` on staging behind `NEXT_PUBLIC_FF_CHANGEOVER`. Operators on production use "Start new batch record", which opens the same second session this change now displays. This is the display half only.
+
+**Gates:** tests 988 (20 new) · boundaries clean · hooks clean · typecheck 28, at baseline · lint 3012, four **under** baseline · `next build` exit 0.
+
 ## 2026-09-11 — Alyssa (The sign-off chain gets a UI, the gates get wired, and the Pasteuriser registers its output)
 
 **Files changed:** `lib/production/label-sign-offs.ts` + test, `lib/production/bag-tag-write.ts` + test, `features/pasteuriser-labels/components/SignOffChain.tsx`, `features/pasteuriser-labels/index.ts`, `app/(app)/pasteuriser/labels/[id]/page.tsx`, `app/(app)/pasteuriser/run/page.tsx`, `app/api/pasteuriser/print/route.ts`, `app/api/pasteuriser/labels/[id]/sign-off/route.ts`, `app/api/pasteuriser/job-cards/[id]/sign-off/route.ts`, `app/api/production/job-cards/[id]/decide/route.ts`, `components/production/capture/PasteuriserCapture.tsx`
