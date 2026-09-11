@@ -1639,16 +1639,28 @@ export default function SievingPage() {
     const mapped = mapDbRow(saved)
     setRuns(prev=>({ ...prev, [activeProduct]: [...(prev[activeProduct]||[]), mapped] }))
 
-    // Link QC result back to the bag for audit trail (best-effort — don't block save).
-    // Only Final QC runs carry a serial (In-Process nulls it in sd_runs at line
-    // 1530, but form.serialNumber in React state can retain a stale value from a
-    // prior run — gating on runType prevents attaching a QC event to the wrong bag).
-    if (form.runType === 'final' && form.serialNumber?.trim()) {
-      const serial = form.serialNumber.trim().toUpperCase()
-      const now = new Date().toISOString()
+    // Link the QC result back to the bag (best-effort — never blocks the save).
+    //
+    // Keyed off the serial the RUN actually stored, not the form field. Those
+    // two are not the same thing: an In-Process run deliberately saves
+    // serial_number = null (a bag is only serialised at bagging), while the form
+    // may still be holding a serial from an earlier Final QC — "Sample now →"
+    // pre-fills one, and switching product tabs leaves it behind. Stamping off
+    // the form therefore marked a bag as QC-checked on the strength of an
+    // in-process reading that was never about that bag, and sometimes not even
+    // about that product: STFL-270826-001 collected three such marks, one of
+    // them captured on the Rooibos Blocks tab.
+    //
+    // Reading `saved.serial_number` makes the bag's ledger incapable of
+    // disagreeing with the run behind it — if no run references the bag, no
+    // event or stamp is written for it.
+    // Supersedes the runType gate added on main in 2ffd4c2: that still trusted
+    // form.serialNumber, which can be stale. saved.serial_number cannot be.
+    const savedSerial = (saved?.serial_number ?? '').trim().toUpperCase()
+    if (savedSerial) {
       const passLabel = newRun.pass_status === 'Pass' ? 'Pass' : 'Fail'
-      await setBagQcStamp(serial, form.qcName || null, now)
-      await appendBagEvent(serial, 'qc_check',
+      await setBagQcStamp(savedSerial, form.qcName || null, new Date().toISOString())
+      await appendBagEvent(savedSerial, 'qc_check',
         `${passLabel} · QC: ${form.qcName || '—'} · ${activeProduct} ${form.grade} ${form.variant}${newRun.violations?.length ? ' · ' + newRun.violations.join('; ') : ''}`)
     }
 
