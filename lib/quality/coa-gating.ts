@@ -7,6 +7,12 @@
  * signatures — and neither was testable inside a 1300-line component.
  */
 
+// The same "is this analysis asked for?" test the COA builder and the spec
+// editor use. Blank means the spec is silent; the literal 'NOT REQUIRED' is how
+// the client spec sheets write an analysis the buyer does not want. Treating
+// either as a requirement is what puts an unsatisfiable row on a certificate.
+import { specFieldRequired } from './heavy-metals'
+
 /** The analyses a COA can include. Mirrors CoaModel['sections']. */
 export type CoaSectionKey =
   | 'micro' | 'cutLength' | 'residue' | 'pa'
@@ -52,6 +58,56 @@ const SECTION_SOURCE: Record<CoaSectionKey, { found: keyof CoaFound; label: stri
   moshMoah:            { found: 'moshMoah',            label: 'MOSH/MOAH',                                     href: LAB,  where: 'Lab Results → MOSH/MOAH' },
   chloratePerchlorate: { found: 'chloratePerchlorate', label: 'Chlorate/Perchlorate',                          href: LAB,  where: 'Lab Results → Chlorate/Perchlorate' },
   glyphosate:          { found: 'glyphosate',          label: 'Glyphosate',                                    href: LAB,  where: 'Lab Results → Glyphosate' },
+}
+
+/**
+ * Does this COA include a Glyphosate row?
+ *
+ * This was `src.isOrganic || (spec ? req(spec.glyphosate) : found)`, which
+ * forced the section on for EVERY organic batch no matter what the matched
+ * customer spec said. Kunitaro's IPS-KUN-006 (RA-Organic) asks for no
+ * glyphosate at all, so the section came on, no glyphosate result existed to
+ * satisfy it, and the COA could not be generated — and because both managers
+ * had already signed, the section was locked and the "Drop from COA" button
+ * was disabled. A signed COA in that state can never be printed.
+ *
+ * The rule now: **when a customer spec matched, the spec is the authority.**
+ * The buyer's specification is the document that says which analyses their
+ * certificate carries; a blanket override defeats the point of matching one.
+ * The organic default still applies where there is no spec to consult, which
+ * is the case it was really written for.
+ *
+ * A result that exists never forces the section on by itself — an analysis the
+ * buyer did not ask for does not belong on their certificate just because the
+ * lab happened to run it. It can still be ticked by hand.
+ */
+export function wantsGlyphosateSection(a: {
+  /** Did a customer spec match this batch at all? */
+  specMatched: boolean
+  /** The spec's glyphosate field, if a spec matched. */
+  specValue?: unknown
+  /** Is this an organic batch? */
+  isOrganic?: boolean
+  /** Is there a glyphosate lab result for this batch? */
+  foundResult?: boolean
+}): boolean {
+  if (a.specMatched) return specFieldRequired(a.specValue)
+  return !!a.isOrganic || !!a.foundResult
+}
+
+/**
+ * An organic batch whose matched spec is silent on glyphosate. Not an error and
+ * not a blocker — but the old code force-ticked exactly this case, so if the
+ * lab does want glyphosate on an organic certificate they need to be told the
+ * spec is not asking for it rather than discovering it missing after printing.
+ */
+export function glyphosateAdvisory(a: {
+  specMatched: boolean
+  specValue?: unknown
+  isOrganic?: boolean
+  sectionOn?: boolean
+}): boolean {
+  return !!a.isOrganic && a.specMatched && !specFieldRequired(a.specValue) && !a.sectionOn
 }
 
 /** Section order on the COA, so the blocker list reads in document order. */
@@ -134,5 +190,20 @@ export function coaContentLocked(labSigned: boolean, qaSigned: boolean): boolean
  * record, and the people accountable for the document are its signatories.
  */
 export function canDeleteGeneratedCoa(me: { isLab?: boolean; isQa?: boolean } | null | undefined): boolean {
+  return !!(me?.isLab || me?.isQa)
+}
+
+/**
+ * Who may withdraw a sign-off, sending a COA back down the chain to be
+ * corrected. The same two managers who may delete one: a withdrawal removes a
+ * signature, so only the people whose signatures are on the document.
+ *
+ * This exists because the lock had no way out. Once both managers signed, the
+ * included sections were fixed — including a section ticked in error, which
+ * then blocked generation with the "Drop from COA" button disabled. The answer
+ * is not to let signed content be edited quietly; it is to withdraw the
+ * sign-off, correct the COA, and have it signed again.
+ */
+export function canWithdrawCoaSignoff(me: { isLab?: boolean; isQa?: boolean } | null | undefined): boolean {
   return !!(me?.isLab || me?.isQa)
 }

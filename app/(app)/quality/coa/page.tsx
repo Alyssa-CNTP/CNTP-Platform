@@ -34,7 +34,8 @@ import { loadImage } from '@/lib/pdf/load-image'
 import { useDraftAutosave, readDraft, clearDraft } from '@/lib/hooks/useDraftAutosave'
 import DraftRecoveryBanner from '@/components/shared/DraftRecoveryBanner'
 import { wantsHeavyMetals, heavyMetalSpecParts } from '@/lib/quality/heavy-metals'
-import { coaGaps, coaHeaderFieldLocked, coaContentLocked, canDeleteGeneratedCoa } from '@/lib/quality/coa-gating'
+import { coaGaps, coaHeaderFieldLocked, coaContentLocked, canDeleteGeneratedCoa,
+         canWithdrawCoaSignoff, wantsGlyphosateSection, glyphosateAdvisory } from '@/lib/quality/coa-gating'
 
 // ─── Standard wording (identical across every COA) ────────────────────────────
 
@@ -137,6 +138,14 @@ interface CoaModel {
   sections: { micro: boolean; cutLength: boolean; residue: boolean; pa: boolean; heavyMetals: boolean; moshMoah: boolean; chloratePerchlorate: boolean; glyphosate: boolean }
   matchedDoc: string          // doc_no of the customer spec applied ('' = none)
   candidateDocs: { doc_no: string; label: string }[]  // this customer's specs, for the picker
+  /**
+   * Organic batch whose matched spec says nothing about glyphosate. Advisory
+   * only — it does not block and does not tick the section. It exists because
+   * the builder used to force glyphosate on for exactly this case; now that
+   * the spec governs, the lab is told the spec is silent rather than finding
+   * the row missing after the certificate is printed.
+   */
+  glyphosateNote: boolean
 }
 
 // Map the COA cut-length rows (gt6…dust) to coa_specs mesh keys (">6"…"Dust -60").
@@ -170,6 +179,49 @@ function scoreSpec(spec: any, customer: string, grade: string, variant: string):
   let overlap = 0; g.forEach(t => { if (sg.has(t)) overlap++ })
   score += overlap * 8
   return score
+}
+
+/**
+ * The coa_specs fields this page reads. Enough to rank and label a spec row;
+ * the limits themselves stay untyped inside `specs` (a free-form jsonb block).
+ */
+type SpecRow = {
+  doc_no?: string | null
+  customer?: string | null
+  grade?: string | null
+  variant?: string | null
+  product_description?: string | null
+  specs?: Record<string, Record<string, unknown> | undefined> | null
+  [k: string]: unknown
+}
+
+/**
+ * This customer's specs for this batch, best match first, with the picker
+ * labels. Written once and used by both the initial lookup and "Reload specs" —
+ * two copies of a matching rule is how a COA ends up judged against a different
+ * document depending on which button you pressed.
+ */
+function rankSpecsForBatch(specs: SpecRow[], customer: string, grade: string, variant: string) {
+  const ranked = specs
+    .map(s => ({ s, score: scoreSpec(s, customer, grade, variant) }))
+    .filter(x => x.score >= 100)   // must at least match the customer
+    .sort((a, b) => b.score - a.score)
+  return {
+    best: ranked.length ? ranked[0].s : null,
+    candidateDocs: ranked.map(x => ({
+      doc_no: String(x.s.doc_no ?? ''),
+      label: `${x.s.doc_no ?? ''} — ${x.s.product_description || ''} (${x.s.variant || '—'})`,
+    })),
+  }
+}
+
+/** The customer/grade/variant a batch is matched on, from its pasteuriser row. */
+function specKeyForBatch(past: { customer?: string; type_grade?: string; grade?: string; variant?: string; is_organic?: boolean } | null | undefined, fallbackKey: string) {
+  return {
+    customer: past?.customer || '',
+    grade: past?.type_grade || [past?.grade, past?.variant].filter(Boolean).join(' ') || '',
+    variant: past?.variant || (past?.is_organic ? 'Organic' : '') || fallbackKey,
+  }
 }
 
 // Build the Bulk Density spec string from a coa_specs row's bd_min/bd_max.
@@ -258,6 +310,8 @@ export default function CoaGeneratorPage() {
   // deliberately NOT extended to full admins: this removes a quality record,
   // and the two people accountable for the document are the two who signed it.
   const canDeleteCoa = canDeleteGeneratedCoa(sigInfo.me)
+  // The route back down the chain — same two managers, for the same reason.
+  const canWithdrawSignoff = canWithdrawCoaSignoff(sigInfo.me)
   const hasSig = sigInfo.me.hasSignature
   const canSignLab = iAmLab && hasSig
   const canSignQa  = iAmQa  && hasSig
@@ -422,17 +476,10 @@ export default function CoaGeneratorPage() {
     const waRec     = labFor('water_activity')
     const microData = microRec ? (microRec.results || microRec) : {}
 
-    const customer = past?.customer || ''
-    const grade    = past?.type_grade || [past?.grade, past?.variant].filter(Boolean).join(' ') || ''
-    const variant  = past?.variant || (past?.is_organic ? 'Organic' : '') || key
+    const { customer, grade, variant } = specKeyForBatch(past, key)
 
     // ── Candidate customer specs + best match ──
-    const specs = csRes.data ?? []
-    const candidates = specs
-      .map((s: any) => ({ s, score: scoreSpec(s, customer, grade, variant) }))
-      .filter((x: any) => x.score >= 100)   // must at least match the customer
-      .sort((a: any, b: any) => b.score - a.score)
-    const bestSpec = candidates.length ? candidates[0].s : null
+    const { best: bestSpec, candidateDocs } = rankSpecsForBatch((csRes.data ?? []) as SpecRow[], customer, grade, variant)
 
     const src = {
       batch, past, microData, moistureAvg, bdAvg, cutResults, hasSieve,
@@ -455,7 +502,7 @@ export default function CoaGeneratorPage() {
         invoice_no: orderRow?.invoice_no || '', order_number: orderRow?.order_number || '',
         quantity_kg: orderRow?.quantity_kg || '', quantity_bags: orderRow?.quantity_bags || '',
       },
-      candidateDocs: candidates.map((x: any) => ({ doc_no: x.s.doc_no, label: `${x.s.doc_no} — ${x.s.product_description || ''} (${x.s.variant || '—'})` })),
+      candidateDocs,
     }
     setSources(src)
     setModel(buildModel(src, bestSpec))
@@ -468,6 +515,76 @@ export default function CoaGeneratorPage() {
     if (!sources) return
     const spec = allSpecs.find(s => s.doc_no === docNo) || null
     setModel(buildModel(sources, spec))
+  }
+
+  // ── Pull the customer specs again ────────────────────────────────────────
+  // qms.coa_specs is read ONCE, inside lookup(). Edit a spec under Customer
+  // Specs → COA Requirements and come back to a COA already on screen and it
+  // still shows the limits as they were when the batch was looked up — the
+  // change silently does not pull through. Worse, a COA opened from History or
+  // from either queue has sources === null, so applyDoc() returned early and
+  // the spec could not be re-applied at all.
+  //
+  // This re-fetches the specs and rebuilds the model against the current ones.
+  // With no sources to rebuild from (a history snapshot) it re-runs the full
+  // lookup, which is the only honest way to show current specs against current
+  // results.
+  const [reloadingSpecs, setReloadingSpecs] = useState(false)
+  const reloadSpecs = async () => {
+    if (!model) return
+    const batch = model.header.batch_number || model.batch
+    if (contentLocked) {
+      alert('This COA is signed by both managers, so its specifications are fixed.\n\nTo apply an updated spec, withdraw the sign-off first — the COA then goes back down the chain to be corrected and signed again.')
+      return
+    }
+    setReloadingSpecs(true)
+    if (!sources) { await lookup(batch); setReloadingSpecs(false); return }
+
+    const { data, error } = await db.schema('qms').from('coa_specs').select('*')
+    if (error) { setReloadingSpecs(false); alert('Could not reload specs: ' + error.message); return }
+    const specs = (data ?? []) as SpecRow[]
+    setAllSpecs(specs)
+
+    const { customer, grade, variant } = specKeyForBatch(sources.past, normBatch(batch))
+    const ranked = rankSpecsForBatch(specs, customer, grade, variant)
+
+    // Keep the operator's chosen document if they picked one by hand; only fall
+    // back to re-matching when nothing is selected. Silently re-matching would
+    // undo a deliberate choice.
+    const chosen = model.matchedDoc ? specs.find(s => s.doc_no === model.matchedDoc) ?? null : null
+    const next = chosen ?? ranked.best
+
+    setModel(buildModel({ ...sources, candidateDocs: ranked.candidateDocs }, next))
+    setReloadingSpecs(false)
+    alert(model.matchedDoc
+      ? `Specifications reloaded. ${model.matchedDoc} is now showing its current limits.`
+      : 'Specifications reloaded from Customer Specs.')
+  }
+
+  // ── Withdraw a sign-off ──────────────────────────────────────────────────
+  // The way back down the chain. See the 'withdraw' branch in
+  // app/api/quality/coa-signoff/route.ts for why a one-way chain was a trap.
+  const [withdrawing, setWithdrawing] = useState(false)
+  const withdrawSignoff = async (batchNo: string, scope: 'qa' | 'all') => {
+    if (!canWithdrawSignoff) { alert('Only the Lab Manager and the Quality Manager may withdraw a COA sign-off.'); return }
+    const what = scope === 'all'
+      ? "BOTH managers' signatures will be removed and the COA goes back to unsigned."
+      : "The Quality Manager's signature will be removed and the COA goes back to Awaiting QA sign-off."
+    const reason = prompt(`Withdraw the sign-off for batch ${batchNo}?\n\n${what}\nThe COA can then be corrected and signed again.\n\nBriefly, why? (recorded against the withdrawal)`)
+    if (reason === null) return
+    if (!reason.trim()) { alert('A reason is required — a withdrawn signature has to be explainable.'); return }
+
+    setWithdrawing(true)
+    const res = await fetch('/api/quality/coa-signoff', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ batch_no: batchNo, action: 'withdraw', scope, reason: reason.trim() }),
+    })
+    const out = await res.json().catch(() => ({}))
+    setWithdrawing(false)
+    if (!res.ok) { alert(out.error || 'Could not withdraw the sign-off.'); return }
+    setSignoff(out.signoff ?? null)
+    loadQueue(); loadPrintQueue()
+    alert(`Sign-off withdrawn for ${batchNo}. The COA is editable again.`)
   }
 
   // Re-open a COA from History for editing (to correct a mistake). Loads the
@@ -497,6 +614,9 @@ export default function CoaGeneratorPage() {
       sections,
       matchedDoc: h.doc_no || '',
       candidateDocs: [],
+      // A historical COA is shown as it was printed; the advisory is about
+      // building a new one, so it never fires on a snapshot.
+      glyphosateNote: false,
     })
     setShowHistory(false)
     window.scrollTo({ top: 0, behavior: 'smooth' })
@@ -666,8 +786,18 @@ export default function CoaGeneratorPage() {
                       <td className="px-2 py-1 whitespace-nowrap">{q.qa_name || '—'}</td>
                       <td className="px-2 py-1 whitespace-nowrap text-gray-500">{String(q.qa_signed_at || '').slice(0, 10)}</td>
                       <td className="px-2 py-1 whitespace-nowrap">
-                        <button onClick={() => { setBatchInput(q.batch_no); setShowPrintQueue(false); lookup(q.batch_no) }}
-                          className="px-3 py-1 rounded-lg text-white text-[11px] font-bold" style={{ background: '#166534' }}>Open to print</button>
+                        <div className="flex items-center gap-2">
+                          <button onClick={() => { setBatchInput(q.batch_no); setShowPrintQueue(false); lookup(q.batch_no) }}
+                            className="px-3 py-1 rounded-lg text-white text-[11px] font-bold" style={{ background: '#166534' }}>Open to print</button>
+                          {/* A fully signed COA had no way back. If what was
+                              signed is wrong, this returns it to the QA queue
+                              to be corrected rather than leaving it stuck. */}
+                          {canWithdrawSignoff && (
+                            <button onClick={() => withdrawSignoff(q.batch_no, 'qa')} disabled={withdrawing}
+                              title="Withdraw the Quality Manager's sign-off — sends this COA back to be corrected"
+                              className="px-3 py-1 rounded-lg text-[11px] font-bold border border-amber-400 bg-white text-amber-800 disabled:opacity-50">↩ Withdraw</button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -701,8 +831,18 @@ export default function CoaGeneratorPage() {
                       <td className="px-2 py-1 whitespace-nowrap text-gray-500">{String(q.lab_signed_at || '').slice(0, 10)}</td>
                       <td className="px-2 py-1 whitespace-nowrap">{q.status === 'sent_to_qa' ? '📨 Sent to QA' : '🖊️ Lab signed'}</td>
                       <td className="px-2 py-1 whitespace-nowrap">
-                        <button onClick={() => { setBatchInput(q.batch_no); setShowQueue(false); lookup(q.batch_no) }}
-                          className="px-3 py-1 rounded-lg text-white text-[11px] font-bold" style={{ background: '#7c3aed' }}>Open & sign</button>
+                        <div className="flex items-center gap-2">
+                          <button onClick={() => { setBatchInput(q.batch_no); setShowQueue(false); lookup(q.batch_no) }}
+                            className="px-3 py-1 rounded-lg text-white text-[11px] font-bold" style={{ background: '#7c3aed' }}>Open & sign</button>
+                          {/* Recall a COA the lab manager signed in error: clears
+                              both signatures so it drops out of this queue and
+                              can be rebuilt before going to the QA manager. */}
+                          {canWithdrawSignoff && (
+                            <button onClick={() => withdrawSignoff(q.batch_no, 'all')} disabled={withdrawing}
+                              title="Withdraw the lab sign-off — removes this COA from the queue so it can be corrected and re-signed"
+                              className="px-3 py-1 rounded-lg text-[11px] font-bold border border-amber-400 bg-white text-amber-800 disabled:opacity-50">↩ Recall</button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -786,7 +926,19 @@ export default function CoaGeneratorPage() {
           {/* Outstanding + section toggles */}
           {/* Customer spec picker — drives the Specification column + which sections apply */}
           <div className="mb-4 no-print border border-gray-200 rounded-lg p-3">
-            <div className="text-[11px] font-bold uppercase text-gray-500 mb-1">Customer specification</div>
+            <div className="flex items-center justify-between mb-1">
+              <div className="text-[11px] font-bold uppercase text-gray-500">Customer specification</div>
+              {/* Specs are read once at lookup, so an edit made in Customer
+                  Specs after this COA was opened does not pull through on its
+                  own. This is how you pull it through. */}
+              <button onClick={reloadSpecs} disabled={reloadingSpecs || contentLocked}
+                title={contentLocked
+                  ? 'Signed by both managers — withdraw the sign-off to apply an updated spec'
+                  : 'Fetch the customer specs again and re-apply them to this COA'}
+                className="px-2 py-0.5 rounded border border-gray-300 bg-white text-[10px] font-semibold text-gray-700 disabled:opacity-50 disabled:cursor-not-allowed">
+                {reloadingSpecs ? 'Reloading…' : '↻ Reload specs'}
+              </button>
+            </div>
             {model.candidateDocs.length === 0 ? (
               <div className="text-[12px] text-amber-700">No customer spec found for this batch's customer — specs will be blank. Add one under Customer Specs → COA Requirements.</div>
             ) : (
@@ -856,13 +1008,43 @@ export default function CoaGeneratorPage() {
             </div>
           )}
 
+          {/* Organic batch, matched spec silent on glyphosate. Advisory only —
+              the builder used to force the section on here, which is what made
+              a signed COA unprintable. */}
+          {model.glyphosateNote && (
+            <div className="mb-4 text-[12px] text-amber-900 bg-amber-50 border border-amber-300 rounded-lg px-3 py-2 no-print">
+              ⓘ <span className="font-bold">Organic batch — {model.matchedDoc || 'the matched spec'} does not ask for glyphosate.</span>{' '}
+              It is left off this COA. If this buyer does need it, tick <span className="font-semibold">Glyphosate</span> above and capture the
+              result, or add it to the spec under Customer Specs → COA Requirements so it pulls through next time.
+            </div>
+          )}
+
           {/* Requirement 3: the quality content is fixed once both have signed;
               the commercial fields stay open and need no re-approval. */}
           {contentLocked && (
             <div className="mb-4 text-[12px] text-blue-900 bg-blue-50 border border-blue-300 rounded-lg px-3 py-2 no-print">
-              🔒 <span className="font-bold">Signed by both managers.</span> Results, specifications and the included sections are
-              locked. <span className="font-semibold">Date, invoice number, order number and both quantities stay editable</span> — saving those
-              does not send the COA back to the Quality Manager for approval.
+              <div>
+                🔒 <span className="font-bold">Signed by both managers.</span> Results, specifications and the included sections are
+                locked. <span className="font-semibold">Date, invoice number, order number and both quantities stay editable</span> — saving those
+                does not send the COA back to the Quality Manager for approval.
+              </div>
+              {/* The way out. Without this, a section ticked in error locked the
+                  COA into a state where it could be neither printed nor fixed. */}
+              {canWithdrawSignoff && (
+                <div className="mt-2 pt-2 border-t border-blue-200 flex items-center gap-2 flex-wrap">
+                  <span className="text-[11px]">Something wrong with what was signed?</span>
+                  <button onClick={() => withdrawSignoff(model.header.batch_number || model.batch, 'qa')} disabled={withdrawing}
+                    title="Remove the Quality Manager's signature — the COA returns to Awaiting QA sign-off and becomes editable"
+                    className="px-2 py-0.5 rounded border border-blue-400 bg-white text-[10px] font-semibold text-blue-900 disabled:opacity-50">
+                    ↩ Withdraw QA sign-off
+                  </button>
+                  <button onClick={() => withdrawSignoff(model.header.batch_number || model.batch, 'all')} disabled={withdrawing}
+                    title="Remove both signatures — the COA goes back to unsigned"
+                    className="px-2 py-0.5 rounded border border-blue-400 bg-white text-[10px] font-semibold text-blue-900 disabled:opacity-50">
+                    ↩ Withdraw both signatures
+                  </button>
+                </div>
+              )}
             </div>
           )}
 
@@ -1113,12 +1295,13 @@ function buildModel(src: any, spec: any): CoaModel {
   // coa_specs already carried a chlorate_perchlorate contaminant field — this
   // is the row that finally renders it, now that a lab result can supply one.
   const wantChlor   = spec ? req(sp.contaminants?.chlorate_perchlorate) : src.found.chloratePerchlorate
-  // Glyphosate is required on every Organic batch regardless of which
-  // customer spec matched (or whether one matched at all) — a compliance
-  // requirement independent of the buyer, unlike every other contaminant row
-  // here. A customer spec can still ask for it on a Conventional batch too,
-  // or supply its own spec text that overrides the "None Detected" default.
-  const wantGlyphosate = src.isOrganic || (spec ? req(sp.contaminants?.glyphosate) : src.found.glyphosate)
+  // When a customer spec matched, the spec decides — see wantsGlyphosateSection
+  // for why the old "organic always wins" override had to go (it put an
+  // unsatisfiable row on Kunitaro's signed COA and made it unprintable).
+  const wantGlyphosate = wantsGlyphosateSection({
+    specMatched: !!spec, specValue: sp.contaminants?.glyphosate,
+    isOrganic: src.isOrganic, foundResult: src.found.glyphosate,
+  })
   if (wantResidue) other.push({ label: 'Pesticide residue', spec: (spec && req(sp.other?.residue_reg)) ? String(sp.other.residue_reg) : COA_WORDING.residueRegulation, result: src.results.residue })
   if (wantPa)      other.push({ label: 'Pyrrolizidine Alkaloids', spec: (spec && req(sp.contaminants?.pyrrolizidine_alkaloids)) ? String(sp.contaminants.pyrrolizidine_alkaloids) : '<50 μg', result: src.results.pa })
   if (wantHm)      other.push({ label: 'Heavy Metals', spec: spec ? heavyMetalSpecParts(sp.contaminants).join('; ') : '', result: src.results.hm })
@@ -1136,6 +1319,10 @@ function buildModel(src: any, spec: any): CoaModel {
     sections: { micro: wantMicro, cutLength: wantCut, residue: wantResidue, pa: wantPa, heavyMetals: wantHm, moshMoah: wantMosh, chloratePerchlorate: wantChlor, glyphosate: wantGlyphosate },
     matchedDoc: spec?.doc_no || '',
     candidateDocs: src.candidateDocs || [],
+    glyphosateNote: glyphosateAdvisory({
+      specMatched: !!spec, specValue: sp.contaminants?.glyphosate,
+      isOrganic: src.isOrganic, sectionOn: wantGlyphosate,
+    }),
   }
 }
 
