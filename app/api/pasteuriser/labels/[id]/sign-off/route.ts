@@ -6,8 +6,8 @@ import {
   TEMPLATE_SIGN_OFFS, SIGN_OFF_LABEL, signOffState,
   type TemplateSignOffRole, type SignOff,
 } from '@/lib/core/labels'
-import type { PermissionKey } from '@/lib/auth/permissions'
 import { supersedeOtherApprovedVersions } from '@/lib/production/label-approval'
+import { EXTERNAL_SIGN_OFF_ROLES, SIGN_OFF_PERMISSION } from '@/lib/production/label-sign-offs'
 
 /**
  * POST /api/pasteuriser/labels/[id]/sign-off
@@ -32,19 +32,10 @@ import { supersedeOtherApprovedVersions } from '@/lib/production/label-approval'
  * nobody's hand on it is not a record.
  */
 
-/** Who may sign as whom. */
-const REQUIRES: Readonly<Record<TemplateSignOffRole, PermissionKey>> = {
-  sales:     'can_approve_labels',
-  // Deliberately NOT can_approve_labels. One key held by both would let Sales
-  // sign for Quality, and two names that one person can produce is one name.
-  quality:   'can_quality_sign_labels',
-  // Recording an external approval is a sales act; the approval itself is not.
-  customer:  'can_approve_labels',
-  certifier: 'can_approve_labels',
-}
-
-/** The roles whose signer is not in this building. */
-const EXTERNAL: ReadonlySet<TemplateSignOffRole> = new Set(['customer', 'certifier'])
+// Who may sign as whom, and who signs from outside the building, both live in
+// lib/production/label-sign-offs.ts — one list read by this route, by the
+// job-card route and by the UI that offers the buttons. Three copies of who
+// may sign a certification document is three chances for one to drift.
 
 /**
  * Which statuses accept a signature.
@@ -73,7 +64,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       error: `Unknown sign-off role '${role}'. Expected one of: ${TEMPLATE_SIGN_OFFS.join(', ')}.`,
     }, { status: 400 })
   }
-  if (!caller.can(REQUIRES[role])) {
+  if (!caller.can(SIGN_OFF_PERMISSION[role])) {
     return NextResponse.json({
       error: `You do not have permission to sign as ${SIGN_OFF_LABEL[role]}.`,
     }, { status: 403 })
@@ -98,7 +89,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   }
 
   const version = Number(row.version)
-  const external = EXTERNAL.has(role)
+  const external = EXTERNAL_SIGN_OFF_ROLES.has(role)
 
   // An external signature needs BOTH the outside party's name and ours.
   const actorName = external ? strOrNull(body.actorName) : (caller.name || null)
