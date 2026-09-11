@@ -2,6 +2,26 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-11 — Gustav (Maintenance: NPD type, temporary repairs, and the notifications that were never being sent)
+
+**Files changed:** `lib/notifications/recipients.ts`, `app/api/maintenance/staff/route.ts`, `app/api/maintenance/job-cards/[id]/verify/route.ts`, `app/api/maintenance/transcribe/route.ts`, `lib/maintenance/constants.ts`, `lib/maintenance/types.ts`, `lib/maintenance/useMaintenanceData.ts`, `components/maintenance/JobCardItem.tsx`, `app/(app)/maintenance/my-jobs/page.tsx`, `app/(app)/maintenance/job-cards/page.tsx`, `supabase/migrations/20260911_010_jobcard_temporary_repair_followup.sql` (new, applied to staging)
+
+### One root cause behind two of these: privileged reads on the caller's session
+
+`shared.app_roles` carries RLS that shows an ordinary user **exactly one row — their own**; the whole table is visible only to admin / IT / `can_manage_users`. Several places asked it "who works here" through the **caller's** session, so the answer came back as one row, or none, and nothing said so. Two reported faults were the same bug wearing different clothes:
+
+- **The lab was never told a job card needed QC sign-off.** The hand-off fires from the *technician's* browser; `getQualityUserIds()` could not see the Quality department from a technician's session, returned an empty list, and `notify()` did exactly what it was asked — told nobody. It failed silently because "no recipients" and "nobody to tell" are the same thing to that code. Confirmed against production: **not one `qc_check` notification existed** in `shared.notifications` while four cards sat in the QC queue. The same fault was suppressing the *parts-required*, *parts-issued*, *job-paused* and *new-card* notifications to the maintenance manager.
+- **Allocation only ever offered the manager himself.** `maintenance_manager` holds `can_allocate_jobs` and `can_verify_jobs` but **not** `can_manage_users`, so the staff directory read returned his own row alone — hence one name in the technician picker, nothing under "assign someone else (off duty)", and an empty second-technician list. The picker was never broken; the directory behind it was one row long.
+
+Both now read through the admin client, which is the correct tool for the job: these queries answer *"who should be told"* / *"who works in Maintenance"* — decisions the server makes on the caller's behalf, gated by the permission check already at the top of each route — not a peek at what the caller may see. The comment claiming `service_role` has no PostgREST access to `shared` was wrong (`notify()` has been writing `shared.notifications` through that client all along) and is what pushed these reads onto the session client in the first place. The same fix repairs the manager's ability to onboard a technician, whose role write RLS was rejecting after the auth account had already been created.
+
+### The rest
+
+- **NPD (New Product Development)** added to the maintenance types. The voice-capture prompt held a second hand-maintained copy of that list, so a type added to the form was unreachable by voice; it now imports the one list.
+- **Temporary repair, ticked by the technician when they make one.** Distinct from the `Temporary Repair` *type* chosen at raise time — that is a guess made before anyone has looked at the machine; this is the later finding that the line is running on a stopgap. Signing the card off raises the permanent-repair card automatically, carrying the machine, the urgency, the original fault and whatever the technician said is still outstanding, and notifies the manager to allocate it. Raised at **sign-off** so it happens once, for work that actually happened; `follow_up_card_id` is the guard against a retried sign-off raising a second card. Both cards link to each other, and the manager is warned before signing that this will happen.
+- **A finished job card no longer vanishes from the technician's screen.** `My job cards` tabbed on `assigned` / `in_progress` / `complete`, so a card in `qc_check` or `mgr_verify` matched **no tab at all** — from the moment work was submitted until the manager signed off, hours or days later, it looked to the technician as though their work had disappeared. New **Awaiting sign-off** tab covers that gap.
+- **"Assigned to me" now matches on user id**, name only as a fallback for older cards — the same name-matching failure that used to stop allocated checklists reaching technicians.
+## 2026-09-09 — Alyssa (Two migrations shared a number, and one of them was never run)
 ## 2026-09-07 — Gustav (Maintenance: compressor & generator run-hours captured; service date no longer guessed)
 
 **Files changed:** `lib/maintenance/useMaintenanceData.ts`, `components/maintenance/ServiceCard.tsx`

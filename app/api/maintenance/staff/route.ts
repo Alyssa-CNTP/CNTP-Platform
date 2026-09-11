@@ -11,7 +11,7 @@
 //        Maintenance department.
 
 import { NextRequest, NextResponse } from 'next/server'
-import { getCallerPermissions, getAdminClient, getSessionClient } from '@/lib/auth/server-helpers'
+import { getCallerPermissions, getAdminClient } from '@/lib/auth/server-helpers'
 
 const MAINT_ROLES = ['maintenance_default', 'maintenance_manager', 'maintenance_technician', 'maintenance_qc']
 
@@ -25,8 +25,21 @@ export async function GET() {
         !caller.can('can_verify_jobs') && !caller.can('can_manage_users'))
       return NextResponse.json({ error: 'Permission denied' }, { status: 403 })
 
-    const sessionClient = await getSessionClient()
-    const { data: roleRows, error: rolesErr } = await sessionClient
+    // Read the directory with the ADMIN client, NOT the caller's session.
+    //
+    // `shared.app_roles` is RLS'd down to the caller's OWN row unless they are
+    // admin / IT / can_manage_users. A maintenance_manager holds none of those
+    // (can_allocate_jobs + can_verify_jobs, see lib/auth/permissions.ts), so the
+    // session read returned exactly one row: himself. That is why the allocation
+    // screen would only ever offer the manager as the technician, showed nobody
+    // under "assign someone else (off duty)", and had an empty second-technician
+    // list — the picker was not broken, the directory behind it was one row long.
+    //
+    // The permission gate above is what authorises this call; the query is the
+    // server answering "who works in Maintenance", not a peek at the caller's
+    // own visibility. The department filter keeps it to exactly that.
+    const admin = getAdminClient()
+    const { data: roleRows, error: rolesErr } = await admin
       .schema('shared' as any)
       .from('app_roles')
       .select('user_id, full_name, department, role, phone, is_active')
@@ -38,8 +51,7 @@ export async function GET() {
       return NextResponse.json({ error: rolesErr.message }, { status: 500 })
     }
 
-    // Join emails from auth.users (admin client; no schema access needed).
-    const admin = getAdminClient()
+    // Join emails from auth.users (admin API; no schema access needed).
     const listResult = await admin.auth.admin.listUsers({ perPage: 1000 })
     if (listResult.error) {
       console.error('[api/maintenance/staff GET] listUsers error:', listResult.error)
@@ -86,8 +98,7 @@ export async function POST(req: NextRequest) {
     if (!MAINT_ROLES.includes(role))
       return NextResponse.json({ error: `Role must be one of: ${MAINT_ROLES.join(', ')}` }, { status: 400 })
 
-    const admin         = getAdminClient()
-    const sessionClient = await getSessionClient()
+    const admin = getAdminClient()
     let userId: string
 
     if (send_invite !== false) {
@@ -117,7 +128,11 @@ export async function POST(req: NextRequest) {
       userId = data.user.id
     }
 
-    const { error: roleErr } = await sessionClient
+    // Same reason as the GET: writes to shared.app_roles are IT-only under RLS
+    // (`it_manage_all_roles`), so a manager's session could invite the auth user
+    // and then fail to give them a role — an account that exists and belongs
+    // nowhere. The can_allocate_jobs gate above is the authorisation.
+    const { error: roleErr } = await admin
       .schema('shared' as any)
       .from('app_roles')
       .upsert({
