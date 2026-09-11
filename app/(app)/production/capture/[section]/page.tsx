@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useMemo, Suspense } from 'react'
 import Link from 'next/link'
 import { useSearchParams, useRouter, useParams } from 'next/navigation'
-import { format, parseISO, differenceInCalendarDays } from 'date-fns'
+import { format, parseISO } from 'date-fns'
 import {
   ChevronLeft, Loader2, CheckCircle2, AlertTriangle, Users, Lock,
   ClipboardList, PenLine, Save, Sparkles, Info, Plus, Gauge, HelpCircle,
@@ -47,6 +47,7 @@ import FeatureBoundary from '@/components/shared/FeatureBoundary'
 import { buildDebagRows, buildBagRows } from '@/lib/core/capture-rows'
 import { planChangeover, isPastShiftChangeover, isEarlyChangeoverLikely } from '@/lib/core/changeover'
 import { recordAccess } from '@/lib/core/production/record-access'
+import { handoverForShift } from '@/lib/core/production/handover'
 import { ChangeoverTrigger, ChangeoverDialog } from '@/features/changeover'
 import { flags } from '@/lib/config/flags'
 import { upperCode } from '@/lib/production/normalize-code'
@@ -516,16 +517,22 @@ function CaptureScreen() {
       setSiblingProductions(siblingProds.filter(p => activeMatchKeys.has(productionMatchKey(p, sectionId))))
       if ((sess as any)?.comments) setComments((sess as any).comments)
 
-      // Surface the most recent handover note left on this line (previous shift).
+      // The handover note left for THIS shift, and only for this shift.
+      //
+      // The rule is in lib/core/production/handover.ts: a note reaches the next
+      // shift and expires. This read stays a plain "recent notes on this line"
+      // — deciding which of them still applies is the rule's job, not a date
+      // filter's. It used to be `<= 7 calendar days`, which is fourteen
+      // handovers, so the banner routinely showed a stranger's message about a
+      // run that had finished days earlier.
       const { data: prev } = await db.schema('production').from('prod_sessions')
         .select('comments,shift,date').eq('section_id', sectionId).not('comments', 'is', null)
-        .order('date', { ascending: false }).order('created_at', { ascending: false }).limit(5)
-      const prevRow = ((prev as any[]) ?? []).find(r => !(r.date === dateParam && r.shift === shift) && (r.comments ?? '').trim())
-      // Only surface a genuinely recent handover (last 7 days). Anything older is
-      // stale (e.g. seed/demo notes) and just adds noise — don't show it.
-      if (prevRow && Math.abs(differenceInCalendarDays(parseISO(dateParam), parseISO(prevRow.date))) <= 7) {
-        setPrevNote({ note: prevRow.comments, shift: prevRow.shift, date: prevRow.date })
-      }
+        .order('date', { ascending: false }).order('created_at', { ascending: false }).limit(10)
+      const reaching = handoverForShift(
+        ((prev as any[]) ?? []).map(r => ({ day: r.date, shift: r.shift, note: r.comments })),
+        { day: dateParam, shift },
+      )
+      setPrevNote(reaching ? { note: reaching.note as string, shift: reaching.shift, date: reaching.day } : null)
       const aVariant = (assign as any)?.variant ?? ''
       const aLot     = (assign as any)?.lot_number ?? ''
       const d = (sess as any)?.draft_data
