@@ -53,8 +53,16 @@ docker compose up -d --build
 (localhost only — the UFW firewall opens just 2022/80/443, so it is never
 internet-facing). `restart: unless-stopped` keeps it up across reboots/crashes.
 
-On later deploys, only re-run the build if the model or `leaf_shade_api.py`
-changed:
+**`.github/workflows/deploy-staging.yml` now runs `docker compose up -d` (no
+`--build`) after every staging deploy**, so if the container is stopped for any
+reason — a manual `docker stop`, disk/OOM pressure during a build, or it simply
+never having been started — it comes back up on the next push to `staging`
+without anyone noticing it was down. This is deliberately NOT a rebuild: it's
+cheap and safe to run unconditionally, but it will keep running whatever image
+already exists even after `leaf_shade_api.py` or the model changes. That case —
+new code, not just "was it stopped" — still needs the manual step below.
+
+After changing the model or `leaf_shade_api.py`, re-run the build by hand:
 
 ```bash
 cd /home/cntpdev/apps/staging/app/cntp-ops/ml/leafshade
@@ -86,6 +94,7 @@ curl http://127.0.0.1:5001/health      # {"status":"ok"}
 ```
 
 If the Next.js tab reports *"Leaf shade service is not running"*, the service
-is down:
-- Docker:  `docker compose -f ml/leafshade/docker-compose.yml logs --tail=50`
-- venv/pm2: `pm2 logs cntp-leafshade`
+is down. The next push to `staging` will bring it back up on its own (see the
+deploy-workflow note above) — to fix it right now instead of waiting for that:
+- Docker:  `cd ml/leafshade && docker compose up -d && docker compose logs --tail=50`
+- venv/pm2: `pm2 restart cntp-leafshade && pm2 logs cntp-leafshade`
