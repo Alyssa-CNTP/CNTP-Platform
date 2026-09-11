@@ -17,7 +17,7 @@ import {
   resolvePermission, PERMISSION_GROUPS,
 } from './permissions'
 import {
-  PERMISSION_MATRIX, READ_GRANT_MODULES, READ_KEYS_BY_MODULE,
+  PERMISSION_MATRIX, MODULE_GRANTS, READ_KEYS_BY_MODULE, KEYS_BY_MODULE_GRANT,
 } from './permission-registry'
 
 const KNOWN = new Set(ALL_PERMISSION_KEYS)
@@ -125,18 +125,26 @@ describe('co_developer inherits the new keys automatically', () => {
 // "write something", silently. The last describe block below is that guard.
 
 describe('read-only grant', () => {
-  it('every module in the matrix has a can_read_<slug> key that exists', () => {
-    for (const m of READ_GRANT_MODULES) {
-      expect(KNOWN.has(m.key as never), `matrix module '${m.module}' expects '${m.key}' in ALL_PERMISSION_KEYS`).toBe(true)
+  it('every module in the matrix has all three grant keys, and they exist', () => {
+    for (const m of MODULE_GRANTS) {
+      for (const key of [m.read, m.write, m.delete]) {
+        expect(KNOWN.has(key as never), `matrix module '${m.module}' expects '${key}' in ALL_PERMISSION_KEYS`).toBe(true)
+      }
     }
   })
 
-  it('has no can_read_* key that no module claims — the reverse drift', () => {
-    const claimed = new Set<string>(READ_GRANT_MODULES.map(m => m.key))
+  it('has no can_read_/write_/delete_ module key that no slug claims — reverse drift', () => {
+    const claimed = new Set<string>(MODULE_GRANTS.flatMap(m => [m.read, m.write, m.delete]))
+    // Per-RESOURCE keys share these prefixes (can_delete_records, can_write_… ),
+    // so the check is the other way round: a module key must have a module.
+    const moduleShaped = new Set<string>(
+      MODULE_GRANTS.flatMap(m => [m.read, m.write, m.delete]),
+    )
     const orphans = ALL_PERMISSION_KEYS
       .filter(k => k.startsWith('can_read_') && k !== 'can_read_all_modules')
       .filter(k => !claimed.has(k))
     expect(orphans, `these can_read_* keys match no module slug: ${orphans.join(', ')}`).toEqual([])
+    expect(moduleShaped.size).toBe(MODULE_GRANTS.length * 3)
   })
 
   it('can_read_all_modules grants every read key in every participating module', () => {
@@ -227,5 +235,138 @@ describe('no key is both a read grant and a write gate', () => {
     }
     const both = [...reads].filter(k => writes.has(k))
     expect(both, `these keys are both a read and a write/delete/manage: ${both.join(', ')}`).toEqual([])
+  })
+})
+
+// ─── Write and delete grants ──────────────────────────────────────────────────
+
+describe('module write / delete grants', () => {
+  it('write grants that module’s write keys, and nothing outside them', () => {
+    for (const m of MODULE_GRANTS) {
+      const writes = KEYS_BY_MODULE_GRANT[m.write] ?? []
+      for (const k of writes) {
+        expect(resolvePermission(null, { [m.write]: true }, k), `${m.write} should grant ${k}`).toBe(true)
+      }
+      // Not another module's writes.
+      for (const other of MODULE_GRANTS) {
+        if (other.slug === m.slug) continue
+        for (const k of KEYS_BY_MODULE_GRANT[other.write] ?? []) {
+          if (writes.includes(k)) continue   // a key legitimately shared by two modules
+          expect(resolvePermission(null, { [m.write]: true }, k), `${m.write} must not grant ${k}`).toBe(false)
+        }
+      }
+    }
+  })
+
+  it('delete grants that module’s delete keys only', () => {
+    for (const m of MODULE_GRANTS) {
+      for (const k of KEYS_BY_MODULE_GRANT[m.delete] ?? []) {
+        expect(resolvePermission(null, { [m.delete]: true }, k), `${m.delete} should grant ${k}`).toBe(true)
+      }
+    }
+  })
+
+  it('write and delete each imply READ for the same module, both the keys and the module key', () => {
+    // Every guard in the app is on a read key, so without this a write grant
+    // would hand out save permissions for pages the route bounces them out of.
+    for (const m of MODULE_GRANTS) {
+      for (const grant of [m.write, m.delete]) {
+        for (const k of KEYS_BY_MODULE_GRANT[m.read] ?? []) {
+          expect(resolvePermission(null, { [grant]: true }, k), `${grant} should imply read key ${k}`).toBe(true)
+        }
+        expect(resolvePermission(null, { [grant]: true }, m.read), `${grant} should imply ${m.read}`).toBe(true)
+      }
+    }
+  })
+
+  it('write does NOT imply delete, and delete does NOT imply write', () => {
+    // Removing a record is not authoring one. The Quality module has both.
+    expect(resolvePermission(null, { can_write_quality: true }, 'can_delete_records')).toBe(false)
+    expect(resolvePermission(null, { can_delete_quality: true }, 'can_save_records')).toBe(false)
+  })
+
+  it('neither grant ever reaches a manage key', () => {
+    const manage = new Set<string>()
+    for (const m of PERMISSION_MATRIX) for (const r of m.resources) for (const x of r.manage ?? []) manage.add(x.key)
+    for (const m of MODULE_GRANTS) {
+      for (const key of manage) {
+        expect(
+          resolvePermission(null, { [m.write]: true, [m.delete]: true }, key as never),
+          `${m.write}/${m.delete} must not grant the manage key '${key}'`,
+        ).toBe(false)
+      }
+    }
+  })
+
+  it('there is no blanket write or delete key', () => {
+    // Read is the only axis with one. "Delete anything anywhere" is
+    // senior_developer by another name — see the note above MODULE_GRANTS.
+    for (const k of ['can_write_all_modules', 'can_delete_all_modules']) {
+      expect(ALL_PERMISSION_KEYS.includes(k as never), `${k} must not exist`).toBe(false)
+    }
+  })
+
+  it('an explicit false still beats a write or delete grant', () => {
+    expect(resolvePermission(null, { can_write_quality: true, can_save_records: false }, 'can_save_records')).toBe(false)
+    expect(resolvePermission(null, { can_delete_quality: true, can_delete_runs: false }, 'can_delete_runs')).toBe(false)
+  })
+})
+
+describe('the four slot kinds are disjoint', () => {
+  // Stronger than the read-vs-write check above, and the reason the three
+  // grants can never overlap: a key filed as both `write` on one resource and
+  // `manage` on another would be handed out by a write grant while reading as
+  // workflow authority in the UI.
+  it('no key appears under two different slot kinds anywhere in the matrix', () => {
+    const slots: Record<string, Set<string>> = { read: new Set(), write: new Set(), delete: new Set(), manage: new Set() }
+    for (const m of PERMISSION_MATRIX) {
+      for (const r of m.resources) {
+        if (r.read && r.read !== 'dept') slots.read.add(r.read)
+        if (r.write)  slots.write.add(r.write)
+        if (r.delete) slots.delete.add(r.delete)
+        for (const x of r.manage ?? []) slots.manage.add(x.key)
+      }
+    }
+    const kinds = Object.keys(slots)
+    const clashes: string[] = []
+    for (const k of new Set(kinds.flatMap(s => [...slots[s]]))) {
+      const inKinds = kinds.filter(s => slots[s].has(k))
+      if (inKinds.length > 1) clashes.push(`${k} → ${inKinds.join(' + ')}`)
+    }
+    expect(clashes, `keys filed under more than one slot kind:\n  ${clashes.join('\n  ')}`).toEqual([])
+  })
+})
+
+describe('no module grant key collides with a real permission key', () => {
+  // The bug this caught: slug 'staff' built the grant key `can_delete_staff`,
+  // which is ALREADY the Staff Directory's own per-resource delete key (the one
+  // /api/staff/[id] DELETE checks). One string would have meant both "delete any
+  // staff record" and "delete across the Staff Directory module", making the
+  // grant its own grantee. The slug is 'staff_directory' for exactly this reason.
+  it('holds for every slug', () => {
+    const resourceKeys = new Set<string>()
+    for (const m of PERMISSION_MATRIX) {
+      for (const r of m.resources) {
+        if (r.read && r.read !== 'dept') resourceKeys.add(r.read)
+        if (r.write)  resourceKeys.add(r.write)
+        if (r.delete) resourceKeys.add(r.delete)
+        for (const x of r.manage ?? []) resourceKeys.add(x.key)
+      }
+    }
+    const collisions = MODULE_GRANTS
+      .flatMap(m => [m.read, m.write, m.delete])
+      .filter(k => resourceKeys.has(k))
+    expect(collisions, `module grant keys that are already resource keys: ${collisions.join(', ')}`).toEqual([])
+  })
+})
+
+describe('the two misfiled deletes are now in the Delete column', () => {
+  // Both sat in `manage`, so they never appeared under Delete and a module-wide
+  // delete grant would have silently skipped them.
+  it('can_delete_bag_tag is production.live’s delete', () => {
+    expect(resolvePermission(null, { can_delete_production: true }, 'can_delete_bag_tag')).toBe(true)
+  })
+  it('can_delete_staff is staff.directory’s delete — the key /api/staff/[id] checks', () => {
+    expect(resolvePermission(null, { can_delete_staff_directory: true }, 'can_delete_staff')).toBe(true)
   })
 })
