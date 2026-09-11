@@ -22,7 +22,6 @@ Both now read through the admin client, which is the correct tool for the job: t
 - **A finished job card no longer vanishes from the technician's screen.** `My job cards` tabbed on `assigned` / `in_progress` / `complete`, so a card in `qc_check` or `mgr_verify` matched **no tab at all** — from the moment work was submitted until the manager signed off, hours or days later, it looked to the technician as though their work had disappeared. New **Awaiting sign-off** tab covers that gap.
 - **"Assigned to me" now matches on user id**, name only as a fallback for older cards — the same name-matching failure that used to stop allocated checklists reaching technicians.
 - *Follow-up:* the first merge of this work turned CI's lint ratchet red — the new follow-up code added `db.schema('maintenance' as any)` casts of its own. The verify route now hoists **one** handle for the schema instead of re-casting at every call site, which puts the repo 9 errors **below** the baseline rather than over it.
-## 2026-09-09 — Alyssa (Two migrations shared a number, and one of them was never run)
 ## 2026-09-07 — Gustav (Maintenance: compressor & generator run-hours captured; service date no longer guessed)
 
 **Files changed:** `lib/maintenance/useMaintenanceData.ts`, `components/maintenance/ServiceCard.tsx`
@@ -56,7 +55,6 @@ Both figures were reported by Gustav. The compressor's previous reading was 08/0
 
 ---
 
-## 2026-09-05 — Alyssa (Feature flags never reached the browser)
 ## 2026-09-11 — Gustav (COA: glyphosate forced onto organic COAs, no way back down the sign-off chain, specs never refreshed)
 
 **Files changed:** `app/(app)/quality/coa/page.tsx`, `lib/quality/coa-gating.ts`, `lib/quality/coa-gating.test.ts`, `app/api/quality/coa-signoff/route.ts`
