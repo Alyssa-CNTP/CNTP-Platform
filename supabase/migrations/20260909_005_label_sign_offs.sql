@@ -1,6 +1,7 @@
 -- ============================================================
 -- public.label_sign_offs — who signed a label, and for which gate.
 -- Run in: Supabase SQL Editor — STAGING first, then PRODUCTION.
+-- Depends on: nothing. 20260909_006 depends on THIS — run this one first.
 -- Then:   NOTIFY pgrst, 'reload schema';
 --
 -- Storage for the rules in lib/core/labels/approval.ts. Read that file first;
