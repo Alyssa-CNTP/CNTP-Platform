@@ -2,6 +2,57 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-11 — Alyssa (A read-only permission, derived from the matrix instead of hand-listed)
+
+**Files changed:** `lib/auth/permissions.ts` + test, `lib/auth/permission-registry.ts`, `app/(app)/layout.tsx`, `components/layout/Sidebar.tsx`, `app/(app)/users/page.tsx`, `app/(app)/intelligence/global-wits/page.tsx`, `app/api/accounts/route.ts`, `app/api/marketing/route.ts`, `app/api/global-wits/route.ts`
+
+"Can we have a permission that is read-only across all modules, or selected ones." Yes — and the answer was mostly already written down, in the wrong shape.
+
+### The list already existed
+
+`permission-registry.ts` declares a `read` slot for every resource in every module. A read-only grant is exactly that set, so it is **derived**, not typed out a second time: `READ_KEYS_BY_MODULE` reads the matrix, and `resolvePermission()` consults it. A module added to the matrix next month is covered the day it is added, and a resource with no `read` — an authoring tool, an admin action — is never swept in.
+
+The alternative was the shape `management_default` already has: a hand-maintained list of view keys. That list predates Labels, Job Cards, Bag Tracking, Logistics and the whole Sales group, which is precisely the failure being avoided. It is left exactly as it is; widening what every existing Management user can see is a decision about those accounts, not a side effect of adding a capability.
+
+**New keys:** `can_read_all_modules`, plus `can_read_<slug>` for each of the thirteen participating modules. **Administration is not one of them** (`readGrant: false`) — its rows are the audit log, migrations, dev tools and user admin, none of which is a view anybody should get from a "see everything" toggle. New role `read_only_viewer` holds the blanket key and nothing else.
+
+Three ordering properties, all tested, none of them incidental:
+
+- The grant is checked **after** the override, so an explicit `false` still wins — "read-only everywhere except Quality" is expressible.
+- It only ever **adds**. Someone whose role grants a write keeps it. "Read-only" describes what the key hands out, not a cap on the person.
+- It is keyed off `READ_KEY_GRANTORS`, built from `read` slots only, so a write/delete/manage key cannot appear there. Fails closed.
+
+Because every check in the app funnels through `resolvePermission()` — pages via `p()`, API routes via `getCallerPermissions().can()`, route guards and the sidebar via the same `p()` — one resolver change reaches all of them. No page was edited to honour it.
+
+### Three places where it would have been a lie
+
+**Five routes had no permission at all.** `/supervisor`, `/stock-control`, `/production/operations`, `/production/dashboard` and `/production/floor-plan` were gated on department membership alone, so no amount of ticking could open them. They now list `can_read_production` with `orPermission`, leaving the department path untouched. `can_read_all_modules` had to be made to imply each `can_read_<slug>` for this to work — the guards name a module key, and a blanket-key holder has to resolve that key itself, not merely the keys it in turn grants. A test caught that; it was wrong when first written.
+
+**The sidebar disagreed with the guards.** Every Quality link was gated on a WRITE key — Sieving on `can_add_sieving_runs`, Lab Results on `can_save_lab_results`, Customer Specs on `can_edit_customer_specs`. A viewer could open those pages and never find them. `NavItem` takes a `permissions[]` array now, the same flat OR `ROUTE_GUARDS` already had, and each Quality link accepts its read key alongside the write one.
+
+**Three module keys were not read keys at all.** `can_access_research`, `can_access_intelligence` and `can_access_marketing` were the matrix's `read` for their modules, but those modules write: Alara promotes a signal into an account and uploads to the vault, Global Wits imports trade data, the Marketing hub saves reports and bookmarks. Granting them to a viewer would have handed out writes under the word "read".
+
+Each is split into a view key (`can_view_research` / `can_view_intelligence` / `can_view_marketing`, which is what the grant gives) and the original `can_access_*`, now `manage`, which is what the writes check. **Nobody loses anything** — every existing holder keeps both, and every UI path into those screens already required the full-use key.
+
+`can_access_sales` is deliberately left as the Sales module's read key: those pages write nothing. It is therefore excluded from the write checks below, because the grant resolves it.
+
+Server-side, `/api/accounts` POST, `/api/global-wits` POST and the three write actions on `/api/marketing` now require a full-use key. That is a **tightening**: department membership alone used to be enough to create an account or save a campaign. No current UI path is affected — each already requires the key to reach the screen — but a Management user who genuinely needs to save one gets `can_access_marketing` ticked, which is one toggle and leaves a record.
+
+### The invariant worth keeping
+
+`permissions.test.ts` asserts that **no key is both a read grant and a write gate**. That is the single way this feature could hand out a write: a key used as `read` for one resource and as `write`/`delete`/`manage` for another gets granted by `can_read_*` and then accepted by whatever guards that write. The three Sales-group keys were exactly this until they were split. The test fails the build if a fourth appears.
+
+Also asserted: every matrix slug has a matching key and vice versa (drift both ways), the grant touches no write/delete/manage key anywhere, and it never grants an Administration key.
+
+### Two things it deliberately does not do
+
+- **Training's authoring screens stay out.** `training.content` and `training.assignments` have no `read` — the only screens showing them are the `/training/manage` editors, which are a tool, not a record. The readable Training content is the Skills Matrix and the SOP catalogue, and those the grant covers. Every learner already reaches their own courses at `/training`, which needs no permission at all.
+- **`/api/vault/upload` is untouched.** It is gated on IT/Management department plus a `can_upload_vault` flag that is not a `PermissionKey` at all. The read-only grant does not widen it; tightening who may upload is a separate decision, not one to make in passing.
+
+One rough edge, stated rather than hidden: on the Alara and Marketing pages the write buttons are still rendered for a view-only holder and fail server-side with a 403 rather than being hidden. Those pages do not use `useAuth` at all and the controls sit several components deep, so hiding them properly means threading permission state through two page trees. Global Wits, where the write is a single drop zone, does hide it.
+
+---
+
 ## 2026-09-11 — Alyssa (The sign-off chain gets a UI, the gates get wired, and the Pasteuriser registers its output)
 
 **Files changed:** `lib/production/label-sign-offs.ts` + test, `lib/production/bag-tag-write.ts` + test, `features/pasteuriser-labels/components/SignOffChain.tsx`, `features/pasteuriser-labels/index.ts`, `app/(app)/pasteuriser/labels/[id]/page.tsx`, `app/(app)/pasteuriser/run/page.tsx`, `app/api/pasteuriser/print/route.ts`, `app/api/pasteuriser/labels/[id]/sign-off/route.ts`, `app/api/pasteuriser/job-cards/[id]/sign-off/route.ts`, `app/api/production/job-cards/[id]/decide/route.ts`, `components/production/capture/PasteuriserCapture.tsx`

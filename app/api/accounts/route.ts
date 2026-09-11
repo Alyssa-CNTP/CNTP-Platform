@@ -6,8 +6,26 @@ import { NextResponse }       from 'next/server'
 import { createServerClient } from '@supabase/ssr'
 import { createClient }       from '@supabase/supabase-js'
 import { cookies }            from 'next/headers'
+import { getCallerPermissions } from '@/lib/auth/server-helpers'
+import type { PermissionKey }   from '@/lib/auth/permissions'
 
 const ALLOWED = ['IT', 'Sales', 'Management', 'Marketing']
+
+// Creating or promoting an account is a WRITE, and it needs a full-use key —
+// not department membership, and not one of the view-only keys the read-only
+// grant hands out (can_view_research / can_view_intelligence /
+// can_view_marketing). Every UI path that POSTs here already requires one of
+// these to reach the screen at all — Alara needs can_access_research, the
+// SignalDrawer can_access_intelligence, the Marketing hub can_access_marketing
+// — so this refuses view-only callers and nobody else.
+//
+// can_access_sales is deliberately NOT in this list: it is the READ key for the
+// Sales module in the permission matrix (those pages write nothing), so the
+// read-only grant resolves it to true and accepting it here would put the hole
+// straight back.
+const WRITE_KEYS: PermissionKey[] = [
+  'can_access_research', 'can_access_intelligence', 'can_access_marketing',
+]
 
 const salesDb = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -60,6 +78,14 @@ export async function GET(req: Request) {
 export async function POST(req: Request) {
   const user = await authorize()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+
+  // Resolved permissions (role defaults + overrides + read-only grants), not the
+  // raw override object authorize() reads — the grant is computed, so a raw
+  // lookup would miss it in both directions.
+  const caller = await getCallerPermissions()
+  if (!WRITE_KEYS.some(k => caller.can(k))) {
+    return NextResponse.json({ error: 'Read-only access — cannot create accounts' }, { status: 403 })
+  }
 
   const body = await req.json().catch(() => null)
   if (!body?.name) return NextResponse.json({ error: 'name required' }, { status: 400 })

@@ -28,6 +28,13 @@ export interface NavItem {
   group:        string
   departments?: string[]
   permission?:  PermissionKey
+  // Alternatives to `permission` — holding ANY one of these is enough, a flat OR
+  // with no hierarchy. Mirrors the same field on ROUTE_GUARDS in
+  // app/(app)/layout.tsx, and exists for the same reason: a page can have a
+  // write key that has always gated its link AND a read key that should also
+  // show it. Without this the two surfaces disagree and someone gets a page
+  // they can open but cannot find.
+  permissions?: PermissionKey[]
   itOnly?:      boolean
   // permission is an ALTERNATIVE to department (department OR permission), not an
   // additional requirement — see the matching flag in app/(app)/layout.tsx.
@@ -40,7 +47,7 @@ export interface NavItem {
 // Home is rendered as a standalone item above the groups (see render).
 export const NAV: NavItem[] = [
   // ── Production — capture work & oversight ──
-  { href: '/production/dashboard',      label: 'Production Dashboard',       icon: ChartNoAxesCombined, group: 'Production', departments: ['Production','Management'] },
+  { href: '/production/dashboard',      label: 'Production Dashboard',       icon: ChartNoAxesCombined, group: 'Production', departments: ['Production','Management'], permission: 'can_read_production', orPermission: true },
   { href: '/production/capture',        label: 'Capture',                    icon: ClipboardList,   group: 'Production', departments: ['Production'], permission: 'can_submit_count' },
   { href: '/production/history',       label: 'History / Planning',         icon: History,         group: 'Production', departments: ['Production','Management'], permission: 'can_view_live_history', orPermission: true },
   { href: '/production/orders',         label: 'Production Orders',          icon: FileText,        group: 'Production', departments: ['Production','Management'], permission: 'can_view_live_history', orPermission: true },
@@ -48,7 +55,7 @@ export const NAV: NavItem[] = [
   { href: '/production/blends',         label: 'BOMs',                       icon: Layers,          group: 'Production', departments: ['Production','Management'], permission: 'can_view_blends', orPermission: true },
   { href: '/job-cards',                 label: 'Job Cards',                  icon: FileText,        group: 'Production', departments: ['Production','Management'], permission: 'can_view_blends', orPermission: true },
   { href: '/count',                     label: 'Stock Count',                icon: Boxes,           group: 'Production', departments: ['Production'], permission: 'can_submit_count' },
-  { href: '/supervisor',                label: 'Supervisor Hub',             icon: Activity,        group: 'Production', departments: ['Production','Management'] },
+  { href: '/supervisor',                label: 'Supervisor Hub',             icon: Activity,        group: 'Production', departments: ['Production','Management'], permission: 'can_read_production', orPermission: true },
 
   // ── Pasteuriser — the finished-product label chain ──
   // Four entries rather than one, because three different people own three of
@@ -63,7 +70,7 @@ export const NAV: NavItem[] = [
   // ── Operations — cross-role, universal entries ──
   { href: '/production/roster',         label: 'Shift Rosters',              icon: CalendarRange,   group: 'Operations', permission: 'can_view_roster' },
   { href: '/tags',                      label: 'Bag Tracking',               icon: Tag,             group: 'Operations', departments: ['Production','Quality'], permission: 'can_access_bag_tracking', orPermission: true },
-  { href: '/stock-control',             label: 'Stock Control',              icon: Printer,         group: 'Operations', departments: ['Production','Management'] },
+  { href: '/stock-control',             label: 'Stock Control',              icon: Printer,         group: 'Operations', departments: ['Production','Management'], permission: 'can_read_production', orPermission: true },
 
   // ── Warehousing — GRN / Delivery Note books, one tab per receiving site.
   // More sites (and, per-site, more areas like tea courts vs depots) get added
@@ -88,13 +95,13 @@ export const NAV: NavItem[] = [
   // Ordered to follow the physical/QC flow: Raw Material → Sieving → Pasteuriser
   // → Granule Line → Final Product Lab Results → COA Generator → Customer Specs
   // → Lab Manager → Maintenance QC.
-  { href: '/quality/raw-material',      label: 'Raw Material',               icon: Layers,          group: 'Quality', departments: ['Quality'], permission: 'can_upload_pdfs' },
-  { href: '/quality/sieving',           label: 'Sieving',                    icon: Beaker,          group: 'Quality', departments: ['Quality'], permission: 'can_add_sieving_runs' },
-  { href: '/quality/pasteuriser',       label: 'Pasteuriser',                icon: FlaskConical,    group: 'Quality', departments: ['Quality'], permission: 'can_create_runs' },
-  { href: '/quality/granule',           label: 'Granule Line',               icon: Microscope,      group: 'Quality', departments: ['Quality'], permission: 'can_create_runs' },
-  { href: '/quality/lab-results',       label: 'Final Product Lab Results',  icon: FileText,        group: 'Quality', departments: ['Quality'], permission: 'can_save_lab_results' },
+  { href: '/quality/raw-material',      label: 'Raw Material',               icon: Layers,          group: 'Quality', departments: ['Quality'], permissions: ['can_upload_pdfs','can_view_history'] },
+  { href: '/quality/sieving',           label: 'Sieving',                    icon: Beaker,          group: 'Quality', departments: ['Quality'], permissions: ['can_add_sieving_runs','can_view_sieving'] },
+  { href: '/quality/pasteuriser',       label: 'Pasteuriser',                icon: FlaskConical,    group: 'Quality', departments: ['Quality'], permissions: ['can_create_runs','can_view_runs'] },
+  { href: '/quality/granule',           label: 'Granule Line',               icon: Microscope,      group: 'Quality', departments: ['Quality'], permissions: ['can_create_runs','can_view_runs'] },
+  { href: '/quality/lab-results',       label: 'Final Product Lab Results',  icon: FileText,        group: 'Quality', departments: ['Quality'], permissions: ['can_save_lab_results','can_view_lab_results'] },
   { href: '/quality/coa',               label: 'COA Generator',              icon: FileSpreadsheet, group: 'Quality', departments: ['Quality'], permission: 'can_save_lab_results' },
-  { href: '/quality/customer-specs',    label: 'Customer Specs',             icon: BookOpen,        group: 'Quality', departments: ['Quality','Sales'], permission: 'can_edit_customer_specs' },
+  { href: '/quality/customer-specs',    label: 'Customer Specs',             icon: BookOpen,        group: 'Quality', departments: ['Quality','Sales'], permissions: ['can_edit_customer_specs','can_view_specs'] },
   { href: '/quality/lab-manager',       label: 'Lab Manager',                icon: ClipboardCheck,  group: 'Quality', departments: ['Quality'], permission: 'can_approve_runs' },
   { href: '/quality/maintenance-qc',    label: 'Maintenance QC',             icon: ClipboardCheck,  group: 'Quality', departments: ['Quality','Maintenance','Management'], permission: 'can_access_maintenance', orPermission: true },
 
@@ -113,15 +120,15 @@ export const NAV: NavItem[] = [
   // the account). Distinct from the Customers tab on /sales, which is the
   // commercial one: tiers, GP% and targets against plan.
   { href: '/sales/customers',           label: 'Accounts',                   icon: Users2,          group: 'Sales', departments: ['Sales','Management'], permission: 'can_access_sales' },
-  { href: '/intelligence/expansion',    label: 'Expansion',                  icon: Globe,           group: 'Sales', departments: ['Sales','Management','Marketing'], permission: 'can_access_intelligence' as PermissionKey },
-  { href: '/intelligence/global-wits',  label: 'Global Wits',                icon: FileSpreadsheet, group: 'Sales', departments: ['Sales','Management','Marketing'], permission: 'can_access_intelligence' as PermissionKey },
-  { href: '/intelligence/leads',        label: 'Lead Pipeline',              icon: KanbanSquare,    group: 'Sales', departments: ['Sales','Management','Marketing'], permission: 'can_access_intelligence' as PermissionKey },
-  { href: '/research',                  label: 'Alara',                      icon: Leaf,            group: 'Sales', departments: ['Sales','Management','Marketing'], permission: 'can_access_research' },
-  { href: '/intelligence/south-africa', label: 'South Africa',               icon: Flag,            group: 'Sales', departments: ['Sales','Management','Marketing'], permission: 'can_access_intelligence' as PermissionKey },
+  { href: '/intelligence/expansion',    label: 'Expansion',                  icon: Globe,           group: 'Sales', departments: ['Sales','Management','Marketing'], permissions: ['can_access_intelligence','can_view_intelligence'] },
+  { href: '/intelligence/global-wits',  label: 'Global Wits',                icon: FileSpreadsheet, group: 'Sales', departments: ['Sales','Management','Marketing'], permissions: ['can_access_intelligence','can_view_intelligence'] },
+  { href: '/intelligence/leads',        label: 'Lead Pipeline',              icon: KanbanSquare,    group: 'Sales', departments: ['Sales','Management','Marketing'], permissions: ['can_access_intelligence','can_view_intelligence'] },
+  { href: '/research',                  label: 'Alara',                      icon: Leaf,            group: 'Sales', departments: ['Sales','Management','Marketing'], permissions: ['can_access_research','can_view_research'] },
+  { href: '/intelligence/south-africa', label: 'South Africa',               icon: Flag,            group: 'Sales', departments: ['Sales','Management','Marketing'], permissions: ['can_access_intelligence','can_view_intelligence'] },
 
   // ── Marketing ──
-  { href: '/marketing',                 label: 'Marketing Hub',              icon: Sparkles,        group: 'Marketing', departments: ['Marketing','Management'], permission: 'can_access_marketing' as PermissionKey },
-  { href: '/intelligence/marketing',    label: 'Marketing Intelligence',     icon: TrendingUp,      group: 'Marketing', departments: ['Marketing','Sales','Management'], permission: 'can_access_intelligence' as PermissionKey },
+  { href: '/marketing',                 label: 'Marketing Hub',              icon: Sparkles,        group: 'Marketing', departments: ['Marketing','Management'], permissions: ['can_access_marketing','can_view_marketing'] },
+  { href: '/intelligence/marketing',    label: 'Marketing Intelligence',     icon: TrendingUp,      group: 'Marketing', departments: ['Marketing','Sales','Management'], permissions: ['can_access_intelligence','can_view_intelligence'] },
 
   // ── Logistics — module hidden for now (not in use); routes are also
   // blocked in app/(app)/layout.tsx's ROUTE_GUARDS (disabled: true). Re-add
@@ -136,7 +143,7 @@ export const NAV: NavItem[] = [
   { href: '/management/platform',       label: 'Platform Health',            icon: Cpu,             group: 'Management', departments: ['Management'], permission: 'can_view_management' },
 
   // ── Workspace ──
-  { href: '/workspace',                 label: 'My Workspace',               icon: Flower2,         group: 'Workspace', permission: 'can_access_workspace' as PermissionKey },
+  { href: '/workspace',                 label: 'My Workspace',               icon: Flower2,         group: 'Workspace', permission: 'can_access_workspace' },
 
   // ── AXIS — IT change & project tracking (last module group) ──
   { href: '/axis',                      label: 'AXIS Dashboard',             icon: FolderKanban,    group: 'AXIS', itOnly: true },
@@ -185,7 +192,10 @@ export function getVisibleNavItems(nav: NavItem[], ctx: {
     // explicitly enabled (override), let them through regardless of department.
     // This means permissions are the single source of truth.
     // Department is only used when there is NO explicit permission override.
-    const hasExplicitPermission = item.permission && ctx.p(item.permission)
+    // Any ONE of the item's keys is enough — a flat OR, same as the route guard.
+    const itemPermissions = [item.permission, ...(item.permissions ?? [])]
+      .filter((k): k is PermissionKey => !!k)
+    const hasExplicitPermission = itemPermissions.some(k => ctx.p(k))
 
     // Developers (senior_developer handled above, co_developer here) see every
     // department's nav — they bypass the department check but still need any
@@ -197,7 +207,7 @@ export function getVisibleNavItems(nav: NavItem[], ctx: {
       if (item.departments && !isDeveloper && !(ctx.department && item.departments.includes(ctx.department))) return false
       // Department matches — still need the permission, unless it's an alternative
       // to department (orPermission), in which case department alone suffices.
-      if (item.permission && !item.orPermission && !ctx.p(item.permission)) return false
+      if (itemPermissions.length > 0 && !item.orPermission && !itemPermissions.some(k => ctx.p(k))) return false
     }
 
     return true

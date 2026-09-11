@@ -84,11 +84,15 @@ const ROUTE_GUARDS: Array<{
   // added later without its own rule) — unchanged from before.
   { prefix: '/quality',                departments: ['Quality'], permission: 'can_view_history', orPermission: true },
 
-  // Supervisor hub — production supervisors + management
-  { prefix: '/supervisor',           departments: ['Production','Management'] },
+  // Supervisor hub — production supervisors + management.
+  // can_read_production is listed (here and on the four rules below) because
+  // these five routes had NO permission at all: department membership was the
+  // only way in, so a read-only grant could never reach them however many keys
+  // were ticked. orPermission, so the department path is untouched.
+  { prefix: '/supervisor',           departments: ['Production','Management'], permission: 'can_read_production', orPermission: true },
 
   // Stock Control (Operations) — printer assignment + future stock modules
-  { prefix: '/stock-control',        departments: ['Production','Management'] },
+  { prefix: '/stock-control',        departments: ['Production','Management'], permission: 'can_read_production', orPermission: true },
 
   // Note Books (GRN / Delivery Notes) — cross-department by design: the books
   // are written at the gate and the store, and read by Quality, Production and
@@ -99,9 +103,9 @@ const ROUTE_GUARDS: Array<{
   // Production
   { prefix: '/count',                departments: ['Production'], permission: 'can_submit_count'       },
   { prefix: '/info',                 departments: ['Production'], permission: 'can_view_ops_dashboard' },
-  { prefix: '/production/operations',departments: ['Management'] },
-  { prefix: '/production/dashboard', departments: ['Production','Management'] },
-  { prefix: '/production/floor-plan',departments: ['Production','Management'] },
+  { prefix: '/production/operations',departments: ['Management'], permission: 'can_read_production', orPermission: true },
+  { prefix: '/production/dashboard', departments: ['Production','Management'], permission: 'can_read_production', orPermission: true },
+  { prefix: '/production/floor-plan',departments: ['Production','Management'], permission: 'can_read_production', orPermission: true },
   // History / Planning. Reachable by floor operators too (see the sandbox
   // below) -- for them this early-returns before ROUTE_GUARDS is consulted,
   // so this rule governs everyone else.
@@ -148,16 +152,18 @@ const ROUTE_GUARDS: Array<{
   { prefix: '/status',     departments: ['IT'] },
   { prefix: '/management', departments: ['Management'], permission: 'can_view_management', orPermission: true },
 
-  // Sales & Research
-  { prefix: '/research',   departments: ['Sales','Management','Marketing'], permission: 'can_access_research' },
+  // Sales & Research. Alara and Intelligence each accept a view key alongside
+  // the full-use key: the screens are readable by a viewer, while the three
+  // actions that WRITE (promote a signal to an account, upload to the vault,
+  // import Global Wits) still check can_access_* inside the page and its route.
+  { prefix: '/research',   departments: ['Sales','Management','Marketing'], permissions: ['can_access_research','can_view_research'] },
   { prefix: '/sales',      departments: ['Sales','Management'], permission: 'can_access_sales'    },
 
   // Marketing
-  { prefix: '/marketing',  departments: ['Marketing','Management'], permission: 'can_access_marketing' as PermissionKey },
+  { prefix: '/marketing',  departments: ['Marketing','Management'], permissions: ['can_access_marketing','can_view_marketing'] },
 
-  // Intelligence — `can_access_intelligence` is a planned permission key honoured
-  // by the /api/signals route; cast until it's added to PermissionKey.
-  { prefix: '/intelligence', departments: ['Sales', 'Management', 'Marketing'], permission: 'can_access_intelligence' as PermissionKey },
+  // Intelligence
+  { prefix: '/intelligence', departments: ['Sales', 'Management', 'Marketing'], permissions: ['can_access_intelligence','can_view_intelligence'] },
 
   // Admin
   { prefix: '/users',      permission: 'can_manage_users' },

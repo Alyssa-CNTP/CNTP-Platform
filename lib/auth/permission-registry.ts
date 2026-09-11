@@ -31,13 +31,22 @@ export interface ResourceDef {
 
 export interface ModuleDef {
   module:      string
+  // Stable id used to build this module's read-only key (`can_read_<slug>`).
+  // Never rename one — the key is stored per user in shared.app_roles.permissions,
+  // so a renamed slug silently revokes everyone who held it.
+  slug:        string
   department?: Department
   resources:   ResourceDef[]
+  // Opt a module OUT of the read-only grant. Only Administration sets this:
+  // its resources are all `manage` (audit log, migrations, dev tools, user
+  // admin) and none of them is a read anybody should get from a blanket
+  // "view everything" toggle.
+  readGrant?:  false
 }
 
 export const PERMISSION_MATRIX: ModuleDef[] = [
   {
-    module: 'Quality', department: 'Quality',
+    module: 'Quality', slug: 'quality', department: 'Quality',
     resources: [
       { key: 'quality.records', label: 'Raw-material records',
         read: 'can_view_history', write: 'can_save_records', delete: 'can_delete_records',
@@ -78,7 +87,7 @@ export const PERMISSION_MATRIX: ModuleDef[] = [
     ],
   },
   {
-    module: 'Production', department: 'Production',
+    module: 'Production', slug: 'production', department: 'Production',
     resources: [
       { key: 'production.count', label: 'Morning stock count',
         read: 'can_view_ops_dashboard', write: 'can_submit_count',
@@ -129,7 +138,7 @@ export const PERMISSION_MATRIX: ModuleDef[] = [
     ],
   },
   {
-    module: 'Maintenance', department: 'Maintenance',
+    module: 'Maintenance', slug: 'maintenance', department: 'Maintenance',
     resources: [
       { key: 'maintenance.access', label: 'Maintenance module', read: 'can_access_maintenance',
         note: 'Grant Read to give a non-Maintenance user the module.' },
@@ -144,23 +153,38 @@ export const PERMISSION_MATRIX: ModuleDef[] = [
     ],
   },
   {
-    module: 'Sales', department: 'Sales',
+    module: 'Sales', slug: 'sales', department: 'Sales',
     resources: [
+      // The Sales dashboard and Accounts pages perform no writes at all, so the
+      // access key IS the read key — there is nothing to withhold.
       { key: 'sales.module', label: 'Sales module', read: 'can_access_sales' },
-      { key: 'sales.research', label: 'Research engine', read: 'can_access_research' },
-      { key: 'sales.intelligence', label: 'Signal / intelligence engine', read: 'can_access_intelligence' },
+      // Research (Alara) and Intelligence DO write: Alara can promote a signal
+      // into an account and upload to the document vault; Global Wits imports a
+      // CSV. So each is split — a view key that opens the screens, and the
+      // original can_access_* key which is what those three actions check.
+      // Nobody loses anything: existing holders of can_access_* keep both.
+      { key: 'sales.research', label: 'Research engine (Alara)',
+        read: 'can_view_research',
+        manage: [{ key: 'can_access_research', label: 'Full use — promote a signal to an account, upload to the vault' }] },
+      { key: 'sales.intelligence', label: 'Signal / intelligence engine',
+        read: 'can_view_intelligence',
+        manage: [{ key: 'can_access_intelligence', label: 'Full use — import Global Wits data' }] },
     ],
   },
   {
-    module: 'Marketing', department: 'Marketing',
+    module: 'Marketing', slug: 'marketing', department: 'Marketing',
     resources: [
-      { key: 'marketing.module', label: 'Marketing module', read: 'can_access_marketing' },
+      // Split for the same reason as Research/Intelligence below: the Marketing
+      // hub saves reports, bookmarks signals and promotes companies to accounts.
+      { key: 'marketing.module', label: 'Marketing module',
+        read: 'can_view_marketing',
+        manage: [{ key: 'can_access_marketing', label: 'Full use — save reports, bookmark signals, create accounts' }] },
     ],
   },
   {
     // Cross-department — Production/Quality get it by department; this
     // permission grants it to anyone outside those departments.
-    module: 'Bag Tracking',
+    module: 'Bag Tracking', slug: 'bag_tracking',
     resources: [
       { key: 'bag_tracking.access', label: 'Bag Tracking module', read: 'can_access_bag_tracking',
         note: 'Grant Read to give a non-Production/Quality user the page.' },
@@ -169,7 +193,7 @@ export const PERMISSION_MATRIX: ModuleDef[] = [
   {
     // Cross-department — Production/Quality/Management get it by department;
     // this permission grants it to anyone outside those departments.
-    module: 'Logistics',
+    module: 'Logistics', slug: 'logistics',
     resources: [
       { key: 'logistics.access', label: 'Logistics module', read: 'can_access_logistics',
         note: 'Grant Read to give a non-Production/Quality/Management user the module.' },
@@ -185,7 +209,7 @@ export const PERMISSION_MATRIX: ModuleDef[] = [
     // Cross-department — the books are written at the gate/store and read by
     // Quality, Production and Management. Access is by permission only, so it
     // can be granted to exactly the people who work a book.
-    module: 'Note Books',
+    module: 'Note Books', slug: 'notebooks',
     resources: [
       { key: 'notebooks.documents', label: 'GRN / Delivery Note books',
         read: 'can_access_notebooks', write: 'can_create_notebook_doc',
@@ -198,7 +222,7 @@ export const PERMISSION_MATRIX: ModuleDef[] = [
     ],
   },
   {
-    module: 'Management', department: 'Management',
+    module: 'Management', slug: 'management', department: 'Management',
     resources: [
       { key: 'management.dashboard', label: 'Management dashboard & reports',
         read: 'can_view_management',
@@ -209,7 +233,7 @@ export const PERMISSION_MATRIX: ModuleDef[] = [
     ],
   },
   {
-    module: 'Workspace',
+    module: 'Workspace', slug: 'workspace',
     resources: [
       { key: 'workspace.board', label: 'Personal workspace', read: 'can_access_workspace' },
       { key: 'workspace.ticketing', label: 'Ticketing',
@@ -220,7 +244,7 @@ export const PERMISSION_MATRIX: ModuleDef[] = [
     // Cross-department — no single department owns this. Staff Directory is
     // just people + how they sign in — competency/SOP records live under
     // Training below (that's the qualification home).
-    module: 'Staff Directory',
+    module: 'Staff Directory', slug: 'staff',
     resources: [
       { key: 'staff.access', label: 'Staff Directory section',
         read: 'can_access_hr',
@@ -234,12 +258,20 @@ export const PERMISSION_MATRIX: ModuleDef[] = [
     // Cross-department — HR owns authoring org-wide; Production/Quality can author their own courses.
     // This is the qualification home: courses, assignments, sign-offs, the
     // Skills Matrix and the SOP Catalogue all live here.
-    module: 'Training',
+    module: 'Training', slug: 'training',
     resources: [
+      // No Read for these two, deliberately. The only screens that show course
+      // content and assignments are the /training/manage authoring pages, which
+      // are an editing tool rather than a record — there is no read-only view of
+      // them to grant. The readable Training content is the Skills Matrix and
+      // the SOP catalogue below, and those the read-only grant does cover.
+      // Every learner already reaches their own courses at /training (always-open
+      // route, no permission at all).
       { key: 'training.content', label: 'Courses, lessons & assessments',
-        read: 'dept', write: 'can_author_training' },
+        write: 'can_author_training',
+        note: 'Authoring tool — no read-only view exists, so Read is intentionally blank.' },
       { key: 'training.assignments', label: 'Course assignments',
-        read: 'dept', write: 'can_assign_training' },
+        write: 'can_assign_training' },
       { key: 'training.competency', label: 'Skills Matrix & assessments',
         read: 'can_view_staff', write: 'can_manage_competencies',
         manage: [
@@ -253,7 +285,7 @@ export const PERMISSION_MATRIX: ModuleDef[] = [
   {
     // Cross-department — the whole-site shift layout. View is one global key;
     // write/delete/submit are per section so a person changes only their own.
-    module: 'Shift Roster',
+    module: 'Shift Roster', slug: 'roster',
     resources: [
       { key: 'roster.production', label: 'Roster — Production',
         read: 'can_view_roster', write: 'can_edit_roster_production', delete: 'can_delete_roster_production',
@@ -276,7 +308,7 @@ export const PERMISSION_MATRIX: ModuleDef[] = [
     ],
   },
   {
-    module: 'Administration', department: 'IT',
+    module: 'Administration', slug: 'admin', department: 'IT', readGrant: false,
     resources: [
       { key: 'admin.users', label: 'User administration',
         manage: [
@@ -307,3 +339,58 @@ export const MATRIX_KEYS: PermissionKey[] = Array.from(new Set(
     ...(r.manage?.map(x => x.key) ?? []),
   ].filter(Boolean) as PermissionKey[]))
 ))
+
+// ─── Read-only access, derived from the matrix ────────────────────────────────
+//
+// "Give this person read-only access to <module>" is not a hand-written list of
+// keys — it is exactly the `read` slots this file already declares. Deriving it
+// means a module added below is covered the day it is added, and a resource with
+// no `read` (an authoring tool, an admin action) is never swept in by accident.
+//
+// The grant is ADDITIVE ONLY. It turns read keys on; it never turns anything
+// off, so it cannot quietly strip a write a role already grants. And it is
+// checked LAST in resolvePermission(), after overrides, so an explicit `false`
+// on one key still wins over a blanket grant.
+
+/** `can_read_<slug>` for a module — the key that grants read across it. */
+export function moduleReadKey(slug: string): PermissionKey {
+  return `can_read_${slug}` as PermissionKey
+}
+
+/** Every module that participates in the read-only grant, in matrix order. */
+export const READ_GRANT_MODULES: { slug: string; module: string; key: PermissionKey }[] =
+  PERMISSION_MATRIX
+    .filter(m => m.readGrant !== false)
+    .map(m => ({ slug: m.slug, module: m.module, key: moduleReadKey(m.slug) }))
+
+/** Module read key → the read keys it grants. Excludes 'dept' (not a key). */
+export const READ_KEYS_BY_MODULE: Record<string, PermissionKey[]> = Object.fromEntries(
+  PERMISSION_MATRIX
+    .filter(m => m.readGrant !== false)
+    .map(m => [
+      moduleReadKey(m.slug),
+      Array.from(new Set(
+        m.resources
+          .map(r => r.read)
+          .filter((r): r is PermissionKey => !!r && r !== 'dept')
+      )),
+    ])
+)
+
+/** The set of per-module read keys, for the can_read_all_modules implication. */
+export const MODULE_READ_KEYS: Set<PermissionKey> = new Set(READ_GRANT_MODULES.map(m => m.key))
+
+/**
+ * Read key → the module read keys that grant it. A Map, not a Record, because
+ * one read key can belong to two modules (can_access_maintenance is the read
+ * for both Maintenance resources; can_view_staff for Training's and Staff's).
+ */
+export const READ_KEY_GRANTORS: Map<PermissionKey, PermissionKey[]> = (() => {
+  const m = new Map<PermissionKey, PermissionKey[]>()
+  for (const [moduleKey, readKeys] of Object.entries(READ_KEYS_BY_MODULE)) {
+    for (const rk of readKeys) {
+      m.set(rk, [...(m.get(rk) ?? []), moduleKey as PermissionKey])
+    }
+  }
+  return m
+})()
