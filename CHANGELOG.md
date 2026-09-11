@@ -2,6 +2,32 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-11 — Gustav (Sieving QC: a bag is only stamped by a run that actually names it; five orphaned bags corrected)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`
+
+### The bag stamp followed the form, not the run
+
+Saving a run wrote the bag's `qc_check` event and `bag_tags` stamp off `form.serialNumber`. That is not the same value the run stores: an **In-Process** run deliberately saves `serial_number = null` (a bag is only serialised at bagging), while the form may still be holding a serial from an earlier Final QC — *"Sample now →"* pre-fills one, and switching product tabs leaves it behind.
+
+So an in-process reading that was never about that bag could still mark it QC-checked. `STFL-270826-001` collected **three** such marks, one of them captured on the **Rooibos Blocks** tab against a Fine Leaf bag. Both writes now key off `saved.serial_number` — the serial the run itself recorded — so the bag's ledger cannot disagree with the run behind it.
+
+### The five orphaned bags, corrected in production
+
+Bags carrying a `qc_check` mark with no quality record behind it. Four were deleted runs, each still visible as a gap in the `qms.sd_runs` id sequence; the fifth is the stale-serial case above.
+
+| Bag | Cause | Evidence |
+|---|---|---|
+| STFL-210826-005 | run deleted | id 3853 missing (21 Aug 09:10) |
+| STFL-270826-025 | run deleted | id 4128 missing (27 Aug 19:25) |
+| STFL-270826-026 | run deleted | id 4129 missing (27 Aug 19:27) |
+| STCL-080926-012 | run deleted | id 4694 missing (9 Sep 06:00) |
+| STFL-270826-001 | stale serial in the form | 3 marks from in-process runs, one on the Rooibos Blocks tab |
+
+Each received a reversing `void` event naming the cause (the original `qc_check` rows stay — the ledger is append-only, ARCHITECTURE.md §4) and had its stale `bag_tags` QC stamp cleared. The pending-QC queue reads `sd_runs`, not the stamp, so all five were already queued for QC; what was wrong was each bag's own history claiming it had been checked.
+
+---
+
 ## 2026-09-11 — Gustav (Sieving QC: grade and variant are Quality's call, and a deleted run no longer leaves the bag looking checked)
 
 **Files changed:** `app/(app)/quality/sieving/page.tsx`, `lib/supabase/database.types.ts`
