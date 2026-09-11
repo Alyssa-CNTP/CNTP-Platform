@@ -7,6 +7,7 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react'
 import type { User, Session } from '@supabase/supabase-js'
 import { getDb } from '@/lib/supabase/db'
+import { flags } from '@/lib/config/flags'
 import {
   type Department,
   type PermissionKey,
@@ -15,6 +16,9 @@ import {
 } from './permissions'
 
 export type { Department, PermissionKey }
+
+/** Why the session ended — see `signOut` below and features/shift-clock. */
+export type SignOutReason = 'signed_out' | 'idle_timeout'
 
 // ─── Context shape ────────────────────────────────────────────────────────────
 
@@ -37,7 +41,14 @@ interface AuthContextValue {
 
   // Auth actions
   signIn:         (email: string, password: string) => Promise<{ error: string | null }>
-  signOut:        () => Promise<void>
+  /**
+   * `reason` is what the SHIFT CLOCK records as the end of the operator's day.
+   * Optional, defaulting to a deliberate sign-out, so every existing caller is
+   * unchanged — only the app shell's 60-minute inactivity sign-out passes
+   * 'idle_timeout', because an operator who was booted mid-shift did not choose
+   * to stop and a shift report should be able to tell the two apart.
+   */
+  signOut:        (reason?: SignOutReason) => Promise<void>
   changePassword: (currentPassword: string, newPassword: string) => Promise<{ error: string | null }>
 
   // Convenience checks
@@ -203,13 +214,35 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return { error: null }
   }, [])
 
-  const signOut = useCallback(async () => {
+  const signOut = useCallback(async (reason: SignOutReason = 'signed_out') => {
     // Write sign-out event before the session is invalidated
     await fetch('/api/admin/audit/auth-event', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'sign_out' }),
     }).catch(() => {})
+
+    // Stop the operator's shift clock — ALSO before the session is invalidated,
+    // because the route takes the identity from the session and afterwards
+    // there is nobody to attribute the close to. This is the "and when they log
+    // out it stops" half of the timesheet: the clock starts in the app shell at
+    // login (features/shift-clock) and ends here.
+    //
+    // Awaited rather than fire-and-forget. `auth.signOut()` on the next line
+    // tears the session down, and a request still in flight would lose its
+    // cookie and close nothing — the operator's shift would then sit open until
+    // the stale sweep guessed an end from their last heartbeat. The `.catch`
+    // keeps a clock failure from ever blocking a sign-out; the sweep is the
+    // fallback, not the plan.
+    if (flags.shiftClock) {
+      await fetch('/api/production/shift-clock', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'out', reason }),
+        keepalive: true,
+      }).catch(() => {})
+    }
+
     await getDb().auth.signOut()
     // Let a section-bound (dedicated) tablet re-open its section for the next
     // person who logs in. Device binding itself (localStorage) is left intact.

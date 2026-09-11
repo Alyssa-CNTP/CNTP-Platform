@@ -15,6 +15,9 @@ import {
   scheduledStoppages, toSnapshotBreaks, workedMinutes,
   type Stoppage, type StoppageKind, type StoppageSource, type SupervisorVerdict,
 } from '@/lib/core/timesheet/stoppages'
+import { presenceWindow, type PresenceWindow } from '@/lib/core/timesheet/shift-clock'
+import { loadIntervals } from '@/features/shift-clock'
+import { flags } from '@/lib/config/flags'
 import type { Database } from '@/lib/supabase/database.types'
 
 // ── Typed edges ──────────────────────────────────────────────────────────────
@@ -406,6 +409,48 @@ export async function seedScheduledStoppages(
     return existing
   }
   return seeded
+}
+
+// ── When the operator actually signed in ─────────────────────────────────────
+
+/**
+ * The operator's shift window from the SHIFT CLOCK — login to logout.
+ *
+ * This is the fix for "timesheets only start working when I go into the capture
+ * page and the sign off module". Shift start was the first `capture_activity`
+ * heartbeat, and only `/production/capture/[section]` writes those: an operator
+ * who did the handover, walked the line and reached the tablet at 08h40 got an
+ * 08h40 start, and one who never opened Sign-off got no start at all — the
+ * fallback was the earliest SCHEDULED break, which reads 10:30.
+ *
+ * Signing in is not capture's fact, so it is not capture's to record. It is a
+ * ledger of its own (`features/shift-clock`), written from the app shell, and
+ * this reads it.
+ *
+ * Matched on the AUTH USER ID where the caller has it, because the sign-off
+ * name field is an input the operator types in and must not be able to re-key
+ * someone's shift start. The name is the fallback for callers that only know
+ * who signed off.
+ *
+ * TOTAL — never throws, and answers "no clock" for every failure. This is the
+ * hook-shaped adapter of ARCHITECTURE.md §3: a timesheet that could not read
+ * the clock must degrade to the behaviour that shipped before the clock
+ * existed, not blank a screen an operator is mid-shift on.
+ */
+export async function loadShiftWindow(args: {
+  date:  string
+  shift: string
+  userId?:       string | null
+  operatorName?: string | null
+}): Promise<PresenceWindow> {
+  const none: PresenceWindow = { startIso: null, endIso: null, onClock: false, sessions: 0 }
+  if (!flags.shiftClock) return none
+  try {
+    return presenceWindow(await loadIntervals(args))
+  } catch (e) {
+    console.warn('[operator-timesheet] could not read the shift clock:', e)
+    return none
+  }
 }
 
 // ── The confirmed snapshot on prod_timesheets ────────────────────────────────

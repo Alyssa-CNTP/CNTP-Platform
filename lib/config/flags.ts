@@ -187,6 +187,29 @@ export const flags = {
    * carries on — the failure is visible and contained, not silent.
    */
   operatorTimesheet: envFlag(process.env.NEXT_PUBLIC_FF_OPERATOR_TIMESHEET, true),
+
+  /**
+   * The shift clock (features/shift-clock) — the operator's timesheet starts at
+   * LOGIN and stops at LOGOUT, instead of at the first capture-page heartbeat.
+   *
+   * DEFAULTS TO TRUE, for the same reason `operatorTimesheet` does: the
+   * behaviour it replaces is not merely older, it is WRONG. Shift start was the
+   * first `capture_activity` stamp, which only `/production/capture/[section]`
+   * writes — so an operator who reached the tablet at 08h40 had a 08h40 start,
+   * and one who never opened Sign-off fell back to the earliest scheduled
+   * break and read 10:30.
+   *
+   * Turning it OFF is a one-line rollback to that behaviour, which is what a
+   * flag is for. What it must not be is the default: leaving the floor on the
+   * broken path and making the fix an environment variable somebody has to
+   * remember is how the flag-inlining bug above survived a whole release.
+   *
+   * REQUIRES migration 20260911_020_operator_shift_clock.sql. With the flag on
+   * and the migration unapplied the clock writes fail, `db.ts` swallows them,
+   * and the timesheet falls back to the old derivation — visible in the console,
+   * contained, and no worse than before.
+   */
+  shiftClock: envFlag(process.env.NEXT_PUBLIC_FF_SHIFT_CLOCK, true),
 } as const
 
 export type FeatureFlag = keyof typeof flags

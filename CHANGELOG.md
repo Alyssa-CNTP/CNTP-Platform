@@ -2,6 +2,38 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-11 — Alyssa (The timesheet starts at login and stops at logout)
+
+**Files changed:** `lib/core/timesheet/shift-clock.ts` (new), `lib/core/timesheet/shift-clock.test.ts` (new), `supabase/migrations/20260911_020_operator_shift_clock.sql` (new, **pending**), `app/api/production/shift-clock/route.ts` (new), `features/shift-clock/{index.ts,db.ts,ShiftClock.tsx}` (new), `app/(app)/layout.tsx`, `lib/auth/context.tsx`, `lib/config/flags.ts`, `lib/supabase/database.types.ts`, `features/operator-timesheet/{db.ts,OperatorTimesheet.tsx}`
+
+### The fault
+
+Reported from the floor as: *"timesheets only start working when I go into the capture page and the sign off module."*
+
+That is exactly what the code did. Shift start was derived from `production.capture_activity`, and **every row in that table is written by one screen** — `/production/capture/[section]`. So the clock did not start when the operator started; it started when they first opened capture. An operator who did the 07h00 handover, walked the line and cleared a blockage before reaching the tablet at 08h40 had a timesheet that began at 08h40. Worse, if nobody ever opened Sign-off there were no heartbeats at all and the start fell through to *the earliest logged stoppage* — which with nothing else on the sheet is the **scheduled tea break**, so the shift read as starting at 10:30.
+
+The end had the same shape: it existed only if somebody reached Sign-off and tapped confirm.
+
+### The fix
+
+Signing in is not capture's fact to own. It happens in the app shell, before any section is chosen, and it is equally true on a day spent on the Supervisor Hub. So presence gets its own append-only ledger and the timesheet **reads** it instead of inferring one.
+
+- **`production.operator_shift_clock`** — one row per login, closed at logout. Not two columns on a timesheet: a production day holds several sign-ins (the tablet is locked and reopened, the 60-minute inactivity sign-out fires while the operator is inside a machine), and a single mutable `shift_start` would have each one overwrite the last — the read-modify-write failure of ARCHITECTURE.md §1B, applied to somebody's paid hours. **Shift start is the earliest open of the run day and cannot move; shift end is the latest close.**
+- **A partial unique index** on `(user_id, date, shift) WHERE closed_at IS NULL` makes clock-in a safe find-or-create: a reload, a second tab or a second device joins the interval that exists rather than starting a new one and dragging the start forward.
+- **`features/shift-clock`** mounts once in `app/(app)/layout.tsx`, renders nothing, clocks in on login and heartbeats every two minutes. It deliberately does **not** close on unmount — navigating between pages unmounts the tree constantly, and closing there would end a shift every time somebody opened a different screen. The close belongs to `signOut()`, the only place that knows a logout is a logout.
+- **`signOut()` awaits the clock-out** before `auth.signOut()` tears the session down. Fire-and-forget would lose its cookie mid-flight and close nothing.
+- **The 60-minute inactivity sign-out records `idle_timeout`, not `signed_out`.** An operator the app booted did not choose to stop — they were very likely inside a machine — and a shift report that cannot tell that from "went home" blames the wrong person.
+- **A dead tablet closes at its last heartbeat**, never at the moment the sweep noticed. Measuring an abandoned interval to `now` would pay for hours nobody was there; measuring it to zero would pay for none of the ones they were. `close_stale_shift_clocks()` runs on read, at 90 minutes — deliberately longer than the app's own 60-minute sign-out, so it cannot race it and close live shifts out from under operators who are simply working away from the tablet.
+
+### Two deliberate choices worth stating
+
+- **The clock is SELECT-only to `authenticated`; every write goes through the API route.** Every other timesheet table holds what the operator *says* happened and they must be able to correct it. This one holds when they actually signed in, it decides paid hours, and the whole point of anchoring it to the login is that nobody types it.
+- **Gaps between sign-ins are shown, never subtracted.** `awayGaps()` surfaces them for a supervisor; deductions stay with the stoppage ledger, which the operator confirms. An inactivity sign-out at 11h00 followed by a sign-in at 11h02 is two minutes of nothing happening, not a break — inferring otherwise is how the floor gets docked for a flat battery.
+
+`productionDayFor()` — the §9 function ARCHITECTURE.md has referred to for months without it existing — now does, in core, resolving the 07h00→01h00 run day **in SAST with the zone passed explicitly**. This route runs server-side and the VPS clock is UTC, so reading local hours would file every login between 07h00 and 09h00 SAST into the previous night's run.
+
+Behind `NEXT_PUBLIC_FF_SHIFT_CLOCK`, defaulting **on**: the behaviour it replaces is not merely older, it is wrong. With the flag on and the migration unapplied the clock writes fail, the adapter swallows them, and the timesheet falls back to the old capture-heartbeat derivation — visible in the console, contained, no worse than before.
+
 ## 2026-09-11 — Gustav (Maintenance: NPD type, temporary repairs, and the notifications that were never being sent)
 
 **Files changed:** `lib/notifications/recipients.ts`, `app/api/maintenance/staff/route.ts`, `app/api/maintenance/job-cards/[id]/verify/route.ts`, `app/api/maintenance/transcribe/route.ts`, `lib/maintenance/constants.ts`, `lib/maintenance/types.ts`, `lib/maintenance/useMaintenanceData.ts`, `components/maintenance/JobCardItem.tsx`, `app/(app)/maintenance/my-jobs/page.tsx`, `app/(app)/maintenance/job-cards/page.tsx`, `supabase/migrations/20260911_010_jobcard_temporary_repair_followup.sql` (new, applied to staging)

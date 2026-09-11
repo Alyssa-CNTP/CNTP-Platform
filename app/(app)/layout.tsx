@@ -11,6 +11,9 @@ import Sidebar          from '@/components/layout/Sidebar'
 import Topbar           from '@/components/layout/Topbar'
 import NotificationBell from '@/components/layout/NotificationBell'
 import CommandSearch    from '@/components/search/CommandSearch'
+import FeatureBoundary  from '@/components/shared/FeatureBoundary'
+import { ShiftClock }   from '@/features/shift-clock'
+import { flags }        from '@/lib/config/flags'
 import { LanguageProvider } from '@/lib/i18n/context'
 
 // ─── Route access rules ────────────────────────────────────────────────────────
@@ -283,7 +286,11 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
     const evaluate = () => {
       const idle = Date.now() - lastActivityRef.current
-      if (idle >= INACTIVITY_MS) { setShowWarning(false); signOut(); return }
+      // 'idle_timeout', not a plain sign-out. The shift clock records the two
+      // separately because an operator the app booted at 60 minutes did not
+      // choose to stop — they were very likely inside a machine — and a shift
+      // report that cannot tell that from "went home" blames the wrong person.
+      if (idle >= INACTIVITY_MS) { setShowWarning(false); signOut('idle_timeout'); return }
       if (idle >= INACTIVITY_MS - WARNING_MS) {
         setShowWarning(true)
         setCountdown(Math.max(1, Math.ceil((INACTIVITY_MS - idle) / 1000)))
@@ -420,6 +427,18 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
 
   return (
     <LanguageProvider>
+      {/* The operator's shift clock. Mounted HERE, in the shell, because that is
+          the fix: the timesheet's shift start used to be the first
+          `capture_activity` heartbeat, and only the capture page writes those —
+          so a shift began when the operator first opened capture, not when they
+          signed in. Renders nothing; it clocks in on login and heartbeats while
+          the tab lives. The clock-out is in `signOut()`, the only place that
+          knows a logout is a logout. See features/shift-clock. */}
+      {flags.shiftClock && (
+        <FeatureBoundary name="Shift clock" silent>
+          <ShiftClock userId={user.id} />
+        </FeatureBoundary>
+      )}
       <div className="flex h-dvh overflow-hidden bg-surface app-shell">
         <Sidebar mobileOpen={mobileOpen} onMobileClose={() => setMobileOpen(false)} />
         <div className="flex flex-col flex-1 min-w-0 overflow-hidden app-shell-col">

@@ -340,6 +340,37 @@ export interface Database {
         Update: Partial<Database['production']['Tables']['timesheet_stoppages']['Insert']>
       }
 
+      // ── operator_shift_clock ────────────────────────────────
+      // Login → logout presence. ONE ROW PER SIGN-IN, appended: the timesheet
+      // derives shift start (earliest open of the run day) and end (latest
+      // close) from the set. Never collapse a day to a single mutable row —
+      // see lib/core/timesheet/shift-clock.ts and the migration's header.
+      operator_shift_clock: {
+        Row: {
+          id:            string
+          user_id:       string
+          operator_id:   string | null
+          operator_name: string
+          // The PRODUCTION RUN day + shift, not the wall-clock date of opened_at.
+          date:          string
+          shift:         'morning' | 'afternoon' | 'night'
+          section_id:    string | null
+          opened_at:     string
+          closed_at:     string | null   // null = still signed in
+          // 'stale' rows are closed at last_seen_at, never at the sweep time.
+          close_reason:  'signed_out' | 'idle_timeout' | 'stale' | 'supervisor' | null
+          last_seen_at:  string
+          device:        string | null
+          created_at:    string
+          updated_at:    string
+        }
+        Insert: Omit<
+          Database['production']['Tables']['operator_shift_clock']['Row'],
+          'id' | 'created_at' | 'updated_at' | 'opened_at' | 'last_seen_at'
+        > & { id?: string; opened_at?: string; last_seen_at?: string }
+        Update: Partial<Database['production']['Tables']['operator_shift_clock']['Insert']>
+      }
+
       // ── line_messages ───────────────────────────────────────
       // Supervisor-hub per-line comms. section_id NULL = general channel.
       line_messages: {

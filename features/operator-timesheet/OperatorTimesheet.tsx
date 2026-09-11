@@ -65,7 +65,7 @@ import { usesShiftScopedTimesheet } from '@/lib/config/flags'
 import {
   loadStoppages, saveStoppage, voidStoppage, seedScheduledStoppages,
   loadTimesheet, confirmTimesheet, saveTimesheetNote,
-  attestStoppage, reportStoppage, callSupervisor,
+  attestStoppage, reportStoppage, callSupervisor, loadShiftWindow,
   type StoppageScope,
 } from './db'
 import { getMySignatureStatus, type MySignatureStatus } from '@/lib/production/employee-signature'
@@ -202,6 +202,18 @@ export function OperatorTimesheet({
   const [endIso, setEndIso]       = useState<string | null>(null)
   const [note, setNote]           = useState('')
 
+  /**
+   * What the shift clock says: whether this operator is signed in right now,
+   * and how many separate sign-ins made up their day.
+   *
+   * Shown, not acted on. The start field is read-only either way — this only
+   * tells the operator WHERE the time came from, which matters because "set
+   * from your login" is a claim they can check and the old derivation (first
+   * capture heartbeat) was one they could not.
+   */
+  const [onClock, setOnClock]             = useState(false)
+  const [clockSessions, setClockSessions] = useState(0)
+
   const [dismissedKinds, setDismissedKinds] = useState<ReadonlySet<PromptKind>>(new Set())
 
   // Supervisor attestation
@@ -304,7 +316,7 @@ export function OperatorTimesheet({
 
         const s: StoppageScope = { sessionId: anchorId, ...id }
         ledgerScope.current = s
-        const [existing, sheet, stamps] = await Promise.all([
+        const [existing, sheet, stamps, clock] = await Promise.all([
           loadStoppages(s.sessionId, s.operatorName),
           loadTimesheet(s.sessionId, s.operatorName),
           // The capture heartbeats. This is what makes the shift START when the
@@ -315,6 +327,15 @@ export function OperatorTimesheet({
           // moving them onto the anchor would falsify an audit row. So the
           // stamps stay where they are and the READ widens.
           loadActivityForSessions(activityIds, s.operatorId).catch(() => [] as string[]),
+          // The SHIFT CLOCK — when this operator signed in and out, wherever in
+          // the app they were. The stamps above still only exist once someone
+          // has opened a capture screen, which is the whole complaint: a shift
+          // that began at the 07h00 handover read 08h40 because that is when
+          // the operator first reached the tablet.
+          loadShiftWindow({
+            date: s.date, shift: s.shift,
+            userId: s.operatorId, operatorName: s.operatorName,
+          }),
         ])
         const rows = await seedScheduledStoppages(s, existing)
         if (!alive) return
@@ -325,19 +346,29 @@ export function OperatorTimesheet({
         setConfirmed(!!sheet?.confirmed)
         cb.current.onConfirmedChange?.(!!sheet?.confirmed)
 
-        // Shift start is the operator's login (the first capture heartbeat),
-        // recorded on the confirmed sheet once it exists.
+        // ── Shift start and end, in order of authority ────────────────────
         //
-        // The saved sheet still wins and the earliest-stoppage fallback below is
-        // still here. What was missing BETWEEN them is the activity: this
-        // component only ever read the sheet, so before the first save a shift
-        // appeared to start at the operator's first tea break and never to end
-        // at all. TimesheetConfirm -- the component this replaced -- derived
-        // both from capture_activity, and that derivation was lost in the move.
+        //   1. The confirmed sheet. Once signed, it is the record.
+        //   2. The SHIFT CLOCK — when the operator actually signed in and out.
+        //   3. The capture heartbeats, derived as before.
+        //   4. The earliest logged stoppage.
         //
-        // endIso is supplied only at sign-off, because that is the operator
-        // wrapping up. Mid-shift the end is the last heartbeat, not `now`, or a
-        // sheet opened at 09h00 would claim the shift ended at 09h00.
+        // The clock goes ABOVE the heartbeats because that is the fix. A
+        // heartbeat only exists once someone has opened a capture screen, so a
+        // shift that began at the 07h00 handover read 08h40 — when the operator
+        // first reached the tablet — and a shift where nobody opened Sign-off
+        // fell through to (4) and read 10:30, the scheduled tea break. Signing
+        // in is not capture's fact, and the clock records it from the app shell.
+        //
+        // (3) and (4) stay as the floor for sessions that predate the clock and
+        // for a database where its migration has not been applied yet. They are
+        // the old, wrong answers, kept only so this degrades to what shipped
+        // before rather than to nothing.
+        //
+        // The END stays null while the operator is still signed in, so the
+        // headline keeps running. `deriveTimesheet` supplies its own end only at
+        // sign-off, because mid-shift the last heartbeat is not the shift end —
+        // a sheet opened at 09h00 would otherwise claim the shift ended at 09h00.
         const derived = sheet
           ? null
           : deriveTimesheet(stamps, {
@@ -345,8 +376,10 @@ export function OperatorTimesheet({
               endIso: atSignOffRef.current ? new Date().toISOString() : null,
             })
         const firstStop = rows.filter(isLive).map(r => r.startedAt).sort()[0] ?? null
-        setStartIso(sheet?.shiftStart ?? derived?.shiftStart ?? firstStop)
-        setEndIso(sheet?.shiftEnd ?? derived?.shiftEnd ?? null)
+        setStartIso(sheet?.shiftStart ?? clock.startIso ?? derived?.shiftStart ?? firstStop)
+        setEndIso(sheet?.shiftEnd ?? clock.endIso ?? derived?.shiftEnd ?? null)
+        setOnClock(clock.onClock)
+        setClockSessions(clock.sessions)
       } catch (e) {
         if (!alive) return
         setLoadError(errMessage(e) ?? 'Could not load your timesheet.')
@@ -717,8 +750,22 @@ export function OperatorTimesheet({
               hint="Set from your login — can’t be changed" />
             <TimeField label="Shift end" value={hhmm(endIso)}
               placeholderNow={!endIso}
+              hint={onClock ? 'Set when you sign out — or type it here' : undefined}
               onChange={t => setEndIso(timeToIso(t, endIso ?? startIso, date))} />
           </div>
+        )}
+
+        {/* Where the start came from, in one line. The field above says "set
+            from your login" and refuses to be edited, which is only fair if the
+            operator can see that the login was actually recorded — the previous
+            start was inferred from capture activity and looked identical when
+            it was wrong. */}
+        {!readOnly && clockSessions > 0 && (
+          <p className="text-[10px] text-text-muted flex items-center gap-1">
+            <Clock size={10} className="shrink-0" />
+            {onClock ? 'Signed in — your clock is running.' : 'Signed out — clock stopped.'}
+            {clockSessions > 1 && ` ${clockSessions} sign-ins today.`}
+          </p>
         )}
       </div>
 

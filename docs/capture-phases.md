@@ -6,10 +6,11 @@ status table in the same commit as the work.
 
 ---
 
-## Status — 2026-09-09
+## Status — 2026-09-11
 
 | Phase | State | Outstanding |
 |---|---|---|
+| **4b** Shift clock | **Built, migration PENDING** | `production.operator_shift_clock` — the operator's timesheet starts at LOGIN and stops at LOGOUT, instead of at the first `capture_activity` heartbeat. Same append-only, one-row-per-event pattern as 4a, applied to presence: one row per sign-in, closed on sign-out, shift start = earliest open of the run day and immovable. Lives in `features/shift-clock` (mounted in the app shell, not on capture — that was the bug) with the arithmetic in `lib/core/timesheet/shift-clock.ts`. **Run `20260911_020_operator_shift_clock.sql` on staging, then production.** Flag `NEXT_PUBLIC_FF_SHIFT_CLOCK` defaults on; unapplied migration degrades to the old derivation rather than breaking capture. Also lands `productionDayFor()` in core — the §9 function ARCHITECTURE.md has cited for months without it existing. |
 | **0** Guardrails | **Effectively closed** | Item 7: both index migrations verified 2026-09-04 against staging *and* production — the indexes already exist, matching their files exactly, so running them is a confirmed no-op that only closes the repo/live gap. Neither file has been run yet. |
 | **1** Populate core | **Done** | `n()`, `metrics`, `serials`, mass-balance, variant identity, `lookupSerial` all extracted — see the `n()` note below |
 | **1B** Serialization | **Built and provisioned; one env var from live** | Code wired in all four output sections (Sieving, Refining, Granule, Blender — Pasteuriser is out of the scheme by design, §5). **The migration IS applied on staging** — verified read-only 2026-09-04: `production.bag_serial_counters` returns `42501 permission denied`, which only an EXISTING table raises; a missing one gives `42P01`. So the only thing left is `NEXT_PUBLIC_FF_DB_SERIAL_ALLOCATION=sieving` in staging's env. Until then the race is still live. |
