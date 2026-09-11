@@ -6,9 +6,10 @@ import { format, subDays, parseISO } from 'date-fns'
 import {
   Search, X, Scale, AlertTriangle, CheckCircle2,
   Users, Package, ExternalLink, ChevronDown, ChevronUp,
-  Calendar, Loader2, Trash2,
+  Calendar, Loader2, Lock,
 } from 'lucide-react'
 import { useAuth } from '@/lib/auth/context'
+import { recordAccess, type RecordAccess } from '@/lib/core/production/record-access'
 import { getDb } from '@/lib/supabase/db'
 import { pinnedSectionForUser } from '@/lib/production/roster-pin'
 import { productionShiftNow } from '@/lib/production/shifts'
@@ -84,28 +85,25 @@ function operatorLabel(row: SessionRow): string {
 
 // ── Session card ──────────────────────────────────────────────────────────────
 
-function SessionCard({ session, canDelete, onDelete }: { session: SessionRow; canDelete: boolean; onDelete: (id: string) => void }) {
+function SessionCard({ session, access }: { session: SessionRow; access: RecordAccess }) {
   const [expanded, setExpanded] = useState(false)
-  const [deleting, setDeleting] = useState(false)
   const { label: statusLabel, cls: statusCls } = statusBadge(session.status)
 
-  async function handleDelete() {
-    if (!confirm(`Delete the ${session.section_name} session from ${session.date} (${session.shift} shift)? This cannot be undone.`)) return
-    setDeleting(true)
-    try {
-      const db = getDb().schema('production')
-      await db.from('session_signatures').delete().eq('session_id', session.id)
-      await db.from('scan_events').delete().eq('session_id', session.id)
-      await db.from('prod_mass_balance').delete().eq('session_id', session.id)
-      await db.from('prod_debagging').delete().eq('session_id', session.id)
-      await db.from('prod_bagging').delete().eq('session_id', session.id)
-      await db.from('prod_sessions').delete().eq('id', session.id)
-      onDelete(session.id)
-    } catch (e: any) {
-      alert('Delete failed: ' + e.message)
-      setDeleting(false)
-    }
-  }
+  /*
+   * There is no delete here any more, and its absence is deliberate.
+   *
+   * It ran six client-side deletes in a row — session_signatures, scan_events,
+   * prod_mass_balance, prod_debagging, prod_bagging, then the session — behind
+   * a confirm(). ARCHITECTURE.md §4 names one of those explicitly: "Never
+   * blanket-delete scan_events. It is an append-only audit ledger. To undo an
+   * event, append a reversing event." There was no audit row and no
+   * transaction, so a partial failure orphaned bagging rows against a session
+   * that no longer existed, and prod_sessions already carries deleted_at /
+   * deleted_by columns that nothing here used.
+   *
+   * The rule that settles it is simpler than any of that: this page is the
+   * record of what was done. It is read here, not changed here.
+   */
   // /production/section is a REDIRECT to the capture hub that drops its query
   // string (it was retired in June 2026), so every card on this page used to
   // land the reader on an empty capture screen with no session, date or shift.
@@ -232,14 +230,16 @@ function SessionCard({ session, canDelete, onDelete }: { session: SessionRow; ca
           {expanded ? <ChevronUp size={12}/> : <ChevronDown size={12}/>}
           Acumatica summary
         </button>
-        {canDelete && (
-          <button
-            onClick={handleDelete} disabled={deleting}
-            className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-red-200 text-[12px] font-medium text-red-500 hover:bg-red-50 disabled:opacity-50 transition-colors"
-          >
-            {deleting ? <Loader2 size={12} className="animate-spin"/> : <Trash2 size={12}/>}
-            Delete
-          </button>
+        {/* Who could change this record, for a reader who has spotted something
+            wrong. No button — rule 4 — but "read-only" on its own sends them
+            to the supervisor to ask who to ask. */}
+        {access.askWho && (
+          <span className="ml-auto flex items-center gap-1.5 text-[11px] text-text-muted">
+            <Lock size={11} className="shrink-0" />
+            {access.askWho === 'supervisor'
+              ? 'Ask your supervisor to change this'
+              : 'Signed off — the production manager reopens it'}
+          </span>
         )}
       </div>
 
@@ -267,8 +267,26 @@ function SessionCard({ session, canDelete, onDelete }: { session: SessionRow; ca
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function ProductionHistoryPage() {
-  const { user, role, sectionId: authSectionId, isSupervisor, isIT } = useAuth()
-  const canDelete = isSupervisor || isIT || role === 'admin'
+  const { user, role, sectionId: authSectionId, isSupervisor, isIT, isFullAdmin, p } = useAuth()
+  /**
+   * What this reader may do with a given record.
+   *
+   * On this page the answer is always "look" — `surface: 'history'` guarantees
+   * it, and that is rule 4. What the core rule adds is WHO could change it, so
+   * a reader who spots a mistake is told where to go instead of just being
+   * stopped. `isCurrentRecord` is false for every row here: this page lists
+   * finished and in-flight records alike, and editing happens on capture.
+   */
+  const productionToday = productionShiftNow().date
+  const accessFor = (s: SessionRow): RecordAccess => recordAccess({
+    surface: 'history',
+    status: s.status,
+    isCurrentRecord: false,
+    recordProductionDay: s.date,
+    todayProductionDay: productionToday,
+    isSupervisor: isSupervisor || isIT || role === 'admin',
+    canReopenSignedOff: isFullAdmin || p('can_approve_reopen_request'),
+  })
 
   const today     = format(new Date(), 'yyyy-MM-dd')
   const thirtyAgo = format(subDays(new Date(), 30), 'yyyy-MM-dd')
@@ -526,8 +544,7 @@ export default function ProductionHistoryPage() {
               <SessionCard
                 key={session.id}
                 session={session}
-                canDelete={canDelete}
-                onDelete={id => setSessions(prev => prev.filter(s => s.id !== id))}
+                access={accessFor(session)}
               />
             ))
           )}
