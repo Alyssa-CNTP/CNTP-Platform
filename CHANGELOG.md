@@ -2,6 +2,20 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-11 — Gustav (Sieving QC: the QC types when the run happened; changing it afterwards is IT's)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`, `supabase/migrations/20260911_020_sd_runs_when_it_happened_it_only.sql` (new, applied to staging)
+
+The table has always had two columns for two different facts, and was not keeping them straight:
+
+- **`date` + `time_of_run` — when the sieve was actually done.** The QC knows this; for a back-capture it is days or weeks ago. It was being overwritten with the clock at save time, so a run recaptured on 11 Sep for work done on 21 Aug read **11:25 instead of 09:08** — an instant that never happened, and one that sorted the row into the wrong day in a table ordered on date + time. The TIME field is now typed by the QC, defaulting to now for a run captured as it is done, and validated as HH:MM.
+- **`run_timestamp` — when the record was created.** Nobody types it. The database now stamps it itself on insert, so a client cannot claim one. It is what makes a back-capture legible as one: a run dated 21 Aug carrying a `run_timestamp` of 11 Sep was plainly entered after the fact.
+
+**Changing either afterwards is restricted to IT**, enforced by `qms.sd_runs_when_it_happened_guard` rather than by the screen — a disabled input stops the screen and nothing else, and the edit path was in fact still sending `date` and `time_of_run` on every save despite a comment claiming they were locked. An unchanged value passes untouched, so ordinary QC edits of anything else are unaffected; a *changed* one is refused unless the caller is IT, the full admin, or a server-side connection.
+
+Verified against staging, all six cases: a claimed `run_timestamp` is overridden on insert; a QC may edit other fields and may re-send the same time; a QC changing the time or the date is refused with a message naming what they tried to change; IT changes both successfully.
+
+Two bugs found in the guard while testing it, both of which had made it useless in opposite directions: `changed || 'date'` resolves as array-concat and threw `malformed array literal` before the IT check was reached (refusing everyone, IT included), and `SECURITY DEFINER` made `current_user` the function's owner rather than the caller, so the server-side allowance matched every caller (refusing nobody).
 ## 2026-09-11 — Gustav (Leaf Shade: the Docker container starting was a fully manual step nobody automated — made it self-healing on deploy)
 
 **Files changed:** `.github/workflows/deploy-staging.yml`, `ml/leafshade/README.md`
