@@ -18,6 +18,11 @@ import ScanCameraButton from '@/components/shared/ScanCameraButton'
 import { SECTION_CONFIG } from '@/lib/production/live-types'
 import type { Variant as ShortVariant } from '@/lib/production/live-types'
 import type { ShiftAssignment, InventoryItem } from '@/lib/supabase/database.types'
+import { n } from '@/lib/core/num'
+import { workCentreFor } from '@/lib/core/serials'
+import { allocateBagSerial } from '@/lib/production/serial-allocator'
+import { legacyBlendSerial } from '@/lib/production/serial-legacy'
+import { usesDbSerials } from '@/lib/config/flags'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -86,7 +91,6 @@ export function emptyBlenderData(): BlenderData {
   return { bomId: null, outputRunNo: null, inputs: [], outputs: [] }
 }
 
-const n = (v: string) => parseFloat(String(v).replace(',', '.')) || 0
 
 export function blenderTotals(d: BlenderData) {
   const totalIn  = (d.inputs ?? []).reduce((s, r) => s + n(r.weight), 0)
@@ -141,15 +145,33 @@ export function autoLot(date: string, runNo: number): string {
   return `${d}-${m}-${y.slice(2)}/${runNo}`
 }
 
+/**
+ * Reads BOTH serial formats, because one production day can start on the
+ * legacy `{BLEND}-{run}-{bag}` and end on the current
+ * `BL-{BLEND}-{DDMMYYYY}-{run}-{NNN}` (ARCHITECTURE.md §5) — the changeover
+ * happens the moment this section is added to
+ * NEXT_PUBLIC_FF_DB_SERIAL_ALLOCATION, which can land mid-shift. Reading only
+ * one format would restart run numbering at 1 half way through the day and
+ * silently fork a second "run 1" for the same blend.
+ *
+ * The RUN number stays derived rather than allocated: it is a property of the
+ * day's production, not a per-bag counter. The database allocates only the
+ * per-bag number within a run.
+ */
 export async function resolveExistingBlendRunNo(bomId: string, date: string): Promise<number | null> {
   const escaped = bomId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   const { start, end } = productionDayRange(date)
   const { data } = await getDb().schema('production').from('bag_tags')
-    .select('serial_number').ilike('serial_number', `${bomId}-%`)
+    .select('serial_number')
+    .or(`serial_number.ilike.${bomId}-%,serial_number.ilike.%-${bomId}-%`)
     .gte('created_at', start).lt('created_at', end)
   const serials = ((data as any[]) ?? []).map(r => r.serial_number as string)
-  const runPattern = new RegExp(`^${escaped}-(\\d+)-`)
-  const runs = serials.map(s => { const m = s.match(runPattern); return m ? parseInt(m[1], 10) : 0 })
+  const legacy  = new RegExp(`^${escaped}-(\\d+)-`)
+  const current = new RegExp(`^(?:BL|SB)-${escaped}-\\d{6,8}-(\\d+)-\\d{1,4}$`, 'i')
+  const runs = serials.map(s => {
+    const m = s.match(current) ?? s.match(legacy)
+    return m ? parseInt(m[1], 10) : 0
+  })
   return runs.length ? Math.max(...runs) : null
 }
 
@@ -578,56 +600,91 @@ export function BlenderCapture({
   const [scanBusy, setScanBusy] = useState(false)
   const [scanModal, setScanModal] = useState<{ serial: string; result: ScanValidationResult } | null>(null)
   const sectionLabel = SECTION_CONFIG[sectionId]?.name ?? 'this blend'
-  // Bag sequence + run number for this blend's output serials — seeded once
-  // from bag_tags (see genBlendSerial), then read from the ref rather than
-  // `value` for the rest of this function call: `patch()` only takes effect
-  // on the next render, so re-reading `value.outputRunNo` immediately after
-  // calling it would still see the stale (null) value.
-  const bagSeqRef = useRef<number | null>(null)
+  // The RUN number for this blend's output serials, resolved once per
+  // production and then read from the ref rather than from `value`:
+  // `patch()` only takes effect on the next render, so re-reading
+  // `value.outputRunNo` immediately after calling it would still see the
+  // stale (null) value.
+  //
+  // There is deliberately no bag-sequence ref beside it. The per-bag number
+  // is allocated by the database once this section is in
+  // NEXT_PUBLIC_FF_DB_SERIAL_ALLOCATION, and counted locally only on the
+  // legacy path — a ref cached across renders is exactly how two tablets
+  // end up minting the same number.
   const runNoRef = useRef<number | null>(null)
   const variantShort = variantToShort(variantWord as any) as ShortVariant
+  // NOTE two different "work centres" live in this file. This one is the
+  // Acumatica work-centre string that scopes the blend picker; the serial's
+  // work centre ('BL' / 'SB') comes from workCentreFor(sectionId) in core.
   const workCentre = WORK_CENTRE_FOR_SECTION[sectionId] ?? '05-BLENDER BIG'
+  // Degraded-path notice: a number allocated locally because the database
+  // was unreachable. Surfaced, never silent.
+  const [serialNotice, setSerialNotice] = useState<string | null>(null)
 
   const patch = (p: Partial<BlenderData>) => onChange({ ...value, ...p })
   const bomId = value.bomId
 
-  // The serial convention for a blend's output bags carries the BLEND CODE as
-  // its stem: {blendCode}-{runNo}-{bagNo}, e.g. SFCKUN25-1-01. runNo
-  // distinguishes separate runs of the same blend (resolved once per production,
-  // from whatever's already in bag_tags for this code); bagNo is sequential
-  // within that run. "-" (not "/") keeps the serial URL-safe for route-param
-  // lookups. Falls back to the generic section serial if somehow called before a
-  // blend is chosen (shouldn't happen — the bagging tab is gated on it).
+  /**
+   * Mint the serial for a blend output bag.
+   *
+   * Two paths, chosen by `usesDbSerials(sectionId)` — the per-section rollout
+   * flag, unset (and therefore off) by default. Both blenders roll out
+   * independently; the Small Blender is its own work centre, not an alias.
+   *
+   * OFF (today's behaviour, unchanged): `legacyBlendSerial()` reproduces the
+   * historic `{BLEND}-{run}-{bag}` scan of bag_tags exactly as this function
+   * did inline. It is kept in lib/production/serial-legacy.ts rather than here
+   * so the old behaviour has one owner while it lives, and so retiring it later
+   * is deleting a file rather than hunting four copies.
+   *
+   * ON: `BL-{BLEND}-{DDMMYYYY}-{run}-{NNN}` (ARCHITECTURE.md §5), with the
+   * per-bag number allocated by production.next_bag_seq() instead of read as a
+   * local max. Two operators bagging in the same second get 7 and 8 rather than
+   * both getting 7 — the app-side max+1 above is the documented cause of 44% of
+   * Fine/Coarse Leaf bags lost from prod_bagging (§1B).
+   *
+   * The Blender carries no product-type code: the blend and its run number are
+   * what the Pasteuriser consumes and what the order is raised against, so a
+   * type code would be a second name for the same thing.
+   *
+   * The run separator is '-', never '/'. A serial goes into a URL path at
+   * /api/production/live/bag/[serial] and the Bag Tracking deep links, and a
+   * '/' splits the route param — the previous format chose '-' for exactly this
+   * reason and said so.
+   *
+   * The RUN number is derived on both paths: it is a property of the day's
+   * production, resolved once per production. Only the per-bag number moves to
+   * the database.
+   */
   async function genBlendSerial(): Promise<string> {
     if (!bomId) return genSerial()
-    if (bagSeqRef.current === null || runNoRef.current === null) {
-      const escaped = bomId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-      // Scoped to this production day — see resolveExistingBlendRunNo's
-      // comment. Without this, a blend code that ran on an earlier day (even
-      // weeks ago) would push today's first run past 1.
-      const { start, end } = productionDayRange(date)
-      // Serial is "{blend}-{run}-{bag}" (e.g. SFCKUN25-1-01). The blend code is
-      // always the exact stem, so run/bag stay unambiguously parseable even when
-      // the blend code itself contains dashes. We use "-" (not "/") so the serial
-      // is URL-safe — a "/" breaks route-param lookups like /api/.../bag/[serial]
-      // and the Bag Tracking deep-links.
-      const { data: bagRows } = await getDb().schema('production').from('bag_tags')
-        .select('serial_number').ilike('serial_number', `${bomId}-%`)
-        .gte('created_at', start).lt('created_at', end)
-      const serials = ((bagRows as any[]) ?? []).map(r => r.serial_number as string)
+    const wc = usesDbSerials(sectionId) ? workCentreFor(sectionId) : null
+
+    if (runNoRef.current === null) {
       let runNo = value.outputRunNo
       if (!runNo) {
-        const runPattern = new RegExp(`^${escaped}-(\\d+)-`)
-        const runs = serials.map(s => { const m = s.match(runPattern); return m ? parseInt(m[1], 10) : 0 })
-        runNo = (runs.length ? Math.max(...runs) : 0) + 1
+        // Highest run this blend has had today, across both serial formats,
+        // scoped to this production day — a blend code that ran weeks ago must
+        // not push today's first run past 1.
+        runNo = ((await resolveExistingBlendRunNo(bomId, date)) ?? 0) + 1
         patch({ outputRunNo: runNo })
       }
       runNoRef.current = runNo
-      const bagPattern = new RegExp(`^${escaped}-${runNo}-(\\d+)$`)
-      bagSeqRef.current = serials.reduce((max, s) => { const m = s.match(bagPattern); return m ? Math.max(max, parseInt(m[1], 10)) : max }, 0)
     }
-    bagSeqRef.current += 1
-    return `${bomId}-${runNoRef.current}-${String(bagSeqRef.current).padStart(2, '0')}`
+
+    if (!wc) {
+      const { start, end } = productionDayRange(date)
+      return legacyBlendSerial(bomId, runNoRef.current, value.outputs.map(o => o.serial), start, end)
+    }
+
+    const alloc = await allocateBagSerial(
+      { workCentre: wc, qualifier: bomId, date, runNo: runNoRef.current },
+      value.outputs.map(o => o.serial),
+    )
+    if (alloc.source === 'local') {
+      setSerialNotice('Offline — this bag was numbered locally. Check for a duplicate serial once the tablet reconnects.')
+    }
+    return alloc.serial
   }
 
   // Prefill from the shift assignment once, purely as a convenience default —
@@ -979,6 +1036,14 @@ export function BlenderCapture({
           {/* ── BAGGING TAB ──────────────────────────────────────────────────── */}
           {tab === 'bag' && (
             <>
+              {serialNotice && (
+                <div className="flex items-start gap-2 px-3 py-2.5 bg-amber-50 border border-amber-200 rounded-xl text-[12px] text-amber-900">
+                  <AlertTriangle size={14} className="shrink-0 mt-0.5" />
+                  <span className="flex-1">{serialNotice}</span>
+                  <button type="button" onClick={() => setSerialNotice(null)}
+                    className="shrink-0 text-amber-700 underline">Dismiss</button>
+                </div>
+              )}
               <p className="text-[12px] text-stone-500 px-1">Enter each output bag's weight — the system generates the serial automatically.</p>
 
               <div className="bg-white border rounded-2xl overflow-hidden" style={{ borderColor: BAG_COLOR + '30' }}>

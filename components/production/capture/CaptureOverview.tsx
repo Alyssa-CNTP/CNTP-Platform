@@ -18,6 +18,7 @@ import { type PasteuriserData } from '@/components/production/capture/Pasteurise
 import { getDb } from '@/lib/supabase/db'
 import { GRADE_TO_LOCAL_EXPORT } from '@/lib/production/capture-config'
 import { normalizeLot } from '@/lib/production/self-heal-reconcile'
+import { n as num } from '@/lib/core/num'
 
 interface Production {
   id: string; variant: string; grade: string; lot: string
@@ -28,7 +29,6 @@ interface Production {
   shift?: string
 }
 
-const num = (v: any): number => parseFloat(String(v).replace(',', '.')) || 0
 // Mass-balance tolerance: ±1% of total input, everywhere (per-section rules in
 // lib/production/capture-config are for the fuller balance this replaces).
 const MASS_BALANCE_TOLERANCE_PCT = 0.01

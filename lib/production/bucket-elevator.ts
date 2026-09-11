@@ -12,12 +12,19 @@
  * so the two never mix.
  */
 import { getDb } from '@/lib/supabase/db'
-import { isOrganicVariant } from '@/lib/production/capture-config'
+import { variantFamily as coreVariantFamily } from '@/lib/core/variants'
 
 export type VariantFamily = 'conventional' | 'organic'
 
 export function variantFamily(variant: string | null | undefined): VariantFamily {
-  return isOrganicVariant(variant) ? 'organic' : 'conventional'
+  // `?? 'conventional'` PRESERVES today's behaviour rather than introducing it:
+  // this function has always returned a non-null family, so an unrecognised
+  // variant has always pooled with conventional. Core returns null for unknown
+  // (it fails closed); collapsing that here keeps this module's contract while
+  // adopting core's mapping, which knows FT-CON/FT-ORG and is case-insensitive.
+  // Whether an unknown variant should pool with conventional at all is a real
+  // question -- it is just not this change's question.
+  return coreVariantFamily(variant) ?? 'conventional'
 }
 
 export interface BucketElevatorEntry {

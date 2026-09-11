@@ -59,6 +59,9 @@ import {
   pendingAttestations, pendingNotifications,
   type Stoppage, type StoppageKind, type SupervisorVerdict,
 } from '@/lib/core/timesheet/stoppages'
+import { loadActivityForSessions, loadShiftSessions, deriveTimesheet } from '@/lib/production/timesheet'
+import { anchorSessionId, shiftSessionIds } from '@/lib/core/timesheet/shift-scope'
+import { usesShiftScopedTimesheet } from '@/lib/config/flags'
 import {
   loadStoppages, saveStoppage, voidStoppage, seedScheduledStoppages,
   loadTimesheet, confirmTimesheet, saveTimesheetNote,
@@ -226,10 +229,10 @@ export function OperatorTimesheet({
     return () => clearInterval(t)
   }, [])
 
-  const scope: StoppageScope | null = useMemo(
-    () => sessionId ? { sessionId, operatorId, operatorName, sectionId, date, shift } : null,
-    [sessionId, operatorId, operatorName, sectionId, date, shift],
-  )
+  // (There was an unused `scope` useMemo here that built a StoppageScope
+  //  straight from `sessionId`. Removed rather than left dead: it is a second
+  //  way to answer a question the anchor now owns, and the next person to
+  //  wire it up would bypass the anchor without noticing. ARCHITECTURE.md §1A.)
 
   // The scope the LEDGER is keyed on. Deliberately pinned to the operator name
   // this component first loaded with, so a keystroke in the sign-off name field
@@ -249,6 +252,10 @@ export function OperatorTimesheet({
   // exhaustive-deps is satisfied honestly instead of being silenced.
   const identity = useRef({ operatorId, operatorName, sectionId, date, shift })
   identity.current = { operatorId, operatorName, sectionId, date, shift }
+  // Its own ref, not part of `identity`: that object is spread into a
+  // StoppageScope and this is UI state, not ledger scope.
+  const atSignOffRef = useRef(atSignOff)
+  atSignOffRef.current = atSignOff
 
   // The callbacks go in a ref for the same reason. The capture page happens to
   // pass stable useState setters, but a caller passing an inline arrow would
@@ -261,20 +268,53 @@ export function OperatorTimesheet({
 
   // ── Load ──────────────────────────────────────────────────────────────────
   //
-  // Keyed on the SESSION only — see the `identity` ref above for why that is
-  // the whole point and not an oversight.
+  // Keyed on the open session only — see the `identity` ref above for why
+  // that is the whole point and not an oversight.
+  //
+  // The session it is keyed ON is not necessarily the session it WRITES to.
+  // On a shift-scoped section the ledger is anchored to the earliest session
+  // of the shift, so re-running this effect for a second blend re-resolves to
+  // the same anchor and finds the operator's existing sheet rather than
+  // starting a second one.
   useEffect(() => {
     let alive = true
     if (!sessionId) { setLoading(false); return }
 
     async function load() {
       setLoading(true); setLoadError(null)
-      const s: StoppageScope = { sessionId: sessionId!, ...identity.current }
-      ledgerScope.current = s
       try {
-        const [existing, sheet] = await Promise.all([
+        const id = { ...identity.current }
+
+        // ── Which session owns this operator's shift ──────────────────────────
+        //
+        // Not necessarily the one they have open. A shift can hold several
+        // capture sessions -- a second blend gets its own record -- and the
+        // timesheet belongs to the SHIFT, so it is written against the earliest
+        // of them. lib/core/timesheet/shift-scope.ts owns that rule and explains
+        // why the anchor is stable.
+        //
+        // Rolled out per section (blender first). When it is off this resolves
+        // to `sessionId` and every line below behaves exactly as it did.
+        const scoped = usesShiftScopedTimesheet(id.sectionId)
+        const siblings = scoped
+          ? await loadShiftSessions(id.sectionId, id.date, id.shift)
+          : []
+        const anchorId = scoped ? anchorSessionId(siblings, sessionId!) : sessionId!
+        const activityIds = scoped ? shiftSessionIds(siblings, sessionId!) : [sessionId!]
+
+        const s: StoppageScope = { sessionId: anchorId, ...id }
+        ledgerScope.current = s
+        const [existing, sheet, stamps] = await Promise.all([
           loadStoppages(s.sessionId, s.operatorName),
           loadTimesheet(s.sessionId, s.operatorName),
+          // The capture heartbeats. This is what makes the shift START when the
+          // operator opened their screen rather than at their first tea break.
+          //
+          // Read across every session in the shift, not just the anchor: a
+          // heartbeat records which session was open when it was written, and
+          // moving them onto the anchor would falsify an audit row. So the
+          // stamps stay where they are and the READ widens.
+          loadActivityForSessions(activityIds, s.operatorId).catch(() => [] as string[]),
         ])
         const rows = await seedScheduledStoppages(s, existing)
         if (!alive) return
@@ -286,11 +326,27 @@ export function OperatorTimesheet({
         cb.current.onConfirmedChange?.(!!sheet?.confirmed)
 
         // Shift start is the operator's login (the first capture heartbeat),
-        // recorded on the confirmed sheet once it exists. Until then, fall back
-        // to the earliest thing we know happened.
+        // recorded on the confirmed sheet once it exists.
+        //
+        // The saved sheet still wins and the earliest-stoppage fallback below is
+        // still here. What was missing BETWEEN them is the activity: this
+        // component only ever read the sheet, so before the first save a shift
+        // appeared to start at the operator's first tea break and never to end
+        // at all. TimesheetConfirm -- the component this replaced -- derived
+        // both from capture_activity, and that derivation was lost in the move.
+        //
+        // endIso is supplied only at sign-off, because that is the operator
+        // wrapping up. Mid-shift the end is the last heartbeat, not `now`, or a
+        // sheet opened at 09h00 would claim the shift ended at 09h00.
+        const derived = sheet
+          ? null
+          : deriveTimesheet(stamps, {
+              shift: s.shift, date: s.date,
+              endIso: atSignOffRef.current ? new Date().toISOString() : null,
+            })
         const firstStop = rows.filter(isLive).map(r => r.startedAt).sort()[0] ?? null
-        setStartIso(sheet?.shiftStart ?? firstStop)
-        setEndIso(sheet?.shiftEnd ?? null)
+        setStartIso(sheet?.shiftStart ?? derived?.shiftStart ?? firstStop)
+        setEndIso(sheet?.shiftEnd ?? derived?.shiftEnd ?? null)
       } catch (e) {
         if (!alive) return
         setLoadError(errMessage(e) ?? 'Could not load your timesheet.')

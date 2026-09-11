@@ -98,6 +98,21 @@ export const flags = {
   dbSerialSections: sectionSetFlag(process.env.NEXT_PUBLIC_FF_DB_SERIAL_ALLOCATION),
 
   /**
+   * Sections whose operator timesheet is scoped to the SHIFT rather than to
+   * one capture session. See lib/core/timesheet/shift-scope.ts for why that
+   * distinction exists and what it fixes.
+   *
+   * Defaults to the two blenders. Unlike every other flag here that is a
+   * default of ON for those sections, deliberately: the per-session
+   * behaviour it replaces is a data bug, not a feature waiting to be
+   * revealed, and the Blender is where it actually bites today. Set the
+   * variable to an empty string to go back to per-session everywhere.
+   */
+  shiftScopedTimesheetSections: sectionSetFlag(
+    process.env.NEXT_PUBLIC_FF_SHIFT_SCOPED_TIMESHEET ?? 'blender,smallblender',
+  ),
+
+  /**
    * The Pasteuriser finished-product label workflow: design -> proof ->
    * Control Union / customer approval -> PO -> job card -> print.
    *
@@ -184,4 +199,24 @@ export type FeatureFlag = keyof typeof flags
  */
 export function usesDbSerials(sectionId: string): boolean {
   return flags.dbSerialSections.has('*') || flags.dbSerialSections.has(String(sectionId))
+}
+
+
+/**
+ * Does this section keep ONE timesheet per operator per shift, rather than
+ * one per capture session? See lib/core/timesheet/shift-scope.ts.
+ *
+ * Defaults to the two blenders, not to everything, because the Blender is the
+ * section that actually runs several blends in a shift — and a change to
+ * where an operator's hours are written is not something to switch on for
+ * five lines at once. Widen it by naming more sections; set it to an empty
+ * string to go back to per-session behaviour everywhere.
+ *
+ * Takes the VALUE of the env var, not its name — see the note at the top of
+ * this file. `?? ` supplies the default after Next has inlined the literal,
+ * so the default survives into the browser bundle.
+ */
+export function usesShiftScopedTimesheet(sectionId: string): boolean {
+  return flags.shiftScopedTimesheetSections.has('*')
+    || flags.shiftScopedTimesheetSections.has(String(sectionId))
 }

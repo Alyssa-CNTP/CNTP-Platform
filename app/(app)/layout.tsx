@@ -60,6 +60,17 @@ const ROUTE_GUARDS: Array<{
   { prefix: '/production/dashboard', departments: ['Production','Management'] },
   { prefix: '/production/floor-plan',departments: ['Production','Management'] },
   { prefix: '/production/orders',     departments: ['Production','Management'], permission: 'can_view_live_history', orPermission: true },
+  // Production Capture. FLOOR OPERATORS NEVER REACH THIS -- the sandbox above
+  // returns before ROUTE_GUARDS is consulted, so the tablets are unaffected by
+  // anything here. These rules govern office/management users only.
+  //
+  // orPermission: department OR key. Deliberately permissive to start: nobody
+  // who can open capture today loses it, and can_view_capture exists so access
+  // can be granted to someone outside Production. Tightening to permission-only
+  // is a second, deliberate step once the key has been handed out.
+  { prefix: '/production/capture/assign', departments: ['Production','Management'], permission: 'can_assign_shifts', orPermission: true },
+  { prefix: '/production/capture',    departments: ['Production','Management'], permission: 'can_view_capture',  orPermission: true },
+  { prefix: '/production/operators',  departments: ['Production','Management'], permission: 'can_assign_shifts', orPermission: true },
   { prefix: '/production/live',      departments: ['Production'], permission: 'can_view_live_history',   orPermission: true },
   { prefix: '/production/inventory', departments: ['Production','Management'], permission: 'can_view_inventory', orPermission: true },
   { prefix: '/production/blends',    departments: ['Production','Management'], permission: 'can_view_blends',    orPermission: true },
