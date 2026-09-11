@@ -2096,6 +2096,11 @@ Cause: `openBagAlert()` matched the freshly-reloaded pending queue against the c
 
 - `openBagAlert()` now falls back to matching by `bag_serial_no` (case-insensitive) when the `bagging_id` lookup misses, before concluding the bag is done — the same defence `qms.v_bag_qc_status`'s final-run join already uses for this exact id-instability reason.
 - Verified against both Supabase projects: `qms.sd_runs` has exactly one row for STFL-190826-004 (an in-process run, no final), and `qms.v_pending_bag_qc` on the production DB currently lists it as pending (`qc_done: false`) — confirming the false alert was a client-side matching bug, not a database or RLS issue.
+## 2026-08-19 — Alyssa (Docs: manual deployment runbook — auto-deploy disabled)
+
+**Files changed:** `docs/DEPLOYMENT.md` (new), `CLAUDE.md`
+
+Both auto-deploy workflows (`Deploy to Staging` / `Deploy to Production`) are now disabled, so merging no longer deploys. Documented the new manual flow: deploy each environment with its safe atomic script (`scripts/staging-deploy.sh` / `scripts/production-deploy.sh` — side-dir build → verify → auto-rollback), the hard rule that **only one build may run on the VPS at a time** (two concurrent builds OOM'd the box and caused the 2026-08-19 outage), production deploys off-peak, migrations applied to the DB separately, and a recovery section. Corrected CLAUDE.md, which still described the old "merge = deploy" behaviour.
 
 ## 2026-08-19 — Gustav (COA: add Glyphosate as an Include Sections row, required on every Organic batch)
 
