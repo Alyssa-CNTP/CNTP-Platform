@@ -27,18 +27,22 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     const b = await req.json()
     const ok = b.ok === true
     const db = await getSessionClient()
+    // One typed handle for the schema instead of re-casting at all seven call
+    // sites — supabase-js has no generated type for `maintenance`, so the cast
+    // belongs in one place rather than scattered through the handler.
+    const maint = db.schema('maintenance' as any)
 
-    const { data: existing } = await db.schema('maintenance' as any).from('job_cards')
+    const { data: existing } = await maint.from('job_cards')
       .select('card_no, area, machine, description, long_desc, status, assigned_to, assigned_user_id, reopen_count, raised_by, urgency, temp_repair, temp_repair_note, temp_repair_by, follow_up_card_id')
       .eq('id', cardId).single()
     if (!existing) return NextResponse.json({ error: 'Card not found' }, { status: 404 })
 
     if (ok) {
       // ── Manager final sign-off → close + clean up chat photos ──
-      await db.schema('maintenance' as any).from('job_cards')
+      await maint.from('job_cards')
         .update({ status: 'complete', verified_at: new Date().toISOString(), verified_ok: true, updated_at: new Date().toISOString() })
         .eq('id', cardId)
-      await db.schema('maintenance' as any).from('job_card_logs').insert({
+      await maint.from('job_card_logs').insert({
         card_id: cardId, kind: 'event', stage: 'complete', author: b.actor ?? 'Maintenance Manager',
         body: 'Maintenance manager signed off the work as SATISFACTORY. Job card closed.',
       })
@@ -60,7 +64,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       if (existing.temp_repair && !existing.follow_up_card_id) {
         try {
           const detail = (existing.temp_repair_note ?? '').trim()
-          const { data: followUp, error: fErr } = await db.schema('maintenance' as any).from('job_cards')
+          const { data: followUp, error: fErr } = await maint.from('job_cards')
             .insert({
               workflow: 'planned',
               area: existing.area,
@@ -83,10 +87,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
             .select('id, card_no').single()
           if (fErr) throw fErr
 
-          await db.schema('maintenance' as any).from('job_cards')
+          await maint.from('job_cards')
             .update({ follow_up_card_id: followUp.id }).eq('id', cardId)
 
-          await db.schema('maintenance' as any).from('job_card_logs').insert([
+          await maint.from('job_card_logs').insert([
             { card_id: cardId, kind: 'event', stage: 'complete', author: 'System',
               body: `Closed as a TEMPORARY repair — permanent-repair job card ${followUp.card_no} raised automatically.` },
             { card_id: followUp.id, kind: 'event', stage: 'raised', author: 'System',
@@ -103,11 +107,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
                   (detail ? `Outstanding: ${detail}. ` : '') + 'This follow-up card needs allocating.',
             channels: ['inApp', 'email'],
           })
-        } catch (e: any) {
+        } catch (e: unknown) {
           // Best-effort: never block the sign-off the manager just made. The
           // temporary-repair flag stays set with no follow-up link, so the card
           // is still findable as an outstanding temporary repair.
-          console.error('[verify] permanent-repair follow-up failed:', e?.message)
+          console.error('[verify] permanent-repair follow-up failed:', e instanceof Error ? e.message : e)
         }
       }
 
@@ -122,10 +126,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       }
     } else {
       const reopen = (existing.reopen_count ?? 0) + 1
-      await db.schema('maintenance' as any).from('job_cards')
+      await maint.from('job_cards')
         .update({ status: 'in_progress', verified_ok: false, reopen_count: reopen, completed_at: null, updated_at: new Date().toISOString() })
         .eq('id', cardId)
-      await db.schema('maintenance' as any).from('job_card_logs').insert({
+      await maint.from('job_card_logs').insert({
         card_id: cardId, kind: 'event', stage: 'in_progress', author: b.actor ?? 'Verifier',
         body: `Work marked NOT SATISFACTORY — returned to ${existing.assigned_to}. Reopen #${reopen}.` + (b.note ? ` Note: ${b.note}` : ''),
       })
