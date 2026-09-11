@@ -7,8 +7,12 @@ import {
   type ChangeoverContext,
 } from './changeover'
 
+// A submitted Sieving record, supervisor at the screen — the ordinary case a
+// changeover happens in since 2026-09-11. `recordStatus` and `carrySupported`
+// are explicit here because they are now gates, not decoration.
 const sup = (over: Partial<ChangeoverContext> = {}): ChangeoverContext => ({
-  variant: 'Conventional', totalIn: 500, totalOut: 460, isSupervisor: true, ...over,
+  variant: 'Conventional', totalIn: 500, totalOut: 460, isSupervisor: true,
+  recordStatus: 'submitted', carrySupported: true, ...over,
 })
 
 describe('who may start a changeover', () => {
@@ -23,7 +27,27 @@ describe('who may start a changeover', () => {
     // supervisor anyway — so the reason is returned, not a disabled button.
     const p = planChangeover(sup({ isSupervisor: false }))
     expect(p.allowed).toBe(false)
-    expect(p.blockedReason).toMatch(/ask a supervisor/i)
+    expect(p.blockedReason).toMatch(/supervisor/i)
+  })
+
+  it('waits for the SUBMIT, and says so before it mentions permissions', () => {
+    // The floor rule from 2026-09-11: a changeover follows a submit. The
+    // operator hears the step that is theirs to do, not one they cannot.
+    for (const status of ['draft', 'new', null, undefined, '']) {
+      const p = planChangeover(sup({ recordStatus: status }))
+      expect(p.allowed).toBe(false)
+      expect(p.blockedReason).toMatch(/submit this record first/i)
+    }
+  })
+
+  it('tells an operator standing at a submitted record who opens the next one', () => {
+    const p = planChangeover(sup({ recordStatus: 'submitted', isSupervisor: false }))
+    expect(p.allowed).toBe(false)
+    expect(p.blockedReason).toMatch(/supervisor opens the next one/i)
+  })
+
+  it('accepts an approved record too — signing off first is doing more, not less', () => {
+    expect(planChangeover(sup({ recordStatus: 'approved' })).allowed).toBe(true)
   })
 
   it('still reports the leftover to an operator who cannot act on it', () => {
@@ -78,12 +102,39 @@ describe('an unknown variant fails closed', () => {
   })
 })
 
+describe('carrying needs somewhere to carry TO', () => {
+  it('refuses the carry on a line with no carry-over ledger', () => {
+    // Refining and the Blender have no equivalent of bucket_elevator_log, and
+    // Granule's dust ledger is keyed per dust type, not per run.
+    const p = planChangeover(sup({ carrySupported: false }))
+    expect(p.allowed).toBe(true)          // the changeover itself is fine
+    expect(p.mayCarry).toBe(false)
+    expect(p.carryRefusal).toBe('no-ledger')
+    expect(p.carryRefusalReason).toMatch(/bagged out under/i)
+  })
+
+  it('reports the CAPABILITY, not the balance, when there is no ledger', () => {
+    // "nothing left to carry" on a line that could never carry anything reads
+    // as a statement about this record's balance. It is not one.
+    const p = planChangeover(sup({ carrySupported: false, totalIn: 500, totalOut: 500 }))
+    expect(p.carryRefusal).toBe('no-ledger')
+  })
+
+  it('still refuses organic where a ledger DOES exist', () => {
+    const p = planChangeover(sup({ carrySupported: true, variant: 'Organic' }))
+    expect(p.carryRefusal).toBe('organic')
+  })
+})
+
 describe('the plan is internally consistent, whatever you ask it', () => {
   it('holds across every combination', () => {
     for (const variant of ['Conventional', 'Organic', 'Rooibos', '', 'FT-CON']) {
       for (const isSupervisor of [true, false]) {
         for (const [totalIn, totalOut] of [[500, 460], [500, 500], [100, 400]]) {
-          const p = planChangeover({ variant, totalIn, totalOut, isSupervisor })
+          const p = planChangeover({
+            variant, totalIn, totalOut, isSupervisor,
+            recordStatus: 'submitted', carrySupported: true,
+          })
 
           // A family is present exactly when the material may move.
           expect(p.carryFamily === null).toBe(!p.mayCarry)

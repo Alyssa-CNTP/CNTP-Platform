@@ -21,15 +21,19 @@ const html = (el: React.ReactElement) => renderToStaticMarkup(el)
 
 const CONVENTIONAL_WITH_LEFTOVER = planChangeover({
   variant: 'Conventional', totalIn: 1000, totalOut: 850, isSupervisor: true,
+  recordStatus: 'submitted', carrySupported: true,
 })
 const CONVENTIONAL_ALL_BAGGED = planChangeover({
   variant: 'Conventional', totalIn: 1000, totalOut: 1000, isSupervisor: true,
+  recordStatus: 'submitted', carrySupported: true,
 })
 const ORGANIC = planChangeover({
   variant: 'Organic', totalIn: 1000, totalOut: 850, isSupervisor: true,
+  recordStatus: 'submitted', carrySupported: true,
 })
 const NOT_SUPERVISOR = planChangeover({
   variant: 'Conventional', totalIn: 1000, totalOut: 850, isSupervisor: false,
+  recordStatus: 'submitted', carrySupported: true,
 })
 
 describe('ChangeoverTrigger', () => {

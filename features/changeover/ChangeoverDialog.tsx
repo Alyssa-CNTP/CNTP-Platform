@@ -11,6 +11,11 @@ import type { ChangeoverPlan } from '@/lib/core/changeover'
  * the new grade — or, if the batch is organic, that it must be closed off on
  * its own.
  *
+ * Since 2026-09-11 this is only ever reached from a SUBMITTED record, so the
+ * wording talks about opening the next one rather than closing this one.
+ * Closing it was the operator's submit, and saying otherwise would suggest a
+ * supervisor is about to cut a live record short.
+ *
  * Every branch below reads the SAME `ChangeoverPlan` the handler acts on. That
  * is the point of the split: the dialog cannot promise an option the handler
  * will then refuse (ARCHITECTURE.md §4, the recurring "gate validation on the
@@ -42,18 +47,23 @@ export function ChangeoverDialog({ plan, variantLabel, busy, onConfirm, onCancel
         <div className="p-5 space-y-3">
           {organicRefusal ? (
             <p className="text-[13px] text-text-muted">
-              This batch is <strong className="text-text">{variantLabel}</strong> — organic material must stay segregated, so this closes it off as its own record. The new grade/variant starts a fresh record with its own mass balance.
+              This batch is <strong className="text-text">{variantLabel}</strong> — organic material must stay segregated, so it stays its own record. The new grade/variant starts a fresh record with its own mass balance.
             </p>
           ) : (
             <>
               <p className="text-[13px] text-text-muted">
-                This closes the current record off with its own mass balance, and starts a fresh one for the new grade/variant.
+                The submitted record keeps its own mass balance exactly as it stands. This starts a fresh one for the new grade/variant.
               </p>
               <p className="text-[13px] text-text-muted">
                 Leftover raw material can still be bagged out as Blocks / Heavy Sticks / Indent Sticks under the new grade — it is just recorded against the new record rather than carried across.
               </p>
               {/* Only promise the second option where it is actually offered —
-                  the SAME plan the button below reads. */}
+                  the SAME plan the button below reads. On a line with no
+                  carry-over ledger it is never offered, and the refusal below
+                  says why rather than leaving the reader to guess. */}
+              {!plan.mayCarry && plan.carryRefusal === 'no-ledger' && (
+                <p className="text-[12px] text-text-muted">{plan.carryRefusalReason}</p>
+              )}
               {plan.mayCarry && (
                 <p className="text-[12px] text-text-muted">
                   If the leftover has <strong className="text-text">not</strong> all been bagged out and physically continues into the next run, use the second option — it carries the balance forward as material in.
