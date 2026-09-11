@@ -2,6 +2,272 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-11 — Alyssa (A handover note reaches the next shift, and then it is finished)
+
+**Files changed:** `lib/core/production/handover.ts` + test (new), `app/(app)/production/capture/[section]/page.tsx`
+
+A handover note is a message between two shifts, not a log entry, and the difference matters: the message stops being true almost immediately. A changeover note read three shifts later describes a line that has since changed over twice.
+
+Asked for in those words — *"the handover to communicate to the next shifts operators and expires thereafter."*
+
+### What it replaces
+
+A **seven calendar day** window. That is fourteen handovers, so the banner routinely showed a stranger's message about a run that finished days earlier. The window existed to hide seeded demo notes rather than to express a rule.
+
+### The rule
+
+```
+morning   D  →  afternoon  D
+afternoon D  →  morning    D+1
+```
+
+One shift, then gone. Never the shift that wrote it, never anything later. The afternoon shift runs past midnight and still belongs to day D, which is why the next morning is D+1 and not "tomorrow by the clock".
+
+`afternoon` and `night` are one shift with two spellings — `night` is the legacy value on old rows — and `sameShift()` is the only place that comparison happens, so a third spelling would be added once rather than everywhere.
+
+The page's read stays a plain "recent notes on this line"; deciding which of them still applies is the rule's job, not a date filter's. That is how the seven-day window ended up living in a page in the first place.
+
+**One consequence, stated rather than hidden:** if the next shift does not run, nobody reads the note. That is correct — a message to whoever is on the line next is not a message to whoever is on it on Thursday.
+
+**Gates:** tests 1072 (26 new) · boundaries clean · hooks clean · typecheck 28, at baseline · lint 3010, at baseline · `next build` exit 0.
+
+## 2026-09-11 — Alyssa (History is read-only, and the record knows who may change it)
+
+**Files changed:** `lib/core/production/record-access.ts` + test (landed inert in #984), `app/(app)/production/history/page.tsx`, `app/(app)/production/capture/[section]/page.tsx`
+
+The access rules, wired in. The matrix, as confirmed:
+
+| Record | Operator | Supervisor | Production Manager / IT |
+|---|---|---|---|
+| **In History** — any record, any state | read-only | read-only | read-only |
+| Today, the open record | **edit (capture)** | edit | edit |
+| Today, the earlier record after a changeover | read-only → ask supervisor | **edit** | edit |
+| Submitted, not yet signed | read-only → ask supervisor | **edit** | edit |
+| Signed off | read-only → ask management | read-only → ask management | **edit** |
+| Any earlier production day | read-only → ask supervisor | edit until signed | edit |
+
+### The History delete is gone
+
+Rule 4 settles what was already the worst thing on that page. It ran six client-side deletes in a row — `session_signatures`, **`scan_events`**, `prod_mass_balance`, `prod_debagging`, `prod_bagging`, then the session — behind a `confirm()`. ARCHITECTURE §4 names one of those outright: *never blanket-delete `scan_events`, it is an append-only audit ledger*. No audit row, no transaction, and `prod_sessions` already carries `deleted_at` / `deleted_by` that nothing there used.
+
+What replaces it is not nothing. Each card now says **who** could change the record. Rule 4 says no buttons, not no answers — a reader who spots a mistake still has to know whose door to knock on.
+
+### Capture splits one boolean into two
+
+```
+signedOff = status === 'approved'    a fact about the RECORD
+locked    = !access.canEdit          may THIS person type, right now
+```
+
+They were the same boolean until a submitted record stopped being editable by its operator. Everything asking "can I type here" reads `locked`; everything meaning "the record is signed off" reads `signedOff` — including the changeover panel's caption, which would otherwise label a submitted record "signed off & locked".
+
+**Timesheets, checks and cleaning stay out**, on `signedOff` exactly as before. The first two were named; cleaning follows for a stronger reason — it is signed by a *cleaner*, a different actor, and locking them out because an operator submitted would be the same mistake.
+
+`isCurrentRecord` is now tracked, because after a changeover both records are drafts and status cannot tell them apart. It defaults **true**: a page still loading must not read as a closed record and lock an operator out of their own screen.
+
+### One limit, stated plainly
+
+The capture screen saves **directly to Supabase from the browser** — there is no route between it and `prod_sessions`. So this is a client-side gate with RLS as the only backstop, not the server-side "decide from a fresh read" that §6 asks for. Making it that means putting the save behind a route, which is a larger change than this one.
+
+**Gates:** tests 1046 · boundaries clean · hooks clean · typecheck 28, at baseline · lint 3010, six **under** baseline · `next build` exit 0.
+
+## 2026-09-11 — Alyssa (The changeover follows the submit, and reaches every line)
+
+**Files changed:** `lib/core/changeover.ts` + test, `features/changeover/ChangeoverDialog.tsx`, `features/changeover/changeover-ui.test.tsx`, `app/(app)/production/capture/[section]/page.tsx`
+
+Three changes asked for from the floor, and they turn out to be one change.
+
+### They were always the same act
+
+A changeover and "start a new batch record" both called `startNewProduction()`. The difference was never what they did — it was *when*. The changeover ran mid-draft and carried the accounting; the bare button ran after submit and carried none.
+
+The floor rule settles it: **a changeover follows the submit.** Once the operator has closed the record off, there is one moment and one act, so there is now one control. `planChangeover()` gained `recordStatus` and refuses anything that is not `submitted` or `approved`.
+
+`approved` counts as well as `submitted`, deliberately. A supervisor who signs off before opening the next record has done more than the rule asks, and refusing them would be the silent-latch shape — a control that disappears exactly when everything is in order.
+
+This also removes what made the old version dangerous. Closing a live draft meant snapshotting a balance that was still moving and flushing half-typed edits. Against a submitted record there is nothing in flight to lose.
+
+### Every line, not just Sieving
+
+The trigger mounted under `sectionId === 'sieving'`. That is gone: it now sits in the submitted/locked panel, which every section already had. Refining, Granule and both Blenders get it.
+
+**Carrying leftover material does not extend with it.** Sieving writes `production.bucket_elevator_log`, keyed on variant family. Refining and the Blender have no equivalent, and Granule's `dust_carryover_log` is keyed per dust type rather than per run, so a changeover has no single figure to put in it. `planChangeover()` takes `carrySupported` and returns a new `no-ledger` refusal — checked *before* the balance, because "nothing left to carry" on a line that could never carry anything reads as a statement about this record's balance, and it is not one. The material is not lost either way: it is bagged out under the new record, which is what happens on almost every changeover regardless.
+
+### Supervisor only
+
+Unchanged in the rule, but worth stating because it now applies where it did not before: the operator could previously start the next record themselves. They no longer can. The trigger tells them which step is outstanding — submit it, or fetch someone who can open the next one — rather than disappearing.
+
+### Serial numbers do not change across a changeover
+
+Asked and settled. The 11 September Sieving run shows `STFL-110926-006` as the last Organic bag and `-007` as the first Conventional one, and that is correct:
+
+- The **printed tag already carries the variant** — a filled black badge reading `{VARIANT} - {GRADE}`. Putting it in the serial too is the same figure in two places.
+- Grade is not in the serial either. The serial is the bag's identity and counting scope; the badge and the record carry its attributes.
+- Restarting per record would mint **duplicate serials on the same day**, and the serial is a URL path segment and a scan key.
+- Splitting the counter by variant makes two thinner counters — more independent races, which §5 warns about for per-type sequencing.
+- Segregation is enforced where it bites: `validateBagScan` refuses a cross-family bag by reading `bag_tags.variant`.
+
+### Not in this change
+
+The production order still comes from the roster row and is copied whole to every record (`page.tsx`, `production_orders: assignment?.production_orders`), which is why 11 September's Organic morning run reports under a Conventional code. Wiring the supply-chain plan through to per-record orders is deferred by decision.
+
+**Gates:** tests 1016 (7 new) · boundaries clean · hooks clean · typecheck 28, at baseline · lint 3011, five **under** baseline · `next build` exit 0.
+
+## 2026-09-11 — Alyssa (Write and delete join read: three module grants, derived the same way)
+
+**Files changed:** `lib/auth/permissions.ts` + test, `lib/auth/permission-registry.ts`, `app/(app)/users/page.tsx`
+
+The read-only grant from earlier today, extended to the other two axes. Same
+derivation, same additive-only rule, same "explicit false wins" ordering — now
+`can_write_<slug>` and `can_delete_<slug>` alongside `can_read_<slug>`, thirteen
+modules each.
+
+### What a grant does and does not reach
+
+| axis | keys it reaches | blanket key |
+|---|---|---|
+| read | 24 | `can_read_all_modules` |
+| write | 27 | none, deliberately |
+| delete | 13 | none, deliberately |
+| manage | **62 — never reached** | n/a |
+
+**`manage` is not a grant and should not become one.** Approve a run, finalise a
+run, sign off a shift report, approve a job card, allocate a technician, verify
+completed work — that is authority, not editing. The sign-off chains exist
+precisely so one person cannot hold both sides, and a switch handing over all 62
+at once would undo that quietly. They stay per-key.
+
+**No blanket write or delete.** Read has one because "view the whole platform" is
+a real job — a director, an auditor. "Delete anything anywhere" is
+`senior_developer` by another name, and this repo has lost production data to
+bulk deletes before (ARCHITECTURE.md §1B). Write and delete are granted one
+module at a time. A test asserts `can_write_all_modules` and
+`can_delete_all_modules` do not exist, so nobody adds one in passing.
+
+**Write and delete imply read.** Every route guard in the app is on a read key,
+so write-without-read would hand someone save permissions for pages the guard
+bounces them out of first. Write does **not** imply delete and delete does not
+imply write — removing a record is not authoring one.
+
+### Two deletes were filed in the wrong column
+
+`can_delete_bag_tag` and `can_delete_staff` both sat under `manage`, so neither
+appeared under Delete and a module-wide delete grant would have silently skipped
+them. `/api/staff/[id]` DELETE gates on `can_delete_staff` — it is a delete in
+every sense except where it was written down. Both moved.
+
+Also filled: `logistics.dispatch_signing` and `workspace.ticketing` had blank Read
+cells, which reads as "no way to view this" rather than "the module key covers
+it". Both now name the module key they always used.
+
+`workspace.board` keeps no write or delete, with a note saying why: the board only
+ever holds the viewer's own cards, so `/api/workspace/items` gates on module
+access and there is no other person's data to permission.
+
+### The collision that nearly shipped
+
+Slug `staff` builds the grant key `can_delete_staff` — **already** the Staff
+Directory's own per-resource delete key. One string would have meant both "delete
+any staff record" and "delete across the Staff Directory module", making the
+grant its own grantee. The slug is `staff_directory` now, and a test fails the
+build if any slug produces a key that already exists.
+
+That also renamed `can_read_staff` to `can_read_staff_directory`. It shipped this
+morning and nothing references it — no role default, no guard, no page — so this
+is a rename of a key nobody holds yet, not a revocation.
+
+### A UI bug the read grant shipped with
+
+`PermissionMatrix.resolved()` read the raw `overrides` object. A module grant is
+stored under **its own** key, so a cell like `can_save_records` is not in
+`overrides` at all — every Read cell stayed drawn as OFF while `can_read_quality`
+had switched them on. Both `resolved()` helpers now run the same resolver the app
+runs, so the table shows what the person actually has. The amber ring still means
+"set explicitly on this row"; a cell on via a grant says so in its tooltip.
+
+Clicking an on-by-grant cell writes an explicit `false`, which beats the grant.
+That is how "read the whole module except this one page" is expressed, and why
+the resolver checks overrides first.
+
+### Two invariants now enforced
+
+- **The four slot kinds are disjoint.** A key filed as `write` on one resource and
+  `manage` on another would be handed out by a write grant while reading as
+  workflow authority in the UI. It holds today across all 126 keys; the test keeps
+  it holding.
+- **No module grant key collides with a resource key.** The `can_delete_staff` bug
+  above, generalised.
+
+Plus: write grants reach only that module's writes, delete only its deletes,
+neither ever reaches a manage key, both imply read, and an explicit false beats
+either.
+
+### The Users page
+
+Each module header now carries up to three switches — Read · Write · Delete —
+drawn only where the module actually declares slots of that kind. Sales,
+Marketing, Bag Tracking, Management and Workspace are read-only surfaces today, so
+they show Read alone; their write and delete keys exist so nothing breaks when
+that changes, but a switch that reaches zero keys just invites someone to tick it
+and wonder why nothing happened.
+
+No page or route needed editing for any of this. Everything funnels through
+`resolvePermission()`, which is the whole point of deriving the grants rather than
+listing them.
+
+---
+
+## 2026-09-11 — Alyssa (A read-only permission, derived from the matrix instead of hand-listed)
+
+**Files changed:** `lib/auth/permissions.ts` + test, `lib/auth/permission-registry.ts`, `app/(app)/layout.tsx`, `components/layout/Sidebar.tsx`, `app/(app)/users/page.tsx`, `app/(app)/intelligence/global-wits/page.tsx`, `app/api/accounts/route.ts`, `app/api/marketing/route.ts`, `app/api/global-wits/route.ts`
+
+"Can we have a permission that is read-only across all modules, or selected ones." Yes — and the answer was mostly already written down, in the wrong shape.
+
+### The list already existed
+
+`permission-registry.ts` declares a `read` slot for every resource in every module. A read-only grant is exactly that set, so it is **derived**, not typed out a second time: `READ_KEYS_BY_MODULE` reads the matrix, and `resolvePermission()` consults it. A module added to the matrix next month is covered the day it is added, and a resource with no `read` — an authoring tool, an admin action — is never swept in.
+
+The alternative was the shape `management_default` already has: a hand-maintained list of view keys. That list predates Labels, Job Cards, Bag Tracking, Logistics and the whole Sales group, which is precisely the failure being avoided. It is left exactly as it is; widening what every existing Management user can see is a decision about those accounts, not a side effect of adding a capability.
+
+**New keys:** `can_read_all_modules`, plus `can_read_<slug>` for each of the thirteen participating modules. **Administration is not one of them** (`readGrant: false`) — its rows are the audit log, migrations, dev tools and user admin, none of which is a view anybody should get from a "see everything" toggle. New role `read_only_viewer` holds the blanket key and nothing else.
+
+Three ordering properties, all tested, none of them incidental:
+
+- The grant is checked **after** the override, so an explicit `false` still wins — "read-only everywhere except Quality" is expressible.
+- It only ever **adds**. Someone whose role grants a write keeps it. "Read-only" describes what the key hands out, not a cap on the person.
+- It is keyed off `READ_KEY_GRANTORS`, built from `read` slots only, so a write/delete/manage key cannot appear there. Fails closed.
+
+Because every check in the app funnels through `resolvePermission()` — pages via `p()`, API routes via `getCallerPermissions().can()`, route guards and the sidebar via the same `p()` — one resolver change reaches all of them. No page was edited to honour it.
+
+### Three places where it would have been a lie
+
+**Five routes had no permission at all.** `/supervisor`, `/stock-control`, `/production/operations`, `/production/dashboard` and `/production/floor-plan` were gated on department membership alone, so no amount of ticking could open them. They now list `can_read_production` with `orPermission`, leaving the department path untouched. `can_read_all_modules` had to be made to imply each `can_read_<slug>` for this to work — the guards name a module key, and a blanket-key holder has to resolve that key itself, not merely the keys it in turn grants. A test caught that; it was wrong when first written.
+
+**The sidebar disagreed with the guards.** Every Quality link was gated on a WRITE key — Sieving on `can_add_sieving_runs`, Lab Results on `can_save_lab_results`, Customer Specs on `can_edit_customer_specs`. A viewer could open those pages and never find them. `NavItem` takes a `permissions[]` array now, the same flat OR `ROUTE_GUARDS` already had, and each Quality link accepts its read key alongside the write one.
+
+**Three module keys were not read keys at all.** `can_access_research`, `can_access_intelligence` and `can_access_marketing` were the matrix's `read` for their modules, but those modules write: Alara promotes a signal into an account and uploads to the vault, Global Wits imports trade data, the Marketing hub saves reports and bookmarks. Granting them to a viewer would have handed out writes under the word "read".
+
+Each is split into a view key (`can_view_research` / `can_view_intelligence` / `can_view_marketing`, which is what the grant gives) and the original `can_access_*`, now `manage`, which is what the writes check. **Nobody loses anything** — every existing holder keeps both, and every UI path into those screens already required the full-use key.
+
+`can_access_sales` is deliberately left as the Sales module's read key: those pages write nothing. It is therefore excluded from the write checks below, because the grant resolves it.
+
+Server-side, `/api/accounts` POST, `/api/global-wits` POST and the three write actions on `/api/marketing` now require a full-use key. That is a **tightening**: department membership alone used to be enough to create an account or save a campaign. No current UI path is affected — each already requires the key to reach the screen — but a Management user who genuinely needs to save one gets `can_access_marketing` ticked, which is one toggle and leaves a record.
+
+### The invariant worth keeping
+
+`permissions.test.ts` asserts that **no key is both a read grant and a write gate**. That is the single way this feature could hand out a write: a key used as `read` for one resource and as `write`/`delete`/`manage` for another gets granted by `can_read_*` and then accepted by whatever guards that write. The three Sales-group keys were exactly this until they were split. The test fails the build if a fourth appears.
+
+Also asserted: every matrix slug has a matching key and vice versa (drift both ways), the grant touches no write/delete/manage key anywhere, and it never grants an Administration key.
+
+### Two things it deliberately does not do
+
+- **Training's authoring screens stay out.** `training.content` and `training.assignments` have no `read` — the only screens showing them are the `/training/manage` editors, which are a tool, not a record. The readable Training content is the Skills Matrix and the SOP catalogue, and those the grant covers. Every learner already reaches their own courses at `/training`, which needs no permission at all.
+- **`/api/vault/upload` is untouched.** It is gated on IT/Management department plus a `can_upload_vault` flag that is not a `PermissionKey` at all. The read-only grant does not widen it; tightening who may upload is a separate decision, not one to make in passing.
+
+One rough edge, stated rather than hidden: on the Alara and Marketing pages the write buttons are still rendered for a view-only holder and fail server-side with a 403 rather than being hidden. Those pages do not use `useAuth` at all and the controls sit several components deep, so hiding them properly means threading permission state through two page trees. Global Wits, where the write is a single drop zone, does hide it.
+
+---
+
 ## 2026-09-11 — Alyssa (A shift that changed over showed one card, one variant and one status — for two records)
 
 **Files changed:** `lib/core/production/shift-records.ts` + test (new), `app/(app)/production/capture/page.tsx`
