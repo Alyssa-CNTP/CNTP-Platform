@@ -2,6 +2,18 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-11 — Gustav (COA: glyphosate forced onto organic COAs, no way back down the sign-off chain, specs never refreshed)
+
+**Files changed:** `app/(app)/quality/coa/page.tsx`, `lib/quality/coa-gating.ts`, `lib/quality/coa-gating.test.ts`, `app/api/quality/coa-signoff/route.ts`
+
+- **FIXED: a signed organic COA could be neither printed nor corrected.** The builder ticked Glyphosate for *every* organic batch regardless of the matched customer spec (`src.isOrganic || …`). Kunitaro's IPS-KUN-006 asks for no glyphosate, so the section came on, no glyphosate result existed to satisfy it, generation was blocked — and because both managers had signed, the section was locked and **"Drop from COA" was disabled**. The COA was stuck. **When a customer spec matched, the spec is now the authority on which analyses the certificate carries**; the organic default applies only where there is no spec to consult. Scale of the defect, measured on staging: of 67 COA specs, **20 are organic but only 3 actually ask for glyphosate** — and there is exactly **one** glyphosate lab result in the database, so essentially every organic COA outside East West Tea was blocked this way. The 3 East West specs that do ask for it are unaffected.
+- **An organic batch whose spec is silent on glyphosate now says so** in an amber advisory instead of silently force-ticking it. It does not block and does not tick the section — it just means the omission is visible before printing rather than after.
+- **Delete/edit at every step of the sign-off chain.** The chain was one-way: once signed there was no route back, which is what turned a mis-ticked section into a dead end. The Lab Manager and Quality Manager can now **↩ Recall** a COA from *Awaiting QA sign-off* (clears both signatures), **↩ Withdraw** one from *Ready to print* (clears the QA signature, returning it to the QA queue), or withdraw from the locked banner on an open COA. A reason is required and every withdrawal is written to `shared.audit_log` with who removed whose signature. History keeps its existing Edit and Delete. Restricted to the two managers whose signatures are on the document — not extended to admins, same rule as delete.
+- **FIXED: an updated customer spec never pulled through.** `qms.coa_specs` was read once inside `lookup()`, so editing a spec and returning to a COA already on screen still showed the old limits; a COA opened from History or either queue had `sources === null`, so the spec could not be re-applied **at all**. A **↻ Reload specs** button now re-fetches and re-applies, keeping a hand-picked document rather than silently re-matching. It is refused on a signed COA, which is what the withdraw action is for.
+- The spec-matching logic that `lookup()` and the new reload both need is now one tested helper (`rankSpecsForBatch`) instead of two copies — two copies of a matching rule is how a COA ends up judged against a different document depending on which button was pressed. Lint errors on main 3033 → **3028**.
+
+---
+
 ## 2026-09-09 — Alyssa (PRODUCTION: a production order is divided by what was made, not by when)
 
 **Files changed:** `app/(app)/production/orders/[id]/page.tsx`
@@ -338,8 +350,6 @@ type-clean, production build clean.
 it is, the Timesheet tab shows a visible read error and capture carries on — the failure is
 contained, not silent. The optional backfill in the migration is commented and cannot
 attribute historic rows to a machine; they never carried one.
----
-
 ---
 
 ## 2026-09-09 — Alyssa (PRODUCTION: a production order is divided by what was made, not by when)

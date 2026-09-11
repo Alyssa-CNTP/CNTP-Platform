@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import {
   coaGaps, canGenerateCoa, coaHeaderFieldLocked, coaContentLocked,
-  canDeleteGeneratedCoa, COA_SECTION_ORDER, COA_POST_SIGNOFF_EDITABLE,
+  canDeleteGeneratedCoa, canWithdrawCoaSignoff, COA_SECTION_ORDER, COA_POST_SIGNOFF_EDITABLE,
+  wantsGlyphosateSection, glyphosateAdvisory,
 } from './coa-gating'
 
 const ALL_FOUND = {
@@ -126,5 +127,67 @@ describe('canDeleteGeneratedCoa', () => {
     expect(canDeleteGeneratedCoa({})).toBe(false)
     expect(canDeleteGeneratedCoa(null)).toBe(false)
     expect(canDeleteGeneratedCoa(undefined)).toBe(false)
+  })
+})
+
+
+describe('canWithdrawCoaSignoff', () => {
+  it('allows the two managers whose signatures are on the document', () => {
+    expect(canWithdrawCoaSignoff({ isLab: true })).toBe(true)
+    expect(canWithdrawCoaSignoff({ isQa: true })).toBe(true)
+  })
+  it('allows nobody else — a QC cannot unpick a manager signature', () => {
+    expect(canWithdrawCoaSignoff({ isLab: false, isQa: false })).toBe(false)
+    expect(canWithdrawCoaSignoff(null)).toBe(false)
+    expect(canWithdrawCoaSignoff(undefined)).toBe(false)
+  })
+})
+
+describe('wantsGlyphosateSection', () => {
+  // The production defect: Kunitaro IPS-KUN-006 is RA-Organic and asks for no
+  // glyphosate. The old rule force-ticked it on every organic batch, no result
+  // existed to satisfy it, and the signed COA could not be printed or unticked.
+  it('does NOT tick glyphosate on an organic batch whose matched spec is silent', () => {
+    expect(wantsGlyphosateSection({ specMatched: true, specValue: null, isOrganic: true })).toBe(false)
+    expect(wantsGlyphosateSection({ specMatched: true, specValue: '', isOrganic: true })).toBe(false)
+    expect(wantsGlyphosateSection({ specMatched: true, specValue: '   ', isOrganic: true })).toBe(false)
+  })
+  it("treats an explicit 'NOT REQUIRED' as the buyer declining it, organic or not", () => {
+    expect(wantsGlyphosateSection({ specMatched: true, specValue: 'NOT REQUIRED', isOrganic: true })).toBe(false)
+    expect(wantsGlyphosateSection({ specMatched: true, specValue: 'not required', isOrganic: false })).toBe(false)
+  })
+  it('ticks it when the matched spec asks for it', () => {
+    expect(wantsGlyphosateSection({ specMatched: true, specValue: 'None Detected', isOrganic: false })).toBe(true)
+    expect(wantsGlyphosateSection({ specMatched: true, specValue: '<0,01 mg/kg', isOrganic: true })).toBe(true)
+  })
+  it('keeps the organic default only where there is no spec to consult', () => {
+    expect(wantsGlyphosateSection({ specMatched: false, isOrganic: true })).toBe(true)
+    expect(wantsGlyphosateSection({ specMatched: false, isOrganic: false, foundResult: true })).toBe(true)
+    expect(wantsGlyphosateSection({ specMatched: false, isOrganic: false, foundResult: false })).toBe(false)
+  })
+  it('does not let a stray lab result add a row the buyer never asked for', () => {
+    // An analysis the lab happened to run does not belong on the buyer's
+    // certificate. It can still be ticked by hand.
+    expect(wantsGlyphosateSection({ specMatched: true, specValue: null, foundResult: true })).toBe(false)
+  })
+  it('never blocks: a spec that asks for it plus a result is generatable', () => {
+    const on = wantsGlyphosateSection({ specMatched: true, specValue: 'None Detected' })
+    expect(canGenerateCoa({ ...ALL_ON, glyphosate: on } as never, ALL_FOUND)).toBe(true)
+  })
+})
+
+describe('glyphosateAdvisory', () => {
+  it('flags an organic batch whose spec is silent, so the omission is visible', () => {
+    expect(glyphosateAdvisory({ specMatched: true, specValue: null, isOrganic: true, sectionOn: false })).toBe(true)
+  })
+  it('stays quiet once the section is ticked by hand', () => {
+    expect(glyphosateAdvisory({ specMatched: true, specValue: null, isOrganic: true, sectionOn: true })).toBe(false)
+  })
+  it('stays quiet on conventional batches and where the spec does ask for it', () => {
+    expect(glyphosateAdvisory({ specMatched: true, specValue: null, isOrganic: false })).toBe(false)
+    expect(glyphosateAdvisory({ specMatched: true, specValue: 'None Detected', isOrganic: true })).toBe(false)
+  })
+  it('stays quiet when no spec matched — the organic default already ticks it', () => {
+    expect(glyphosateAdvisory({ specMatched: false, isOrganic: true })).toBe(false)
   })
 })

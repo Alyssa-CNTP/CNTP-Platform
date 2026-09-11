@@ -107,6 +107,56 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ signoff: updated })
   }
 
+  // ── Withdraw a sign-off, sending the COA back to be corrected ──
+  //
+  // Until this existed the chain was one-way: once both managers signed, the
+  // results, specs and included sections were locked and there was no route
+  // back. That is right for casual edits, but it also trapped genuine errors —
+  // a section ticked in error blocked generation with the "Drop from COA"
+  // button disabled, so the COA could never be printed OR fixed.
+  //
+  // The answer is not to let signed content be edited quietly. It is to remove
+  // the signature, correct the COA in the open, and have it signed again. Only
+  // the two managers whose signatures are on the document may do this, and the
+  // withdrawal is recorded.
+  if (action === 'withdraw') {
+    if (me.role !== 'lab' && me.role !== 'qa')
+      return NextResponse.json({ error: 'Only the Lab Manager or the Quality Manager can withdraw a COA sign-off.' }, { status: 403 })
+
+    const { data: row } = await admin.schema('qms').from('coa_signoffs').select('*').eq('batch_no', batch_no).maybeSingle()
+    if (!row) return NextResponse.json({ error: 'No sign-off exists for this batch.' }, { status: 404 })
+
+    // 'qa' clears only the QA signature (back to Awaiting QA sign-off);
+    // 'all' clears both (back to unsigned, the lab manager starts again).
+    const scope = body.scope === 'all' ? 'all' : 'qa'
+    if (scope === 'qa' && !row.qa_signed_at)
+      return NextResponse.json({ error: 'This COA has no Quality Manager sign-off to withdraw.' }, { status: 400 })
+
+    const patch: Record<string, string | null> = {
+      qa_name: null, qa_signed_by: null, qa_signature: null, qa_signed_at: null,
+      status: 'sent_to_qa', updated_at: nowIso,
+    }
+    if (scope === 'all') {
+      patch.lab_name = null; patch.lab_signed_by = null; patch.lab_signature = null; patch.lab_signed_at = null
+      patch.sent_to_qa_at = null; patch.status = 'draft'
+    }
+    await admin.schema('qms').from('coa_signoffs').update(patch).eq('batch_no', batch_no)
+
+    // A withdrawn signature is a quality event: who removed whose, and why.
+    try {
+      await admin.schema('shared').from('audit_log').insert({
+        user_id: me.userId, user_email: null, user_role: me.role, user_dept: 'quality',
+        action: 'coa_signoff_withdrawn', schema_name: 'qms', table_name: 'coa_signoffs',
+        record_id: String(batch_no),
+        old_data: { lab_name: row.lab_name, lab_signed_at: row.lab_signed_at, qa_name: row.qa_name, qa_signed_at: row.qa_signed_at, status: row.status },
+        new_data: { scope, withdrawn_by: me.name, reason: String(body.reason || '').slice(0, 500) },
+      })
+    } catch { /* the withdrawal itself must not fail on a logging error */ }
+
+    const { data: updated } = await admin.schema('qms').from('coa_signoffs').select('*').eq('batch_no', batch_no).maybeSingle()
+    return NextResponse.json({ signoff: updated })
+  }
+
   // ── Sign a slot ──
   const slot = Number(body.slot)
   if (slot !== 1 && slot !== 2) return NextResponse.json({ error: 'slot must be 1 (lab) or 2 (QA)' }, { status: 400 })
