@@ -94,11 +94,20 @@ export async function getITUserIds(): Promise<string[]> {
 /** User ids of Quality staff — notified to run a post-maintenance QC check.
  *  Used by the maintenance → quality QC hand-off (the Quality dashboard surfaces it). */
 export async function getQualityUserIds(): Promise<string[]> {
+  return (await getQualityStaff()).map(r => r.userId)
+}
+
+/** Active Quality staff with their role. The QC hand-off notifies all of them
+ *  when no station QC is mapped to the card's area. */
+export async function getQualityStaff(): Promise<{ userId: string; role: string | null }[]> {
   const admin = getAdminClient()
   const { data } = await admin.schema('shared' as any).from('app_roles')
-    .select('user_id, is_active').eq('department', 'Quality')
-  return (data ?? []).filter((r: any) => r.is_active !== false).map((r: any) => r.user_id).filter(Boolean)
+    .select('user_id, role, is_active').eq('department', 'Quality')
+  return (data ?? [])
+    .filter((r: any) => r.is_active !== false && r.user_id)
+    .map((r: any) => ({ userId: r.user_id as string, role: (r.role ?? null) as string | null }))
 }
+
 
 /** User ids eligible to manage AXIS tickets — IT department, or anyone holding
  *  can_assign_tickets (role default or explicit override). Replaces the old

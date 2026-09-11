@@ -10,6 +10,7 @@ import type { PermissionKey } from '@/lib/auth/permissions'
 import Sidebar          from '@/components/layout/Sidebar'
 import Topbar           from '@/components/layout/Topbar'
 import NotificationBell from '@/components/layout/NotificationBell'
+import WorkRequestPopup from '@/components/layout/WorkRequestPopup'
 import CommandSearch    from '@/components/search/CommandSearch'
 import { LanguageProvider } from '@/lib/i18n/context'
 
@@ -415,6 +416,11 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
             acumaticaSync={routeKey === '/sales' ? 'ok' : undefined}
             rightSlot={<NotificationBell />}
           />
+          {/* Work requests (a QC check waiting on a job card) pop on whatever
+              screen the person is on and stay until they deal with them — the
+              bell's toast clears after six seconds, which loses the request if
+              nobody happened to be looking. */}
+          <WorkRequestPopup />
           <main className="flex-1 overflow-y-auto overflow-x-hidden app-shell-main">
             {children}
           </main>
