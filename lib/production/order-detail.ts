@@ -9,6 +9,7 @@
 
 import { getDb } from '@/lib/supabase/db'
 import { massBalanceToleranceKg } from '@/lib/production/capture-config'
+import { sessionsInSameOrder } from '@/lib/core/production/order-scope'
 
 export interface OrderSession {
   id: string
@@ -327,7 +328,24 @@ function group<T>(rows: T[], key: (r: T) => string): Map<string, T[]> {
   return m
 }
 
-// Load the whole production day that `sessionId` belongs to.
+/**
+ * Load the production ORDER that `sessionId` belongs to.
+ *
+ * It used to load the whole production DAY, which is why a shift that changed
+ * over produced one document covering every record on that line — on
+ * 11 September 2026 the Sieving tower's Organic run was reported under
+ * `S10LGBL-C`, a Conventional code, because a later record on the same day
+ * carried it.
+ *
+ * The scope is now the RUN: `production.production_runs` already defines one as
+ * "one production order (PO + variant + grade) that can span several shifts of
+ * the same production day", `prod_sessions.run_id` already points at it, and it
+ * is already filled in. A morning and an afternoon on one order still come back
+ * as one document; a changeover no longer does.
+ *
+ * The day is still READ — the rule needs its siblings to decide which of them
+ * belong — and then narrowed by `sessionsInSameOrder()` in core.
+ */
 export async function loadOrderDay(sessionId: string): Promise<OrderDay | null> {
   const db = getDb().schema('production')
 
@@ -338,7 +356,15 @@ export async function loadOrderDay(sessionId: string): Promise<OrderDay | null> 
 
   const { data: sessRaw } = await db.from('prod_sessions').select('*')
     .eq('section_id', section_id).eq('date', date)
-  const sessions = ((sessRaw as any[]) ?? []).sort(
+  const inOrder = sessionsInSameOrder(
+    ((sessRaw as any[]) ?? []).map(r => ({
+      id: r.id, runId: r.run_id ?? null, sectionId: r.section_id,
+      date: r.date, variant: r.variant ?? null, deletedAt: r.deleted_at ?? null,
+      row: r,
+    })),
+    sessionId,
+  )
+  const sessions = inOrder.map(x => x.row).sort(
     (a, b) => shiftRank(a.shift) - shiftRank(b.shift) || String(a.created_at).localeCompare(String(b.created_at)),
   )
   if (!sessions.length) return null
