@@ -7,6 +7,7 @@ import {
 } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
+import { roleKeysForSection, ALL_SECTION_ROLE_KEYS } from '@/lib/core/roster/section-roles'
 import {
   SECTION_ORDER, sectionMeta, NEEDS_LOT, NEEDS_VARIANT, VARIANT_OPTIONS,
 } from '@/lib/production/capture-config'
@@ -41,15 +42,9 @@ const SHIFT_BTN: Record<Shift, string> = {
   afternoon: 'Afternoon / Night · 16h00–01h00',
   night:     'Night',
 }
-// Which roster role(s) feed each capture section, for autofill.
-const SECTION_ROLES: Record<string, string[]> = {
-  sieving:     ['sieving_tower'],
-  refining1:   ['refining_1'],
-  refining2:   ['refining_2'],
-  granule:     ['granule_operator', 'granule'],
-  blender:     ['blender'],
-  pasteuriser: ['pasteuriser_op'],
-}
+// Which roster role(s) feed each capture section: lib/core/roster/section-roles.
+// Lifted out of this file when the History / Planning page needed the same
+// answer -- two copies of a vocabulary translation is how they drift.
 
 function AssignScreen() {
   const router = useRouter()
@@ -250,7 +245,7 @@ function AssignScreen() {
       let filled = 0
       const sectionFills: Record<string, string[]> = {}
       SECTION_ORDER.forEach(sectionId => {
-        const roleKeys = SECTION_ROLES[sectionId] ?? []
+        const roleKeys = roleKeysForSection(sectionId)
         const ids: string[] = []
         entries.filter(e => roleKeys.includes(e.role_key)).forEach(e => {
           const opId = opFor(e)
@@ -537,7 +532,6 @@ function AssignScreen() {
 // Flattened list of the roster role keys that feed a Production capture
 // section — used to scope "today's roster" to floor roles the supervisor
 // actually needs here, not the full multi-department roster.
-const ALL_SECTION_ROLE_KEYS = Object.values(SECTION_ROLES).flat()
 
 // Quick "who's rostered today" reference so a supervisor doesn't have to open
 // the full Shift Roster just to see names — resolves operator_id/employee_id

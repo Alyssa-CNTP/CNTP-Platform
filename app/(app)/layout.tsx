@@ -65,6 +65,10 @@ const ROUTE_GUARDS: Array<{
   { prefix: '/production/operations',departments: ['Management'] },
   { prefix: '/production/dashboard', departments: ['Production','Management'] },
   { prefix: '/production/floor-plan',departments: ['Production','Management'] },
+  // History / Planning. Reachable by floor operators too (see the sandbox
+  // below) -- for them this early-returns before ROUTE_GUARDS is consulted,
+  // so this rule governs everyone else.
+  { prefix: '/production/history',   departments: ['Production','Management'], permission: 'can_view_live_history', orPermission: true },
   { prefix: '/production/orders',     departments: ['Production','Management'], permission: 'can_view_live_history', orPermission: true },
   { prefix: '/production/live',      departments: ['Production'], permission: 'can_view_live_history',   orPermission: true },
   { prefix: '/production/inventory', departments: ['Production','Management'], permission: 'can_view_inventory', orPermission: true },
@@ -320,7 +324,11 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     // Floor operators are sandboxed to their capture area + custom dashboard.
     // They never see the general dashboard, settings, or any other module.
     if (role === 'floor_operator') {
-      if (!pathname.startsWith('/production/capture') && !pathname.startsWith('/training')) router.replace('/production/capture')
+      // Widened for History / Planning: an operator has to be able to see what
+      // ran on their line last shift without asking the supervisor, and that
+      // page deliberately does not live under /production/capture.
+      const allowed = ['/production/capture', '/production/history', '/training']
+      if (!allowed.some(prefix => pathname.startsWith(prefix))) router.replace('/production/capture')
       return
     }
 

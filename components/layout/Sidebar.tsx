@@ -42,6 +42,7 @@ export const NAV: NavItem[] = [
   // ── Production — capture work & oversight ──
   { href: '/production/dashboard',      label: 'Production Dashboard',       icon: ChartNoAxesCombined, group: 'Production', departments: ['Production','Management'] },
   { href: '/production/capture',        label: 'Capture',                    icon: ClipboardList,   group: 'Production', departments: ['Production'], permission: 'can_submit_count' },
+  { href: '/production/history',       label: 'History / Planning',         icon: History,         group: 'Production', departments: ['Production','Management'], permission: 'can_view_live_history', orPermission: true },
   { href: '/production/orders',         label: 'Production Orders',          icon: FileText,        group: 'Production', departments: ['Production','Management'], permission: 'can_view_live_history', orPermission: true },
   { href: '/production/inventory',      label: 'Master Inventory',           icon: PackageOpen,     group: 'Production', departments: ['Production','Management'], permission: 'can_view_inventory', orPermission: true },
   { href: '/production/blends',         label: 'BOMs',                       icon: Layers,          group: 'Production', departments: ['Production','Management'], permission: 'can_view_blends', orPermission: true },
@@ -165,6 +166,7 @@ export function getVisibleNavItems(nav: NavItem[], ctx: {
   if (ctx.role === 'floor_operator') {
     return [
       { href: '/production/capture', label: 'My Dashboard', icon: LayoutDashboard, group: 'Production' },
+      { href: '/production/history', label: 'History / Planning', icon: History,         group: 'Production' },
       { href: '/training/my',        label: 'Training',     icon: GraduationCap,   group: 'Production' },
     ]
   }
