@@ -2,6 +2,50 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-11 — Gustav (Sieving QC: grade and variant are Quality's call, and a deleted run no longer leaves the bag looking checked)
+
+**Files changed:** `app/(app)/quality/sieving/page.tsx`, `lib/supabase/database.types.ts`
+
+### Why a bag showed "Qc Check · Pass" with no quality record
+
+`STFL-210826-005` carries a `qc_check` event in its own scan history — *Pass · QC: Rose Tsatsi* — while the Quality screen has no run for it and it sits in the awaiting-QC queue. Saving a Final QC writes **three** things: the `qms.sd_runs` row, a `qc_check` event on the bag's ledger, and the QC stamp on `bag_tags`. `deleteRun` removed only the first.
+
+The deleted run is still visible in the evidence: `sd_runs` id **3853 is missing**, and the gap sits exactly between id 3852 (21 Aug 09:09:55) and 3854 (09:30:05) — the orphaned scan event is timestamped 09:10:32. Scale across production: **5 of 643** bags with a QC scan event have no matching run.
+
+Deleting a run now appends a reversing `void` event (`scan_events` is append-only — ARCHITECTURE.md §4, so the original is never removed) and clears the stale `bag_tags` QC stamp, so the bag's history says the record was withdrawn instead of implying it still exists.
+
+### Grade and variant are no longer guessed
+
+The same bag's scan event reads *Export Conventional*, while the Sieving Tower has it as **Domestic** — and nearly every other run captured that day is Domestic. Three separate things were filling those fields in:
+
+- the new-run form defaulted to **Export** + **Conventional**;
+- the edit form defaulted a missing grade to `SD_GRADES[0]` (Export) and variant to Conventional;
+- looking up a bag tag pulled the grade from the bag's `destination` **and fell through to `?? 'Export'`** when the destination did not map — applied unconditionally, so it overwrote a grade the QC had already picked.
+
+Because the defaults are also the commonest real values, a wrong one was indistinguishable from a deliberate one. Grade and variant now **start blank and stay blank until the QC picks them** — in the new-run form, the edit form, and after a bag lookup. `validate()` already required both, so a blank start simply makes the choice explicit rather than assumed. What the bag tag claims is still shown, as a line to confirm or contradict — *"Bag tag says Domestic · Conventional — confirm it or set the correct one"* — never written into the form.
+
+### Recapturing a backlog
+
+The duplicate-time guard (same lot + date + run type + minute) is now scoped to **In-Process** runs. The time is stamped at capture, so catching up on a backlog — several bags off one lot, all backdated to the day they ran, saved inside the same minute — tripped it on every save after the first and told the QC to "mark as Re-test", which would be false: they are different bags. A Final run already has the exact guard it needs in `_dupSerial` (the same bag twice), which catches real duplicates without catching the backlog.
+
+`ScanAction` also gained `void`, `topped_up` and `drawn_down` — all three were allowed by the database's CHECK constraint but missing from the type.
+
+---
+
+## 2026-09-11 — Gustav (Permissions: real per-page Read toggles for Quality, a dedicated COA key, and two IT roles that had never been wired)
+
+**Files changed:** `lib/auth/permissions.ts`, `lib/auth/permission-registry.ts`, `lib/auth/permissions.test.ts` (new), `app/(app)/layout.tsx`, `app/(app)/quality/coa/page.tsx`
+
+- **The "by dept" badges on Final-product lab results / Specifications / Runs / Sieving in the Master Permissions matrix are now real Read toggles.** There was no per-page read key for any of them — the whole module was opened by one blanket key, `can_view_history` (or Quality department membership), with no way to hand someone just one page. Four new keys — `can_view_lab_results`, `can_view_specs`, `can_view_runs`, `can_view_sieving` — are wired into the route guards for their own pages, each accepting `can_view_history` too so nobody who could already see a page loses it.
+- **FIXED: Customer Specs was gated on the EDIT permission for everyone, including Quality department members.** The route required `can_edit_customer_specs` with no read-only path at all — a Lab Manager (who has no edit right on specs) could not open the page, including via the pasteuriser's own "Spec loaded" deep link. Management's normally-blanket `can_view_history` didn't reach it either. The page already gates every write affordance behind `canWrite` (Save/Add/Delete, the alias form, every editable cell) — verified before changing anything — so it was always safe to open read-only; the route guard just never allowed it. `can_view_specs` now does.
+- **COA Generator gets its own permission, `can_generate_coa`,** rather than borrowing `can_save_lab_results` or `can_approve_runs` the way its access check always had — those two are kept as well so nobody currently using it loses access.
+- **IT can now open and build a COA.** Checked who actually holds an IT role rather than assuming: the real people are on `bis_manager`, `it_management` (production) / `it-management` (staging, hyphenated — the same role, spelled two ways on the two environments) and `co_developer`. `co_developer` already had it, automatically, through its "everything except a 3-key denylist" default. `bis_manager` and `it_management`/`it-management` had **no entry in `ROLE_PERMISSION_DEFAULTS` at all** — the same gap `store_default` had — so they granted nothing regardless of department (IT is deliberately not a blanket key, by explicit design in this file). Wired `can_generate_coa: true` for both, and nothing else — a scoped fix, not a blanket one. Both are now also in the Users & Roles picker, where they were previously unlisted.
+- `lib/auth/permissions.test.ts` (new, 11 tests) — integrity checks over the tables themselves, not just behaviour: no duplicate keys in `ALL_PERMISSION_KEYS`, no `ROLE_PERMISSION_DEFAULTS`/`PERMISSION_GROUPS` entry referencing an unknown key, and every non-blank-slate role in the picker has at least one default set. This is exactly the class of check that would have caught the `bis_manager`/`it_management` gap without someone noticing by hand.
+- `ROUTE_GUARDS` in `app/(app)/layout.tsx` gained a `permissions?: PermissionKey[]` alternative alongside the existing single `permission` field — any one of several keys can now open a route (used above so a page accepts both `can_view_history` and its own narrower key). Additive; every existing single-`permission` guard is unchanged.
+- Typecheck 28 (unchanged). Lint: measured against a clean worktree of plain `origin/staging` — **zero new errors** (3012 either way). Tests 942/942 (11 new, 931 unchanged).
+
+---
+
 ## 2026-09-11 — Gustav (Maintenance: NPD type, temporary repairs, and the notifications that were never being sent)
 
 **Files changed:** `lib/notifications/recipients.ts`, `app/api/maintenance/staff/route.ts`, `app/api/maintenance/job-cards/[id]/verify/route.ts`, `app/api/maintenance/transcribe/route.ts`, `lib/maintenance/constants.ts`, `lib/maintenance/types.ts`, `lib/maintenance/useMaintenanceData.ts`, `components/maintenance/JobCardItem.tsx`, `app/(app)/maintenance/my-jobs/page.tsx`, `app/(app)/maintenance/job-cards/page.tsx`, `supabase/migrations/20260911_010_jobcard_temporary_repair_followup.sql` (new, applied to staging)
@@ -22,107 +66,28 @@ Both now read through the admin client, which is the correct tool for the job: t
 - **A finished job card no longer vanishes from the technician's screen.** `My job cards` tabbed on `assigned` / `in_progress` / `complete`, so a card in `qc_check` or `mgr_verify` matched **no tab at all** — from the moment work was submitted until the manager signed off, hours or days later, it looked to the technician as though their work had disappeared. New **Awaiting sign-off** tab covers that gap.
 - **"Assigned to me" now matches on user id**, name only as a fallback for older cards — the same name-matching failure that used to stop allocated checklists reaching technicians.
 - *Follow-up:* the first merge of this work turned CI's lint ratchet red — the new follow-up code added `db.schema('maintenance' as any)` casts of its own. The verify route now hoists **one** handle for the schema instead of re-casting at every call site, which puts the repo 9 errors **below** the baseline rather than over it.
-- **The QC request is a popup on the lab's screen, not an email.** Quality works at a bench with the app open, and there are ~17 of them — a mail per job card is noise they learn to ignore. The hand-off is **in-app only**, and it surfaces through a new `WorkRequestPopup` rather than the notification bell's toast: the toast clears itself after six seconds, so a request raised while nobody was looking at the screen was simply gone. The popup **loads unread requests on mount**, stays up until it is opened or deferred, and deferring leaves it **unread** so it returns next visit. The bell skips its own toast for these kinds so the same request never appears twice.
-## 2026-09-07 — Gustav (Maintenance: compressor & generator run-hours captured; service date no longer guessed)
+- **The QC request is a popup on the lab's screen, not an email.** Quality works at a bench with the app open, and there are ~17 of them — a mail per job card is noise they learn to ignore. The hand-off is now **in-app only**, and it surfaces through a new `WorkRequestPopup` rather than the notification bell's toast: the toast clears itself after six seconds, so a request raised while nobody was looking at the screen was simply gone, leaving only a number on a bell nobody had a reason to open. The popup **loads unread requests on mount** (so one raised while the lab was away appears when they come back), stays up until it is opened or deferred, and deferring leaves it **unread** — it returns next visit and still counts on the bell. The bell skips its own toast for these kinds so the same request never appears twice.
+## 2026-09-09 — Alyssa (Two migrations shared a number, and one of them was never run)
 
-**Files changed:** `lib/maintenance/useMaintenanceData.ts`, `components/maintenance/ServiceCard.tsx`
+**Files changed:** `supabase/migrations/20260909_002_label_sign_offs.sql` → `20260909_005_label_sign_offs.sql`, `supabase/migrations/20260909_003_sign_off_recorded_by.sql` → `20260909_006_sign_off_recorded_by.sql`, `app/api/pasteuriser/labels/[id]/sign-off/route.ts`
 
-**Data recorded (staging + production):**
+Two different migrations were both called `20260909_002`: the timesheet stoppage ledger and the label sign-off register. They were written the same day by two pieces of work that did not know about each other.
 
-| Machine | Reading date | Total hours | Since service |
-|---|---|---|---|
-| 500L Factory Compressor | 2026-08-31 | 8 935 | 636 |
-| Generator GKSD-440 | 2026-09-07 | 1 618 | — |
+The consequence is not cosmetic. Checked against staging today:
 
-Both figures were reported by Gustav. The compressor's previous reading was 08/06/2026 at 7 836 total / 1 773 since service, so a service happened between the two — but its date was never captured. The generator had **no** run-hours rows at all; this is its first, and its hours-since-service is left empty (the 676 originally quoted is most likely a start count, not run hours, so it is not recorded rather than recorded wrongly). Production's compressor service interval was also corrected 350 → 2 000 hours and the generator added to `equipment_config` (500 hours), matching what staging already had.
+| Migration | On staging |
+|---|---|
+| `20260909_002_timesheet_stoppages` | applied |
+| `20260909_002_label_sign_offs` | **never run** |
+| `20260909_003_sign_off_recorded_by` | **never run** (it needs the table above) |
+| `20260909_004_stoppage_coverage…` | applied |
 
-- **The "last serviced" date is now inferred from the counter reset, not from the newest zero row.** A reading of 636 hours-since-service following one of 1 773 can only mean the machine was serviced in between; the old rule instead reported the last row that happened to sit at zero, which for the compressor pointed at **21/01/2026** and flatly contradicted the 636 printed next to it. Where the date is inferred rather than recorded, the card now says so — *"serviced 08/06/2026–31/08/2026 · date not logged"* — instead of asserting a date nobody entered.
-- **Calendar-interval scheduling takes the earlier bound of that window**, so an unknown service date brings the next service forward rather than pushing it out.
-- **A machine with no service history reads NO SERVICE DATA, not OK.** With no hours-since-service and no service record there is no due date, and the urgency badge fell through to a green OK — the generator would have looked healthy purely because nothing about it had ever been captured.
+`20260909_002` was run, `004` was run on top of it, and the pair in between was silently skipped — because from the outside "002" looked done. `public.label_sign_offs` does not exist on staging, so **every sign-off route returns a schema error**, and the label approval chain that shipped in #949 and #950 has never executed once.
 
----
+Nothing about the SQL changed. The two label migrations are renumbered `005` and `006`, past the timesheet's `004`, so they sort after their sibling instead of colliding with it, and each now names its dependency in its header. The two `20260909_003` references in the sign-off route's comments follow the rename.
 
-## 2026-09-05 — Gustav (Maintenance: checklist allocation reaches technicians, period locking, checklist history, run-hour service tracking)
+**Still to run on staging, in this order:** `20260909_005_label_sign_offs.sql`, then `20260909_006_sign_off_recorded_by.sql`, then `NOTIFY pgrst, 'reload schema';`.
 
-**Files changed:** `lib/maintenance/useMaintenanceData.ts`, `lib/maintenance/types.ts`, `app/(app)/maintenance/scheduled/page.tsx`, `app/(app)/maintenance/page.tsx`, `components/maintenance/TrendsPanel.tsx`, `components/maintenance/ServiceCard.tsx` (new), `supabase/migrations/20260905_010_generator_checklist_service_tracking.sql` (new, applied to staging)
-
-- **Weekly Generator / Diesel checklist trimmed to the two readings actually captured** — *Generator run hours* and *Generator fuel level*. The other three lines (flow meter, start capability, run for 20 min) were prompts, not measurements.
-- **FIXED: an allocated checklist never reached the technician.** Allocation was matched on the technician's NAME only, so it silently failed whenever the roster spelling and the person's profile name differed. Allocation now records `assigned_user_id` and the technician's view matches on that (name kept as a fallback for older rows). A technician signed in now sees exactly the weekly/monthly checklists allocated to them.
-- **Auto-allocate now spreads work across EVERY maintenance technician**, not just whoever is on duty — a checklist is a whole-period job, and rostering only the on-duty crew left most of the team idle and overloaded the rest.
-- **A period locks once allocated.** Auto-allocate is disabled for that week/month (re-running would reshuffle work people had already started); the maintenance manager can still move any individual checklist to someone else from its card — the override for sick leave.
-- **Checklist history by period.** Weekly now has a week picker alongside the monthly month picker, so you can go back to any past week or month and see the checklists as they were filled in, including who completed them and a partial-progress line for ones left incomplete.
-- **Readings captured on a checklist now reach the graphs.** IP Measurement, Generator / Diesel and Water Meters were only writing into the checklist's own task state, so the trend charts — which read `ip_readings` / `diesel_readings` / `water_readings` — never saw them. Saving a reading checklist now also writes the numbers into the matching register.
-- **Compressor and generator now show service status instead of a sparkline** — current meter reading and its date, hours run since the last service, and the **date the next service falls due**. The due date is the earlier of the hours projection and any calendar interval. The compressor's configured interval was wrong (350 hours) and is now **2000**; the generator was missing from the run-hours register entirely and is now tracked at **500 hours or 12 months, whichever comes first**. Shown on the maintenance dashboard, in Utilities & trends, and in the Annual / Calibration tab.
-
----
-
-## 2026-09-11 — Gustav (COA: glyphosate forced onto organic COAs, no way back down the sign-off chain, specs never refreshed)
-
-**Files changed:** `app/(app)/quality/coa/page.tsx`, `lib/quality/coa-gating.ts`, `lib/quality/coa-gating.test.ts`, `app/api/quality/coa-signoff/route.ts`
-
-- **FIXED: a signed organic COA could be neither printed nor corrected.** The builder ticked Glyphosate for *every* organic batch regardless of the matched customer spec (`src.isOrganic || …`). Kunitaro's IPS-KUN-006 asks for no glyphosate, so the section came on, no glyphosate result existed to satisfy it, generation was blocked — and because both managers had signed, the section was locked and **"Drop from COA" was disabled**. The COA was stuck. **When a customer spec matched, the spec is now the authority on which analyses the certificate carries**; the organic default applies only where there is no spec to consult. Scale of the defect, measured on staging: of 67 COA specs, **20 are organic but only 3 actually ask for glyphosate** — and there is exactly **one** glyphosate lab result in the database, so essentially every organic COA outside East West Tea was blocked this way. The 3 East West specs that do ask for it are unaffected.
-- **An organic batch whose spec is silent on glyphosate now says so** in an amber advisory instead of silently force-ticking it. It does not block and does not tick the section — it just means the omission is visible before printing rather than after.
-- **Delete/edit at every step of the sign-off chain.** The chain was one-way: once signed there was no route back, which is what turned a mis-ticked section into a dead end. The Lab Manager and Quality Manager can now **↩ Recall** a COA from *Awaiting QA sign-off* (clears both signatures), **↩ Withdraw** one from *Ready to print* (clears the QA signature, returning it to the QA queue), or withdraw from the locked banner on an open COA. A reason is required and every withdrawal is written to `shared.audit_log` with who removed whose signature. History keeps its existing Edit and Delete. Restricted to the two managers whose signatures are on the document — not extended to admins, same rule as delete.
-- **FIXED: an updated customer spec never pulled through.** `qms.coa_specs` was read once inside `lookup()`, so editing a spec and returning to a COA already on screen still showed the old limits; a COA opened from History or either queue had `sources === null`, so the spec could not be re-applied **at all**. A **↻ Reload specs** button now re-fetches and re-applies, keeping a hand-picked document rather than silently re-matching. It is refused on a signed COA, which is what the withdraw action is for.
-- The spec-matching logic that `lookup()` and the new reload both need is now one tested helper (`rankSpecsForBatch`) instead of two copies — two copies of a matching rule is how a COA ends up judged against a different document depending on which button was pressed. Lint errors on main 3033 → **3028**.
-
----
-
-## 2026-09-09 — Alyssa (PRODUCTION: a production order is divided by what was made, not by when)
-
-**Files changed:** `app/(app)/production/orders/[id]/page.tsx`
-
-Reported from the printed Sieving order for 7 September, which read **6 577 kg in against 12 892 kg out — a balance of +96.0% and a yield of 196%** — with the afternoon shift's own block showing `INPUT 0.0 kg`.
-
-### The 5 950 kg that was being dropped
-
-```ts
-const variant     = shifts.map(s => s.session.variant).find(Boolean) ?? null
-const sameVariant = (d) => !d.variant || !variant || d.variant === variant
-const inputRows   = debags.filter(d => !isCarriedOut(d) && sameVariant(d))
-```
-
-Two things were wrong with that guard and they compounded.
-
-- **It was applied to every debagging row**, though the comment directly above it described one case only: the bucket elevator carried in from the previous day, which is this run's input only when it is the same material.
-- **It compared the raw variant string**, and the day's `variant` is whatever the *first* shift recorded.
-
-The tower ran `Conventional` on the morning of 7 September and `RA-Conventional` in the afternoon. All 18 of the afternoon's farm-bag rows failed `d.variant === variant` and were dropped — from the inputs panel, from Total Input, and from the afternoon's own shift block. The output side has no equivalent filter, so all 47 bags still counted.
-
-It was silent. The panel prints a careful list of what it holds back — duplicate rows, bucket elevator carried to tomorrow, carried-in bucket of a different variant — and 5 950 kg of farm bags appeared in none of them, because the sentence that would have said so (`bucketInExcludedKg`) only ever covered bucket rows.
-
-Now: **bucket rows only, compared by variant FAMILY.** `Conventional` and `RA-Conventional` are one physical pool and blend freely; organic is the segregated one (ARCHITECTURE §5 — `lib/production/inventory.ts` already matches carry-over this way). Uses the existing `isOrganicVariant` rather than a fourth copy of the family rule.
-
-### The order is now divided into runs
-
-A production order covers one section for one day, and a day can run more than one thing. Rolled into a single pair of totals, 7 September read as one 12.5 t run of nothing in particular; 31 August was the same shape with grades — 14 385 kg in and 14 103 kg out, correct to the kilogram, with nothing on the page separating Export from Export Blend.
-
-**The division is now `(variant, grade)` — what was made.** The shift is *when*: it stays as a column on every row and is named in each run's header, but it no longer divides the order, because one run routinely spans the changeover and a changeover routinely happens mid-shift.
-
-Each run is a complete section of the report: its own inputs per batch and per type, its own output bags per product, and **its own mass balance**. Under them:
-
-- **Not attributable to one run** — the bucket elevator across the changeover, machine spillage, half-bag top-ups into older bags. None carries a grade, so none belongs to a run, but all are real and all are in the day totals. Listed with their weights instead of spread across the runs, because spreading them would be an apportionment and every other figure on the page is a measurement.
-- **Whole day — all runs combined**, with a per-run table, sitting *under* the runs rather than above them. One pair of totals for a day that ran two different materials is the figure that made this page unreadable in the first place.
-
-The header's **Variant & grade** now names every run the day held, not just the first shift's.
-
-**This reverses one earlier decision, deliberately.** The by-grade table it replaces withheld a per-grade balance on the grounds that the tower is one physical stream — material in the machine when the grade changed was fed by one run and bagged by the next. That reasoning is right and is kept, in the note under the per-run table. What changed is the conclusion: hiding the per-run balance did not make the problem go away, it just left one whole-day figure that was wrong in a way nobody could decompose.
-
-### What 7 September now reads
-
-| | Was | Now |
-|---|---|---|
-| Total input | 6 577.0 kg | **12 527.0 kg** |
-| Total output | 12 892.0 kg | 12 892.0 kg |
-| Balance | +6 315.0 kg (+96.0%) | **+365.0 kg (+2.9%)** |
-| Yield | 196% | **102.9%** |
-
-split as **Conventional · Domestic/Local** (Morning) 6 544.0 in / 5 699.0 out / −845.0 kg, **RA-Conventional · Domestic/Local** (Afternoon) 5 950.0 in / 7 053.0 out / +1 103.0 kg, and 33.0 kg in / 140.0 kg out attributable to neither.
-
-The two runs are each still outside ±1%, and that is now visible rather than hidden inside a day total: the bucket elevator crossing 16h00 belongs to neither run, which is exactly what the unattributable panel is for.
-
-No migration, no change to `lib/production/order-detail.ts`, and no change to what is captured — only to how the order is divided when it is read.
-## 2026-09-09 — Alyssa (PRODUCTION: `lib/core` and its gates arrive on main)
 ## 2026-09-09 — Alyssa (A stoppage that notified nobody said it had notified maintenance)
 
 **Files changed:** `features/operator-timesheet/db.ts`, `features/operator-timesheet/OperatorTimesheet.tsx`, `features/operator-timesheet/StoppageQuickLog.tsx`, `app/api/production/stoppage/notify/route.ts`
@@ -263,6 +228,9 @@ type errors at baseline, production build clean.
 
 ### Migrations pending
 
+> **Correction, 2026-09-10.** Both are already applied to staging AND production.
+> The order below still holds if either is ever re-run elsewhere.
+
 Run **`20260909_002` first, then `20260909_004`.** 004 widens the kind CHECK,
 adds the supervisor-call columns and creates `v_line_downtime`; it needs 002's
 table to exist. `v_machine_downtime` is left in place rather than dropped —
@@ -402,76 +370,316 @@ type-clean, production build clean.
 
 `20260909_002_timesheet_stoppages.sql` has **not been run** on staging or production. Until
 it is, the Timesheet tab shows a visible read error and capture carries on — the failure is
-contained, not silent. The optional backfill in the migration is commented and cannot
+contained, not silent.
+
+> **Correction, 2026-09-10.** It has been run — on **both** staging and production.
+> Verified by probing each project for `production.timesheet_stoppages`. The note above
+> was true when written and was never updated once the migration was applied. Do not
+> run it again. The optional backfill in the migration is commented and cannot
 attribute historic rows to a machine; they never carried one.
 ---
 
-## 2026-09-09 — Alyssa (PRODUCTION: a production order is divided by what was made, not by when)
+## 2026-09-09 — Alyssa (The routes that write a sign-off, and the door that closes behind them)
 
-**Files changed:** `app/(app)/production/orders/[id]/page.tsx`
+**Files changed:** `app/api/pasteuriser/labels/[id]/sign-off/route.ts` (new), `app/api/pasteuriser/job-cards/[id]/sign-off/route.ts` (new), `app/api/pasteuriser/labels/[id]/transition/route.ts`, `lib/production/label-approval.ts` (new), `lib/auth/permissions.ts`, `supabase/migrations/20260909_003_sign_off_recorded_by.sql` (new)
 
-Reported from the printed Sieving order for 7 September, which read **6 577 kg in against 12 892 kg out — a balance of +96.0% and a yield of 196%** — with the afternoon shift's own block showing `INPUT 0.0 kg`.
+Two routes, both deciding from a fresh read, both using the gates in `lib/core/labels/approval.ts` rather than restating them.
 
-### The 5 950 kg that was being dropped
+### A new permission, because reusing one would defeat the change
 
-```ts
-const variant     = shifts.map(s => s.session.variant).find(Boolean) ?? null
-const sameVariant = (d) => !d.variant || !variant || d.variant === variant
-const inputRows   = debags.filter(d => !isCarriedOut(d) && sameVariant(d))
-```
+`can_quality_sign_labels`. Deliberately **not** folded into `can_approve_labels`: a label now needs Sales *and* Quality, and one key held by both would let Sales sign for Quality. Two names that one person can produce is one name. Granted to `quality_manager`; registered in all four places.
 
-Two things were wrong with that guard and they compounded.
+### `POST /labels/[id]/sign-off`
 
-- **It was applied to every debagging row**, though the comment directly above it described one case only: the bucket elevator carried in from the previous day, which is this run's input only when it is the same material.
-- **It compared the raw variant string**, and the day's `variant` is whatever the *first* shift recorded.
+Records one role's signature against the template's **current** version — read server-side, never taken from the client, or a signature could attach to artwork the signer never saw.
 
-The tower ran `Conventional` on the morning of 7 September and `RA-Conventional` in the afternoon. All 18 of the afternoon's farm-bag rows failed `d.variant === variant` and were dropped — from the inputs panel, from Total Input, and from the afternoon's own shift block. The output side has no equivalent filter, so all 47 bags still counted.
+- **The name is the caller's**, resolved server-side, for Sales and Quality. For the **customer** and the **certifier** the signer is genuinely outside the building, so their name comes from the body — and `recorded_by` then captures who here stood behind the claim. "Control Union approved it" with nobody's hand on it is not a record.
+- **An already-`approved` template is signable.** Every label approved before this change carries only the old single approval, so Quality, the customer and the certifier have to be recordable against it — otherwise closing the gap would mean re-issuing every proof.
+- **When the fourth signature lands, the template approves itself.** It re-reads the register rather than reasoning from what it just wrote: another signature may have arrived in flight, and the question is what the register says now.
 
-It was silent. The panel prints a careful list of what it holds back — duplicate rows, bucket elevator carried to tomorrow, carried-in bucket of a different variant — and 5 950 kg of farm bags appeared in none of them, because the sentence that would have said so (`bucketInExcludedKg`) only ever covered bucket rows.
+### `POST /job-cards/[id]/sign-off`
 
-Now: **bucket rows only, compared by variant FAMILY.** `Conventional` and `RA-Conventional` are one physical pool and blend freely; organic is the segregated one (ARCHITECTURE §5 — `lib/production/inventory.ts` already matches carry-over this way). Uses the existing `isOrganicVariant` rather than a fourth copy of the family rule.
+The two-name pre-print check on one run. It builds the list of signatures that *would* exist if this one were accepted, asks `printGate()`, and refuses only if core says the two are the same person. **One rule, one place** — the route does not re-implement it.
 
-### The order is now divided into runs
+The gate's other findings are deliberately *not* refusals. "The other half hasn't signed" is why the print is still shut, not a reason to reject a signature — otherwise the first signer could never go first.
 
-A production order covers one section for one day, and a day can run more than one thing. Rolled into a single pair of totals, 7 September read as one 12.5 t run of nothing in particular; 31 August was the same shape with grades — 14 385 kg in and 14 103 kg out, correct to the kilogram, with nothing on the page separating Export from Export Blend.
+### The door that closes behind it
 
-**The division is now `(variant, grade)` — what was made.** The shift is *when*: it stays as a column on every row and is named in each run's header, but it no longer divides the order, because one run routinely spans the changeover and a changeover routinely happens mid-shift.
+**`approve` on the transition route is retired**, returning `410` with the address of the sign-off route. Leaving it would have been a second writer to `status` and, worse, a way for one `can_approve_labels` holder to approve a label Quality never saw — the exact hole this work closes.
 
-Each run is a complete section of the report: its own inputs per batch and per type, its own output bags per product, and **its own mass balance**. Under them:
+Removing it surfaced something that would have been a silent regression: that branch also **retired the previous approved version**. A partial unique index allows one approved version per code, so dropping it would have made every subsequent approval fail with a constraint error. It moved to `supersedeOtherApprovedVersions()` in `lib/production/label-approval.ts` and is called from the sign-off route before the status flips. TypeScript found the dead branches; the supersede step was found by reading them.
 
-- **Not attributable to one run** — the bucket elevator across the changeover, machine spillage, half-bag top-ups into older bags. None carries a grade, so none belongs to a run, but all are real and all are in the day totals. Listed with their weights instead of spread across the runs, because spreading them would be an apportionment and every other figure on the page is a measurement.
-- **Whole day — all runs combined**, with a per-run table, sitting *under* the runs rather than above them. One pair of totals for a day that ran two different materials is the figure that made this page unreadable in the first place.
+### Migration `20260909_003`
 
-The header's **Variant & grade** now names every run the day held, not just the first shift's.
+`recorded_by_employee_id` / `recorded_by_name`, with a CHECK that an external sign-off has a recorder and an internal one does not. `NOT VALID`, so the rows backfilled yesterday stay as they are rather than being given a recorder nobody can name.
 
-**This reverses one earlier decision, deliberately.** The by-grade table it replaces withheld a per-grade balance on the grounds that the tower is one physical stream — material in the machine when the grade changed was fed by one run and bagged by the next. That reasoning is right and is kept, in the note under the per-run table. What changed is the conclusion: hiding the per-run balance did not make the problem go away, it just left one whole-day figure that was wrong in a way nobody could decompose.
+Typecheck **29**, back to baseline. Hooks gate clean, boundary lint clean, 403 core tests, build clean. Both migrations parse-checked with `pglast`.
 
-### What 7 September now reads
+---
 
-| | Was | Now |
-|---|---|---|
-| Total input | 6 577.0 kg | **12 527.0 kg** |
-| Total output | 12 892.0 kg | 12 892.0 kg |
-| Balance | +6 315.0 kg (+96.0%) | **+365.0 kg (+2.9%)** |
-| Yield | 196% | **102.9%** |
+## 2026-09-09 — Alyssa (Schema for the label sign-off rows)
 
-split as **Conventional · Domestic/Local** (Morning) 6 544.0 in / 5 699.0 out / −845.0 kg, **RA-Conventional · Domestic/Local** (Afternoon) 5 950.0 in / 7 053.0 out / +1 103.0 kg, and 33.0 kg in / 140.0 kg out attributable to neither.
+**Files changed:** `supabase/migrations/20260909_002_label_sign_offs.sql` (new)
 
-The two runs are each still outside ±1%, and that is now visible rather than hidden inside a day total: the bucket elevator crossing 16h00 belongs to neither run, which is exactly what the unattributable panel is for.
+Storage for the rules that landed in `lib/core/labels/approval.ts`. One table, `public.label_sign_offs`, append-only. Nothing reads it yet.
 
-No migration, no change to `lib/production/order-detail.ts`, and no change to what is captured — only to how the order is divided when it is read.
+**Not more columns on `label_template_events`.** An event is a state transition — `proof_issued`, `approved`. A sign-off is one named role putting their name to a version, and four of them happen *before* the template becomes approved. Folding them into a stream where `approved` already means "the whole thing is approved" would make the same word mean two things at two scales.
+
+**Two scopes, one table.** `template` is the artwork chain (Sales, Quality, Customer, Certifier) per template version; `print` is the two-name pre-print check on one job card. One table because every column is shared and core already treats them as one `SignOff` shape — but `scope` is a real discriminant with a CHECK behind it, not a field consumers duck-type on.
+
+**Three things the database holds so code does not have to:**
+
+- **`template_version` is recorded at signing, never derived.** The template's version moves when artwork is edited, and core discards sign-offs from earlier versions — deriving it at read time would silently promote every old approval.
+- **Two composite foreign keys** tie a print sign-off to a job card, that job card to its assignment, and that assignment to this template. A signature cannot name a card, an order and a piece of artwork that do not all belong together.
+- **A print sign-off must carry both `job_card_id` and `assignment_id`.** Not tidiness: the composite FK is MATCH SIMPLE, so a NULL in either column makes Postgres skip the check entirely.
+
+**The two-different-people rule is deliberately not a trigger.** `printGate()` enforces it and the route decides from a fresh read — the shape ARCHITECTURE.md §6 requires. A trigger would be a second implementation of one rule, which is what §1A exists to stop. The migration says so, so nobody adds one later.
+
+**Backfill records only what is known.** Every template approved before today carries one `approved` event by a `can_approve_labels` holder — that is the *sales* approval, and it is backfilled as such with the real name and timestamp where 20260907_003 captured them. Quality, the customer and the certifier are left outstanding, because they genuinely are.
+
+**Consequence, so it is not a surprise: every currently-approved label reads as not ready for a job card until those three are recorded.** That is correct, and it is the gap this work closes.
+
+Parse-checked against the real Postgres grammar (pglast) — 16 statements. Idempotent; both `ADD CONSTRAINT`s are wrapped, since Postgres has no `IF NOT EXISTS` for them.
+
+---
+
+## 2026-09-09 — Alyssa (Label approval: the two gates, in core)
+
+**Files changed:** `lib/core/labels/approval.ts` (new), `lib/core/labels/approval.test.ts` (new), `lib/core/labels/index.ts`
+
+The rules only. Nothing imports them yet — the schema and the screens follow separately, per the refactor strategy.
+
+**Two gates, deliberately not one.** *Gate A* asks whether a **job card** may be raised: the artwork is settled, all four template sign-offs are in, and a customer PO is bound. By the time the production manager sees it, nothing about the label is still open — which is the whole requirement. *Gate B* asks whether these labels may be **printed**: gate A plus the pre-print check on this run.
+
+Folding them together would mean either re-approving artwork nobody changed, or printing a run nobody checked.
+
+- **Template chain is now four names, not one:** Sales lead, **Quality department**, Customer, Control Union / label regulation. Quality was missing.
+- **Pre-print check is two names** — sales lead and quality supervisor — and they **must be different people**. One person signing both halves is one pair of eyes wearing two hats, which is what a second signature exists to prevent. Matched on employee id, falling back to name when neither signer has a Staff Directory link.
+- **A signature is against a version.** `signOffsForVersion` discards approvals given on earlier artwork: editing an approved label supersedes it, and carrying a v1 signature onto v2 is how a label reaches the floor with an approval nobody gave.
+- **Every blocker is returned at once**, as a sentence the screen shows verbatim. A gate that reveals one fault per attempt turns one conversation into four.
+
+**19 tests.** Proven to bite by disabling the two-different-people rule: exactly the two tests for it fail, and nothing else does.
+
+---
+
+## 2026-09-09 — Alyssa (Sales: the customer account dashboard)
+
+**Files changed:** `lib/core/sales/accounts.ts` (new), `lib/core/sales/accounts.test.ts` (new), `lib/sales/customer-accounts.ts` (new), `app/(app)/sales/customers/page.tsx` (new), `app/(app)/sales/customers/[name]/page.tsx` (new), `components/layout/Sidebar.tsx`, `supabase/migrations/20260909_001_customers_acumatica_link.sql` (new)
+
+`/sales/customers` was already in `ROUTE_GUARDS` and the page-title map as **Accounts** — anticipated and never built. It exists now: every customer, who owns the account, and what is open against them in Acumatica. **Read-only against the ERP; nothing is ever pushed back.**
+
+Distinct from the Customers tab on `/sales`, which is the commercial view — tiers, GP%, targets against plan. This is the operational one, and it is what the pasteuriser workflow reads a customer from.
+
+### The names cannot be matched, so they are not
+
+Measured against the 149 synced order lines:
+
+| sales.customers.name | acumatica.sales_orders.customer_name |
+|---|---|
+| Kunitaro | Kunitaro Co.  Ltd |
+| Lipton and Infusion | Lipton Teas and Infusions Manufacturing SA |
+| Afri Tea and Coffee's | Afri Tea and Coffee Blenders (1963) Ltd |
+| **OTG** | **Ostfriesische Tee Gesellschaft GmbH & Co KG** |
+
+The first three could be coaxed into matching with enough normalisation. **OTG cannot** — it is an initialism sharing no token with its Acumatica name. Neither can Entyce, which trades as National Brands Limited. Any matcher loose enough for those two produces a wrong match somewhere else, and a wrong match here puts one customer's orders on another customer's page.
+
+So `20260909_001` adds `sales.customers.acumatica_customer_id` — the ERP's own key, stable across a rename, already on every order row. Seven links are seeded from the data; **Entyce is deliberately not**, because "National Brands is probably Entyce" is not a basis for attributing 16 orders. Alveus and Lupicia have no synced orders to link to. All three are linked in the app, on the page where the gap is visible.
+
+### A blanket order is never production
+
+`JOB_CARD_ORDER_TYPE = 'SO'` lives in core with the reasoning attached. Blanket orders are shown, on their own panel, so a rep can see what an SO was released against — and never counted. Kunitaro's `BH-BSO0000014` is 30 000 units, 540 tonnes, against a paper job card of 18 000 kg; counting it as work to do would put that figure on a dashboard.
+
+`summariseOrders()` also keeps **On Hold** separate from Open (87 of the 149 lines are on hold — real demand, not releasable), and buckets the order types it was not written for (RM, TR) rather than dropping them, so the summary cannot read as complete while under-reporting the book. **20 tests.**
+
+### The sales lead picker, corrected
+
+The picker now lists the **Sales department**, as asked — but from `shared.app_roles`, not `production.employees`. The latter holds *factory* departments (production, qc, store, cleaning, admin, hs, maintenance) and has no sales value at all; filtering on it would have produced a silently empty picker.
+
+A Sales person with no `employee_id` is **shown and disabled with the reason**, not omitted — `sales.customers.sales_rep_employee_id` points at `production.employees`, so they genuinely cannot hold an account until someone links their login to a Staff Directory person. Omitting them makes a fixable situation invisible. The current holder always stays in the list, so an assignment never becomes uneditable because someone moved department.
+
+### Degrades before the migration
+
+`acumatica_customer_id` is selected separately and best-effort: PostgREST 400s an entire query for one unknown column, so selecting it inline would blank this page on any database `20260909_001` has not reached — including production before promotion. Unlinked reads as **"Not linked"**, which the page states explicitly, because "no Acumatica link" and "no open orders" look identical otherwise.
+
+Typecheck **29**, identical to baseline. Boundary lint clean, hooks gate clean, **384 core tests**, build clean.
+
+---
+
+## 2026-09-09 — Alyssa (Labels: who owns each customer account)
+
+**Files changed:** `lib/core/labels/library.ts`, `lib/core/labels/library.test.ts`, `features/pasteuriser-labels/db.ts`, `features/pasteuriser-labels/index.ts`, `app/(app)/pasteuriser/labels/page.tsx`
+
+`sales.customers.sales_rep_employee_id` has existed since migration `20260907_002` and **nothing in the app read it.** The migration even assigns Alyssa to Kunitaro and Lipton and Infusion — invisibly, with no way to see the assignment or change it. That is why the approve → PO flow could not be walked as a customer's sales lead.
+
+### The rule is in core, because three screens need the same answer
+
+`withOwnership()` annotates the customer groups the library already builds with their sales lead, and floats the viewer's own accounts to the top. `unassignedAccounts()` returns the ones nobody owns. The library, the job-card picker and the approval queue all need to agree on "my customers"; a rep seeing a different set depending on which screen they opened is the drift `lib/core` exists to prevent.
+
+Two decisions worth knowing:
+
+- **Matching is on the trimmed, lowercased name** — the same key `groupLibraryByCustomer` groups on. `label_templates.customer` is free text while `sales.customers.name` is a unique canonical spelling, so an exact comparison would silently drop ownership the first time someone typed `kunitaro`, and a rep whose customer quietly stops being theirs cannot tell that from never having owned it.
+- **A viewer with no Staff Directory link gets nothing marked mine**, not everything. An unresolved identity has to fail closed.
+
+**9 new tests, 27 in the file.** Including that the generic *Any customer* group stays ownerless and last, that a customer with no `sales.customers` row at all still renders (seeded from `qms.customer_specs`, so a label can name a customer the master has not caught up with), and that no group is ever lost or duplicated. The partition is stable rather than a sort, so the alphabetical order underneath survives inside each half.
+
+### On the screen
+
+Each customer heading carries its lead, own accounts sort first behind a **Mine** marker, and a holder of `can_assign_label_po` can change it inline. Below the list, the accounts nobody owns — invisible work, because no rep sees them under their own customers and nothing prompts anyone to get their labels approved.
+
+- **Deliberately not a sixth label permission.** Account ownership is a sales-management act, and `can_assign_label_po` is the key sales already holds for binding work to a customer. A new key means four more registrations (union, registry, route guard, nav) for a control on a page the same people already reach.
+- **Ownership loads separately from the library and never blocks it.** A failed or empty customer master renders every group as unassigned — honest — rather than refusing to list labels because nobody has been given an account.
+- **The Staff Directory loads on first use of a picker**, not on page load. Most viewers cannot assign and do not need every employee fetched at them.
+- An id with no matching active employee reads as **Unknown (offboarded?)** rather than blank — that is a real state, someone who left still holding an account.
+
+### Data layer
+
+`fetchCustomerAccounts`, `fetchAssignableReps`, `setCustomerSalesRep` in the feature's `db.ts`. The rep name is a second query rather than a PostgREST embed: `sales.customers` points at `production.employees` across a schema boundary and the embed needs a relationship PostgREST cannot see from the `sales` profile. `setCustomerSalesRep` upserts on `name`, so a customer the master has never held can still be given a lead from the screen where the gap is visible.
+
+`setCustomerSalesRep` writes directly rather than through an API route, unlike every workflow transition in this module. Ownership is not workflow state — there is no state machine to enforce, nothing is minted, and a wrong value is corrected by setting the right one.
+
+No migration. Reuses `useMyEmployee` for the `auth.users.id → employees.id` link rather than adding a fourth copy of that chain.
+
+---
+
+## 2026-09-11 — Gustav (COA: glyphosate forced onto organic COAs, no way back down the sign-off chain, specs never refreshed)
+
+**Files changed:** `app/(app)/quality/coa/page.tsx`, `lib/quality/coa-gating.ts`, `lib/quality/coa-gating.test.ts`, `app/api/quality/coa-signoff/route.ts`, `.github/workflows/ci.yml`
+
+- **FIXED: a signed organic COA could be neither printed nor corrected.** The builder ticked Glyphosate for *every* organic batch regardless of the matched customer spec (`src.isOrganic || …`). Kunitaro's IPS-KUN-006 asks for no glyphosate, so the section came on, no glyphosate result existed to satisfy it, generation was blocked — and because both managers had signed, the section was locked and **"Drop from COA" was disabled**. The COA was stuck. **When a customer spec matched, the spec is now the authority on which analyses the certificate carries**; the organic default applies only where there is no spec to consult. Scale of the defect: of 67 COA specs, **20 are organic but only 3 actually ask for glyphosate** — and there is exactly **one** glyphosate lab result in the database, so essentially every organic COA outside East West Tea was blocked this way. The 3 East West specs that do ask for it are unaffected.
+- **An organic batch whose spec is silent on glyphosate now says so** in an amber advisory instead of silently force-ticking it. It does not block and does not tick the section — it just means the omission is visible before printing rather than after.
+- **Delete/edit at every step of the sign-off chain.** The chain was one-way: once signed there was no route back, which is what turned a mis-ticked section into a dead end. The Lab Manager and Quality Manager can now **↩ Recall** a COA from *Awaiting QA sign-off* (clears both signatures), **↩ Withdraw** one from *Ready to print* (clears the QA signature, returning it to the QA queue), or withdraw from the locked banner on an open COA. A reason is required and every withdrawal is written to `shared.audit_log` with who removed whose signature. History keeps its existing Edit and Delete. Restricted to the two managers whose signatures are on the document — not extended to admins, same rule as delete.
+- **FIXED: an updated customer spec never pulled through.** `qms.coa_specs` was read once inside `lookup()`, so editing a spec and returning to a COA already on screen still showed the old limits; a COA opened from History or either queue had `sources === null`, so the spec could not be re-applied **at all**. A **↻ Reload specs** button now re-fetches and re-applies, keeping a hand-picked document rather than silently re-matching. It is refused on a signed COA, which is what the withdraw action is for.
+- The spec-matching logic that `lookup()` and the new reload both need is now one tested helper (`rankSpecsForBatch`) instead of two copies — two copies of a matching rule is how a COA ends up judged against a different document depending on which button was pressed. Lint errors 3021 → **3016**.
 
 ---
 
 ## 2026-09-07 — Gustav (Pasteuriser tasting records who tasted the sample)
 
-**Files changed:** `app/(app)/quality/pasteuriser/page.tsx`, `lib/utils/exportExcel.ts`
+**Files changed:** `app/(app)/quality/pasteuriser/page.tsx`, `lib/utils/exportExcel.ts`, `.github/workflows/ci.yml`
 
 - **A pasteuriser sensorial assessment now records the QC who tasted it, separately from the QC who captured the sample.** The granule line has always carried an `assessed_by` on a tasting; the pasteuriser had no such field, so a tasting was implicitly attributed to whoever typed the sieve and moisture values in — and the person who cups the tea is frequently not that person. A tasting is a subjective judgement and has to be attributable to the palate behind it. **Tasted By (QC)** is now required: the Save Sensorial button will not write a tasting without it.
 - **The field starts blank, not pre-filled with the capturing QC.** A pre-filled attribution field gets saved unread and the record then names someone who never tasted the tea, which is worse than no name at all. For the common case where it genuinely is the same person, a one-tap chip next to the field fills in the capturing QC's name.
 - **The taster is shown under the Pass/Reject verdict** in both the run dashboard and the batch history table, and exports as a **Tasted By** column in the single-batch and multi-batch Excel exports. Tastings captured before this field existed show `—` rather than falling back to the capturing QC's name — the taster on those records is genuinely unknown and the export must not invent one.
 - No migration: pasteuriser samples live inside `qms.quality_records.data_json`, so this is a new key on an existing JSON document. Older records simply have no `sensorial_by`.
-- **Also typed `lm_notes` on the pasteuriser `Batch`.** The Lab Manager screen writes it into `data_json` and this page renders it in two places, but it was absent from the interface, so those four reads were type errors. Fixing it drops the repo's type-error count by four.
+- **Also typed `lm_notes` on the pasteuriser `Batch`.** The Lab Manager screen writes it into `data_json` and this page renders it in two places, but it was absent from the interface, so those four reads were type errors. Fixing it drops the repo's type-error count 32 → 28 and the CI baseline is lowered to match.
+
+---
+
+## 2026-09-07 — Gustav (Maintenance: compressor & generator run-hours captured; service date no longer guessed)
+
+**Files changed:** `lib/maintenance/useMaintenanceData.ts`, `components/maintenance/ServiceCard.tsx`
+
+**Data recorded (staging + production):**
+
+| Machine | Reading date | Total hours | Since service |
+|---|---|---|---|
+| 500L Factory Compressor | 2026-08-31 | 8 935 | 636 |
+| Generator GKSD-440 | 2026-09-07 | 1 618 | — |
+
+Both figures were reported by Gustav. The compressor's previous reading was 08/06/2026 at 7 836 total / 1 773 since service, so a service happened between the two — but its date was never captured. The generator had **no** run-hours rows at all; this is its first, and its hours-since-service is left empty (the 676 originally quoted is most likely a start count, not run hours, so it is not recorded rather than recorded wrongly). Production's compressor service interval was also corrected 350 → 2 000 hours and the generator added to `equipment_config` (500 hours), matching what staging already had.
+
+- **The "last serviced" date is now inferred from the counter reset, not from the newest zero row.** A reading of 636 hours-since-service following one of 1 773 can only mean the machine was serviced in between; the old rule instead reported the last row that happened to sit at zero, which for the compressor pointed at **21/01/2026** and flatly contradicted the 636 printed next to it. Where the date is inferred rather than recorded, the card now says so — *"serviced 08/06/2026–31/08/2026 · date not logged"* — instead of asserting a date nobody entered.
+- **Calendar-interval scheduling takes the earlier bound of that window**, so an unknown service date brings the next service forward rather than pushing it out.
+- **A machine with no service history reads NO SERVICE DATA, not OK.** With no hours-since-service and no service record there is no due date, and the urgency badge fell through to a green OK — the generator would have looked healthy purely because nothing about it had ever been captured.
+
+---
+
+## 2026-09-05 — Gustav (Maintenance: checklist allocation reaches technicians, period locking, checklist history, run-hour service tracking)
+
+**Files changed:** `lib/maintenance/useMaintenanceData.ts`, `lib/maintenance/types.ts`, `app/(app)/maintenance/scheduled/page.tsx`, `app/(app)/maintenance/page.tsx`, `components/maintenance/TrendsPanel.tsx`, `components/maintenance/ServiceCard.tsx` (new), `supabase/migrations/20260905_010_generator_checklist_service_tracking.sql` (new, applied to staging)
+
+- **Weekly Generator / Diesel checklist trimmed to the two readings actually captured** — *Generator run hours* and *Generator fuel level*. The other three lines (flow meter, start capability, run for 20 min) were prompts, not measurements.
+- **FIXED: an allocated checklist never reached the technician.** Allocation was matched on the technician's NAME only, so it silently failed whenever the roster spelling and the person's profile name differed. Allocation now records `assigned_user_id` and the technician's view matches on that (name kept as a fallback for older rows). A technician signed in now sees exactly the weekly/monthly checklists allocated to them.
+- **Auto-allocate now spreads work across EVERY maintenance technician**, not just whoever is on duty — a checklist is a whole-period job, and rostering only the on-duty crew left most of the team idle and overloaded the rest.
+- **A period locks once allocated.** Auto-allocate is disabled for that week/month (re-running would reshuffle work people had already started); the maintenance manager can still move any individual checklist to someone else from its card — the override for sick leave.
+- **Checklist history by period.** Weekly now has a week picker alongside the monthly month picker, so you can go back to any past week or month and see the checklists as they were filled in, including who completed them and a partial-progress line for ones left incomplete.
+- **Readings captured on a checklist now reach the graphs.** IP Measurement, Generator / Diesel and Water Meters were only writing into the checklist's own task state, so the trend charts — which read `ip_readings` / `diesel_readings` / `water_readings` — never saw them. Saving a reading checklist now also writes the numbers into the matching register.
+- **Compressor and generator now show service status instead of a sparkline** — current meter reading and its date, hours run since the last service, and the **date the next service falls due**. The due date is the earlier of the hours projection and any calendar interval. The compressor's configured interval was wrong (350 hours) and is now **2000**; the generator was missing from the run-hours register entirely and is now tracked at **500 hours or 12 months, whichever comes first**. Shown on the maintenance dashboard, in Utilities & trends, and in the Annual / Calibration tab.
+
+---
+
+## 2026-09-05 — Alyssa (Feature flags never reached the browser)
+
+**Files changed:** `lib/config/flags.ts`, `lib/config/flags-inlining.test.ts` (new)
+
+Setting `NEXT_PUBLIC_FF_PASTEURISER_LABELS=true` on staging and rebuilding changed nothing. The cause is not the label feature — it is `flags.ts` itself, and it has been wrong since the file was written.
+
+`envFlag(name)` read `process.env[name]` with a **computed key**. Next inlines `process.env.NEXT_PUBLIC_FOO` at build time by matching the *static member access* in the source; it cannot replace a dynamic lookup, because the key is only known at runtime. In the client bundle `process` is a polyfill whose `env` is literally `{}` — so every flag compiled to `{}[name]` → `undefined` → **the fallback, forever, on every environment**.
+
+Confirmed against the deployed bundle before fixing:
+
+| | In the client chunks |
+|---|---|
+| `NEXT_PUBLIC_SUPABASE_URL` (static access) | name **absent**, value `https://qjqkpockmujecjgmdple.supabase.co` inlined |
+| every `NEXT_PUBLIC_FF_*` (dynamic access) | name **present** as a string argument, value never inlined |
+| the `process` polyfill | `.env={}` |
+
+So **all six flags were dark**: `supervisorAdjustments`, `ledgerAuthoritative`, `dbSerialSections`, `pasteuriserLabels`, `acumaticaResolver`, and `changeover`. Nothing reported a problem — a flag that silently reads its fallback looks exactly like a flag that is off on purpose. Worse, server-side the old form *worked* (Node has a real `process.env`), so an API route and a client component could disagree about the same flag.
+
+Fix: the helpers now take the **value**, not the name — `envFlag(process.env.NEXT_PUBLIC_FF_X, false)` — so each call site is a static access Next can inline. Verified in a fresh build: `pasteuriserLabels:r("true",!1)`, and the flag name no longer appears in any client chunk.
+
+**Nothing else changes behaviour.** Staging has only `NEXT_PUBLIC_FF_PASTEURISER_LABELS` set and production has no `FF_` vars at all, so every other flag keeps the fallback it was already returning. Note for the changeover promotion: `NEXT_PUBLIC_FF_CHANGEOVER=false` in production's env will now actually take effect, which is what its own comment always intended.
+
+`flags-inlining.test.ts` asserts the **source**, because a unit test cannot catch this by calling `flags` — under vitest Node has a real `process.env` and the broken form passes. Same tactic as `boundary-rule.test.ts`: verified to fail on the old form (3 of 6 tests) and pass on the new one.
+
+## 2026-09-05 — Alyssa (Pasteuriser finished-product labels: design → approve → PO → print)
+
+**Files changed:** `lib/core/labels/` (new — `types.ts`, `resolve.ts`, `compliance.ts`, `index.ts`, `labels.test.ts`), `lib/core/serials.ts`, `features/pasteuriser-labels/` (new — `marks.ts`, `render-html.ts`, `render-pplb.ts`, `seed-templates.ts`, `db.ts`, `index.ts`, `render.test.ts`, `components/LabelPreview.tsx`, `components/TemplateEditor.tsx`), `app/(app)/pasteuriser/` (new — hub, `labels/`, `labels/[id]/`, `job-cards/`, `run/`, `history/`), `app/api/pasteuriser/` (new — `_db.ts`, `labels/route.ts`, `labels/[id]/transition/route.ts`, `labels/[id]/version/route.ts`, `assignments/route.ts`, `print/route.ts`), `app/(app)/job-cards/pasteuriser/page.tsx`, `app/(app)/layout.tsx`, `components/layout/Sidebar.tsx`, `lib/auth/permissions.ts`, `lib/config/flags.ts`, `lib/config/boundary-rule.test.ts`, `lib/config/hooks-rule.test.ts`, `supabase/migrations/20260905_001_pasteuriser_label_workflow.sql` (new)
+
+### What this replaces
+
+Label artwork lives in thirteen BarTender `.btw` files on one workstation. Proofs are emailed as attachments, approvals come back in an inbox, and the link from *"Control Union approved this wording"* to *"these bags were printed from it"* exists only in someone's memory. Under FSSC that link is documented information; today it is not documented anywhere.
+
+### Four routes, three owners
+
+| Route | Who | What |
+|---|---|---|
+| `/pasteuriser/labels` | Sales | Design a label, issue a proof, record the CU/customer approval, assign a customer PO |
+| `/pasteuriser/job-cards` | Production Manager | Pick an approved label + PO and raise the job card |
+| `/pasteuriser/run` | Supervisor | Print finished-product labels against an approved job card |
+| `/pasteuriser/history` | Everyone | Serial → wording → approval, for traceability |
+
+**Not one page.** The chain crosses three roles at three different times and each step needs its own permission. One page would enforce access by hiding sections rather than by route guard, and would grow into the 2,770-line screen the capture module is being unwound from (ARCHITECTURE §1A).
+
+### The dependency deliberately left out
+
+`label_po_assignments.planned_batch_no` / `planned_date` are **nullable**. The supply chain analyst fills them when the plan is known; the production manager may raise the job card without them, and the picker says *"not planned yet"* rather than showing a blank. Making them required would encode the bottleneck this workflow exists to remove.
+
+### Core (`lib/core/labels`, own commit)
+
+Template / binding / instance are kept apart, and approval attaches to the **template** — so an approved one is frozen, and an edit mints a new version rather than silently invalidating the approval the customer gave. Superseded versions are never deleted: bags printed from them are in the warehouse.
+
+Compliance is checked at **request-approval** time, not at print — a proof must not reach Control Union already non-compliant, because their sign-off would then certify a bad label. Two rules are why this is code and not a checklist:
+
+- **Organic** must carry the Control Union registration *and* operator number as **data**. A template can carry "Certified Organic by Control Union" in prose with no number anywhere; it reads as correct and is not.
+- **Japan-bound organic** must carry the **JAS** leaf-in-two-circles mark. `requiredMarks()` ends in `assertNever`, so adding a market without deciding its rules fails the build.
+
+### Two failure modes this refuses to have
+
+1. **A silently degraded print.** PPLB cannot draw an SVG, so a thermal stream of a JAS label would produce a bag that looks completely normal and cannot legally be sold as organic in Japan. `pplbFidelity()` **refuses** rather than degrades, and those labels print through the browser path, which renders the marks.
+2. **A truncated line.** The first type scale fitted on height only; with marks down the right the text column is ~17mm narrower, and an export label came out reading `Manufacturer: Cape Natural Tea Pr…`. Nothing in the data was wrong and no test failed — it was visible only by looking at a bag. The scale now solves both dimensions per line, and `render.test.ts` asserts the fit across all thirteen templates.
+
+### Concurrency and the ledger
+
+Serials come from `public.next_pasteuriser_label_seq`, which delegates to the existing `production.next_bag_seq` rather than adding a second counter (§7 — check the reuse index first). Scope is the **job card**, since `DD-MM-NN` counts one customer's order, not a day. Every state transition re-reads the row and guards its `UPDATE` on the status it read, so a concurrent transition conflicts instead of silently overwriting (§1B applied to a state machine).
+
+`label_prints` is append-only. The ledger row is written **before** the send and a send failure does not remove it — the serial may already be on paper, and a ledger is reversed by appending a void, never by deleting (§6).
+
+### Also
+
+- Two ESLint-booting tests had a 5s timeout. They boot a real ESLint, and under a loaded worker pool the startup alone exceeds that — so adding one test file anywhere turned the suite red for a reason unrelated to the rules. Raised locally to 30s; every other test stays on the tight default.
+- Behind `NEXT_PUBLIC_FF_PASTEURISER_LABELS`, **off by default**, while the thirteen designs are transcribed and re-approved. The flag hides the nav; the routes stay behind their own permissions, because a flag is a rollout control and not an access control.
+- New permissions: `can_view_labels`, `can_design_labels`, `can_approve_labels`, `can_assign_label_po`, `can_print_labels`.
+
+**Migration `20260905_001` to be run in Supabase SQL Editor — staging first, then production.** 619 tests pass; boundaries clean; type errors and lint unchanged at their CI baselines (34 / 3021).
+
+## 2026-09-03 — Alyssa (Audit log: fix production rejecting all app-level audit writes)
+
+**Files changed:** `supabase/migrations/20260903_001_audit_log_action_freeform.sql` (new)
+
+Investigating the **production** PM2 error log turned up a recurring DB error on every user sign-out: `code 23514 — new row for relation "audit_log" violates check constraint "audit_log_action_check"`. Root cause: `axis.audit_log`'s `action` CHECK constraint only permitted the three uppercase Postgres `TG_OP` values it was originally built for — `CHECK (action = ANY (ARRAY['INSERT','UPDATE','DELETE']))`, i.e. written for a row-level DB **trigger**. But the application writes lowercase, semantic verbs via `lib/audit/write.ts` (`writeAudit`) and `app/api/admin/audit/auth-event` — `create`, `update`, `delete`, `sign_in`, `sign_out`, `reveal_pin`, `competency_update`, `training_competency_update`, `offboard`, `reactivate`, `reopen_request_approved`, `save`, … — **none** of which the constraint allowed. So **every application-level audit write had been silently rejected on production** (`writeAudit` swallows errors by design, so it was invisible until the auth route happened to `console.error` it). Confirmed by the data: production `audit_log` held only 45 rows, all uppercase trigger rows (`INSERT` 29 / `UPDATE` 15 / `DELETE` 1) — zero app rows ever written. This is a traceability/FSSC gap (sign-ins/outs, user create/delete, offboarding, PIN reveals — none recorded).
+
+Fix: drop the constraint. `action` is free-form by design (`write.ts` types it `action: string`, open-ended); enumerating it in a CHECK is the wrong tool and is exactly what caused this — it would keep silently dropping audit rows as new verbs are added. The column stays free text, matching both the app's verbs and the trigger's `TG_OP`. Reversible. **`axis.audit_log` was never in tracked migrations** (created directly in Supabase — schema drift), so this migration also brings the change under version control. Migration to be run in Supabase SQL Editor — **staging first, then production** — `ALTER TABLE axis.audit_log DROP CONSTRAINT IF EXISTS audit_log_action_check;`
 
 ---
 
@@ -624,63 +832,1046 @@ ships the feature — not as a follow-up.
 
 ---
 
-## 2026-09-02 — Alyssa (The Bagging panel's total now adds up to its own rows)
+## 2026-09-07 — Alyssa (Labels belong to a customer; the library groups by customer)
 
-**Files changed:** `app/(app)/production/orders/[id]/page.tsx`, `scripts/verify-output-panel-totals.py` (new)
+**Files changed:** `supabase/migrations/20260907_001_label_templates_customer.sql` (new), `lib/core/labels/library.ts` (new), `lib/core/labels/library.test.ts` (new), `features/pasteuriser-labels/db.ts`, `features/pasteuriser-labels/index.ts`, `app/(app)/pasteuriser/labels/page.tsx`, `app/(app)/pasteuriser/labels/[id]/page.tsx`
 
-Reported from the 2 September order: it says the top-ups are in Total output, but the totals do not justify it.
+Sales pick a label for a customer, not for a certification scheme. The library was named EU-ORG / JAS / NOP-USA / EU-NOP-RA-ORG, so finding Lipton's label meant knowing which union's rules applied to it first — and being bombarded with the names of certification bodies that are a *consequence* of the customer and the market, not something a salesperson should search on.
 
-They were in the total — and the **Bagging panel header showed that total over a list containing only the bags**. On 2 September: header `18 217.0 kg`, rows summing to `17 925.0`, with the missing 292 kg being top-ups into 1 September bags shown in a separate panel further down. Depending on which figure you read, the top-ups looked either double-counted or absent. Nothing was wrong with the arithmetic; the panel just asserted an answer its own contents contradicted.
+The seed set already half-admitted this: nine templates named by scheme, one — `KUNITARO-RA` — named by customer. This finishes the model that was started there.
 
-- **The header now shows the bags' own weight**, so it matches the rows beneath it.
-- **The panel foots with the sum in view** — `Bagged out` + `Half-bag top-ups — added into older bags` = `Total output` — the same figure the mass balance uses. Only when there is a top-up to add; otherwise the bags' total *is* the output and a second identical number is noise.
-- The top-up line says those bags were bagged on an earlier day and are not in the count above, which is why the bag count does not move.
-- The per-shift block's `N bags · X kg` now reads `X kg out`, since that figure also includes the shift's top-ups while the count does not.
+### Where the customer actually comes from
 
-`scripts/verify-output-panel-totals.py` — 14 checks against the 2 September figures, including the 292 kg gap the old header left, and the no-top-up, top-ups-only and bag-count cases.
+`customer_id` was the obvious design and it does not work: **there is no customers master table.** Checked on staging:
+
+| | |
+|---|---|
+| `public.customers` | absent |
+| `logistics.customers` | absent — the dispatch page reads it, but the table is not deployed |
+| `sales.customers` | absent, and the `sales` schema **is** exposed (`sales.signals` answers), so this is a missing table rather than an unexposed schema |
+
+What exists and is populated is **`qms.customer_specs.customer`** — 45 spec rows across 10 real customers (Kunitaro, Lipton and Infusion, Lupicia, Tanganda, Alveus, Edelweiss, Entyce, OTG, East West Tea Company, Afri Tea and Coffee's). Alyssa confirmed that is the source to reference.
+
+So the column holds the **canonical customer name**, the same vocabulary quality uses. Not a foreign key: `customer_specs.customer` is not unique (one customer holds many spec rows, so there is no key to point at), and a cross-schema FK from `public` to `qms` would couple label writes to the quality module's row lifecycle. Spelling drift is the obvious objection and is already solved — `qms.customer_aliases` and `resolveCustomerName()` exist for exactly that, and the editor offers a **picker**, not a free-text box.
+
+Also found: `label_po_assignments.customer` already existed. The customer link was being captured *downstream of approval*, at PO assignment — just not on the template, which is where Sales needs it to browse.
+
+### Grouping is core, not page code
+
+`lib/core/labels/library.ts` — `groupLibraryByCustomer()`, `pickHeadline()`, `customerOptions()`. It decides what is shown and in what order, it is pure arithmetic, and the job-card picker and print screen will need the same answer; three copies is how they end up disagreeing about which version is "the" label. 17 tests.
+
+**Three levels, not two.** customer → family → versions. The middle level is not optional: a customer legitimately has several approved labels at once — rooibos carrying the importer address, rosehips not — each approved for its product. Flattening to customer → versions would imply two independently approved labels were versions of one another.
+
+Two smaller decisions worth naming. `pickHeadline` prefers **approved** (that is what can be printed) and deliberately does **not** surface a `superseded` label over a `draft`, because superseded is history and showing it as the headline reads as usable. And the generic group sorts **last** regardless of name — it is a fallback, and someone scanning for their customer should not read past it.
+
+### Reassignment is draft-only, on purpose
+
+The customer picker is editable only while the label is a draft, like every other field. Reassigning an approved label would put one customer's product under an approval a different customer gave. To move an approved design, copy it.
+
+`customer` is also deliberately **not** part of the core `LabelTemplate` type. That type is the label's *content* — the thing Control Union approves. Ownership is metadata about the record, and folding it in would make reassigning a customer look like editing approved content.
+
+### ⚠ Migration ordering — safe either way
+
+`20260907_001` must be run for any of this to do anything, **but the code does not require it to have been run.** `LabelTemplateRow.customer` is optional on the type as well as nullable in the column, so against a database without the column every label reads as generic and groups under "Any customer" — the page renders, nothing throws. That is deliberate: merging code before running SQL is how a page goes down.
+
+Every existing template keeps `customer = NULL` and keeps working. Nothing is rewritten and no approval is disturbed.
+
+683 tests (17 new). Lint 3021, at baseline. Type errors 32. Boundaries clean.
+
+## 2026-09-07 — Alyssa (The Argox CAN print the certification marks; artwork rasterised)
+
+**Files changed:** `lib/core/labels/bitmap.ts` (new), `lib/core/labels/bitmap.test.ts` (new), `features/pasteuriser-labels/mark-bitmaps.generated.ts` (new), `features/pasteuriser-labels/mark-bitmaps.test.ts` (new), `scripts/build-mark-bitmaps.py` (new)
+
+### The refusal was based on a wrong premise
+
+`pplbFidelity()` refuses any label carrying certification artwork — "a PPLB
+thermal stream cannot draw" it — and routes those labels through a browser
+popup. Every organic, JAS, Rainforest and Fairtrade label therefore prints the
+slowest possible way, at the one moment an operator has a bag in their hands.
+
+The premise is half right. PPLB cannot draw an **SVG**. It does not have to.
+PPLB is Argox's EPL2-compatible mode and EPL2 has a graphics command: hand it a
+1-bit bitmap. The printers are Argox CP-2140EX at 203dpi, which
+`lib/production/label-pplb.ts` already drives for bag tags.
+
+The likely origin of the caution is a real note in that file — "a downloaded
+Arial was silently dropped". That is the soft-FONT download path, a different
+command, genuinely unreliable on these units. It does not generalise to
+graphics, and treating it as though it did cost the feature its fast path.
+
+### What this adds
+
+Alyssa supplied the certifier artwork — JAS (with CU892408), Control Union,
+Rainforest Alliance, Fairtrade, and the Cape Natural logo. This is exactly what
+`marks.ts` was waiting for with `officialArtworkRequired: true` on RA and
+Fairtrade.
+
+- **`scripts/build-mark-bitmaps.py`** rasterises them to 1-bit at 96 dots (12mm)
+  and packs them for EPL2. A build step, not runtime: the artwork never changes
+  between deploys, and re-deriving identical bytes on every print is work in the
+  wrong place. Sizes were chosen by looking at the output at real scale — at 80
+  dots the JAS CU number and the Rainforest ring text go mushy; 96 is the floor
+  for any mark carrying text.
+- **`lib/core/labels/bitmap.ts`** emits the `GW` command. Pure, no I/O (§2). The
+  generated data lives in the feature and imports the *type* from core, never
+  the reverse.
+
+### Two ways to get this wrong that both print something plausible
+
+- **Polarity.** EPL2 is inverted: a 0 bit burns a dot. Backwards, every mark
+  prints as a black tile with the artwork knocked out — and holds the head at
+  full power across the cell. `INVERT_BITS` is a named constant so a bad test
+  print is a one-line fix.
+- **Row padding.** Rows pad to a byte boundary and must pad WHITE. Pad black and
+  every mark grows a bar down its right edge.
+
+Both are asserted against the real artwork, not a fixture — a fixture built by
+the same hand as the packer agrees with it whether or not it is right. The
+checks are properties: corners blank, coverage in a sane band, payload length
+matching the stated dimensions. Verified additionally by decoding the generated
+TypeScript back to an image with the same rule core uses, and looking at it.
+
+### What the tests turned up
+
+Four marks at 96 dots need 408 of the label's 800 dots across — comfortable. The
+binding constraint is **height**: a 96-dot strip is a quarter of a 394-dot
+label, leaving 282 dots for text, and the template set runs to 16 lines. The
+densest templates must drop a font size. That is recorded as a test rather than
+a comment, so shrinking the label or growing the marks fails there instead of on
+a bag.
+
+### Not wired up yet, on purpose
+
+`pplbFidelity()` still refuses, and nothing calls the new emitter. Rewiring it
+changes what physically comes out of a printer and touches the run page, the
+print route and their tests — that is its own change, per §3 rule 4, and it
+needs a **test print on a real CP-2140EX first**. The generator and the decoder
+agree with each other; agreeing with each other is not the same as agreeing with
+the printer.
+
+666 tests (71 new). Lint 3021, at baseline. Boundaries clean.
+
+## 2026-09-04 — Alyssa (CORRECTION: the blank-serial collision was never live, on either branch)
+
+**Files changed:** `CHANGELOG.md`, `docs/capture-phases.md`
+
+Two entries below — the PR #912 entry and the promotion-probe entry — state that a blank
+bag serial failed the whole `prod_bagging` insert, and that production still has the fault.
+**Both claims are wrong.** Found while preparing the patch to `main` that the second entry
+called for.
+
+### What is actually there
+
+`persist()` normalises blanks before it inserts anything, on **both** branches:
+
+```
+// A serial column holds a real bag serial or nothing — never ''. ...
+const blankSerialToNull = (r: any) => {
+  if (!r.bag_serial_no || !String(r.bag_serial_no).trim()) r.bag_serial_no = null
+}
+debag.forEach(blankSerialToNull)
+bag.forEach(blankSerialToNull)
+```
+
+- On staging it sits at line 1193; the `prod_bagging` insert is at 1345. **Before**, not
+  after.
+- It predates PR #912 — present at `a8b5337`, the commit immediately before it.
+- `buildBag` has exactly **one** call site on each branch, inside `persist()`. There is no
+  path that reaches the database around it.
+
+So `''` never reached Postgres, the unique index was never violated by a blank, and no save
+ever failed for this reason. The comment above that guard describes the *historical* bug it
+was written to fix — I read it as a description of a live one.
+
+### What the demonstration actually showed
+
+The `<<< COLLIDES` output in the #912 entry is real: the builders *did* emit `''`. What it
+does not show, and what I did not check before writing it up, is what happens to those rows
+between the builder and the insert. Proving a function returns a bad value is not proving
+the system is broken — the next twenty lines mattered and I skipped them.
+
+### What stands
+
+- **The `serialOrNull()` change stays.** It is still the right place for the coercion: the
+  builders are pure and independently callable now, so relying on a cleanup pass in a
+  caller three hundred lines away is exactly the action-at-a-distance the extraction exists
+  to remove. But it is **defence in depth, not a fix**, and #912's framing — "it won't
+  save", "the same shape as the September 409" — was wrong.
+- **The 42 tests and the no-empty-string invariant stay**, and are now the thing that makes
+  the guarantee local instead of incidental.
+- **The migration verification is unaffected.** Both indexes confirmed on both databases;
+  that part of #912 stands.
+
+### What is withdrawn
+
+**Step 3 of the promotion order — "patch `main`'s inline `buildBag`" — is cancelled.** There
+is nothing to fix there. `main` has the same guard, in the same place, running before the
+same insert. No PR was opened against `main` for it.
+
+## 2026-09-04 — Alyssa (Promotion: both forked concerns decided; what can move to main, probed)
+
+**Files changed:** `docs/capture-phases.md`
+
+### Decision
+
+Both diverged concerns resolve **in staging's direction** — the healthier long-term route.
+
+- **#867 reconcile** → `debag-reconcile.ts`. The 2026-08-31 incident is the evidence: a
+  session-scoped self-heal against batch-scoped writes doubled rows on every page load.
+- **Top-up accounting** → `transferInKg` in `lib/core/mass-balance/`, where the rule has
+  one owner and tests, rather than absorbed in an 845-line `order-detail.ts`.
+
+Recorded with a warning attached: `self-heal-reconcile.ts` must be **deleted** from `main`
+as part of the cherry-pick, not left alongside the replacement, or production ends up
+running two reconciles with opposite scoping assumptions — the row-doubling mechanism
+again.
+
+### The `lib/core` question, probed rather than assumed
+
+The concern was fair: `lib/core` was extracted *from* capture pages `main` does not have.
+The capture page differs by **1,187 lines** between branches and all five section
+components are contested. So it was tested — `main`'s tree checked out, staging's
+`lib/core` and the three lint/test configs dropped on top, gates run:
+
+| Probe | Result |
+|---|---|
+| `lint:boundaries` | passes |
+| `npm run test` (lib/core) | **413/413 pass** against `main`'s tree |
+| `tsc` over `lib/core` | **0 errors** |
+| Source type errors on `main` | **36** — same as staging's baseline, transplants as-is |
+| `lint:hooks` | **fails, 1 error** — a live production crash |
+
+It works because **nothing on `main` imports `@/lib/core`** — not one file — so the module
+lands as dead code with no runtime effect, and `main` keeps its own inline
+`buildDebag`/`buildBag` until the page is deliberately switched over. And because `main`
+already exports the five section data types with compatible shapes.
+
+An earlier count of 97 type errors on `main` was a probe artefact — a stale `.next` built
+from staging's routes. The real figure is 36.
+
+### Two live production faults the probe turned up
+
+- **`app/(app)/admin/inventory-import/page.tsx:129`** — `useCallback` below an
+  `if (role !== 'admin') return`. `role` starts unresolved then resolves, so the hook count
+  changes between renders: React error #310, and the page comes down **for admins only**,
+  which is exactly who it is for. Same class as HOTFIX #901. **Staging already has the fix.**
+- ~~**`main`'s inline `buildBag` writes `bag_serial_no: b.serial` raw on six of seven
+  paths.**~~ **WITHDRAWN — this was wrong, see the correction entry at the top of this
+  file.** `persist()` normalises blanks to NULL before the insert on both branches, so
+  neither is vulnerable.
+
+### One hole in the boundary rule, found while probing
+
+`lib/core/capture-rows/index.ts` imports the section data types from
+`@/components/production/capture/*`. `eslint.boundaries.mjs` forbids `features/`, `app/`,
+React/Next and `lib/supabase/` — **but not `components/`**, so core reaching into
+components is currently legal, against the spirit of §2. It only works because the types
+happen to match on both branches. This is the Phase 2 unfinished half in another guise:
+move the five types to `lib/core/types/`, then add `components/` to `CORE_FORBIDDEN`.
+
+### Order of work
+
+Steps 1–2 (the hook crash, the guardrails) cannot change production behaviour and stand on
+their own merit. **Step 3 as originally written — a blank-serial patch to `main`'s own
+builder — has been withdrawn; there was nothing to fix.** Step 4 is the changeover.
+**Step 5 — the capture module itself — is where the care goes**, one concern at a time,
+with the E2E spec run against staging first, because unit tests do not cover the
+components and `renderToStaticMarkup` catches crashes, not wrong numbers.
+
+Docs only. No code, no behaviour change.
+
+## 2026-09-04 — Alyssa (Plan of record caught up; the promotion gap measured)
+
+**Files changed:** `docs/capture-phases.md`
+
+`docs/capture-phases.md` says, in its own opening line, to update the status table in the
+same commit as the work. Five PRs landed today and none of them did. This closes that gap
+and records the thing that had only ever been said in chat.
+
+### Status corrections
+
+- **Phase 0 is effectively closed.** Both index migrations were verified on staging *and*
+  production: the indexes already exist, matching their files exactly, so running them is
+  a confirmed no-op. Neither file has been run yet, and that is now stated as the residue
+  it is rather than as open work.
+- **The hooks gate is done, by another route.** The table said "outstanding, four lines in
+  `ci.yml`". The PAT has no `workflow` scope, so instead `lint:hooks` runs as a `posttest`
+  hook and the existing Unit tests step fails on a violation. Adding the named `ci.yml`
+  step is now cosmetic.
+- **Render smoke tests added to the safety-net table** — 22 of them, and the honest limits
+  written next to them: `useEffect` does not run in a server render, so effects, handlers
+  and the scanner are still uncovered.
+- **Phase 2 is not merely "regressed", it is still regressing.** The table claimed `as any`
+  in `[section]/page.tsx` went 57 → 61. Measured today it is **62**, and it was already 62
+  when that line was written on 09-02 — so the number was wrong then too. The trend is 58
+  on 08-25, 59 on 08-26, 62 now: it has gone **up** through the entire clean-up, while the
+  page itself shrank to 2,783 lines and `sectionId.startsWith` branches held at 2.
+- **The changeover entry was stale.** It still read "~150 lines of state machine inside
+  `[section]/page.tsx`". The *rules* moved to `lib/core/changeover.ts`; what remains is the
+  dialog UI. The two axes that code kept conflating — `blockedReason` for *who*,
+  `carryRefusal` for *what material* — are written down so the distinction survives.
+
+### The promotion gap, measured
+
+New section, because the aim is staging and `main` aligned and this had not been stated
+plainly anywhere in the repo.
+
+`main` and `staging` last shared a commit on **2026-08-05**. Since then: **325 commits on
+`main` only, 278 on `staging` only** — and both are still moving, so the gap is widening.
+Within capture alone it is 75 against 79. Neither branch is a superset of the other.
+
+The finding that changes what "promote" means: **none of the architecture work exists on
+`main`.** No `lib/core/**` (29 files on staging), no `features/**`, no `ARCHITECTURE.md`,
+no boundary or hooks eslint config, no `vitest.config.mts`, no `ci.yml`. `main`'s
+`package.json` has four scripts — `dev`, `build`, `start`, `lint`. **Production runs today
+with no unit tests, no boundary rule, no hooks gate and no CI workflow at all.** That is
+the strongest argument for promoting and the reason it cannot be one merge.
+
+Two concerns have genuinely diverged and each needs a decision before any cherry-pick —
+the #867 reconcile (`self-heal-reconcile.ts` on main vs `debag-reconcile.ts` on staging)
+and top-up accounting (`order-detail.ts` at 845 lines on main vs 492 plus `transferInKg`
+in core on staging). Until those are decided, "promote to production" has no well-defined
+meaning. The recommended order — guardrails cherry-picked **first**, as their own additive
+PR, before any feature — is written out in the new section.
+
+Docs only. No code, no behaviour change.
+
+## 2026-09-04 — Alyssa (prod_bagging verified; a blank serial no longer fails the save)
+
+**Files changed:** `lib/core/capture-rows/index.ts`,
+`lib/core/capture-rows/capture-rows.test.ts`
+
+### `20260901_001` verified — and it was already applied
+
+`pg_indexes` on **both** databases reports
+
+    CREATE UNIQUE INDEX prod_bagging_session_bag_uidx
+      ON production.prod_bagging USING btree (session_id, bag_no)
+
+exactly as the migration declares — same name, columns, order, unique, not
+partial. The duplicate pre-flight returned zero rows on both. Phase 0 item 7 is
+therefore a confirmed no-op whose only job is closing the repo/live gap.
+
+> **CORRECTION, same day.** The section below claims this was a live latent bug
+> that failed the whole save. **It was not.** `persist()` already ran a
+> `blankSerialToNull` pass over every row — on this branch *and* on `main` —
+> between the builders and the insert, so `''` never reached the database. It
+> predates this change (present at `a8b5337`) and `buildBag` has exactly one
+> call site, inside `persist()`, on both branches. The `serialOrNull()` change is
+> still right, but as defence in depth, not a fix. See the correction entry at the
+> top of this file.
+
+### The check turned up a live latent bug
+
+The same query showed a sixth index on `prod_bagging`:
+
+    CREATE UNIQUE INDEX prod_bagging_session_serial_uniq
+      ON production.prod_bagging USING btree (session_id, bag_serial_no)
+
+That one is **not** drift — it is declared in `20260813_006` and the capture
+page already serializes `persist()` because of a duplicate-key failure on it
+observed live. What had not been noticed is how a *blank* serial behaves against
+it.
+
+Postgres treats NULLs in a unique index as distinct from one another. **Two
+empty strings are not distinct.** Five of the six output paths in
+`buildBagRows` wrote `b.serial` straight through, so two output bags with a
+blank serial in one session violated the constraint and the WHOLE insert was
+rejected — "it won't save", with nothing naming the serial as the cause. The
+same shape as the September `prod_debagging` 409, from the other direction.
+
+Only Pasteuriser's by-products coerced with `|| null`, which is a fair sign
+someone met this once and patched the spot in front of them.
+
+Demonstrated on the extracted row builders before fixing — a direct benefit of
+them now being pure and callable:
+
+    pasteuriser pallet lines   -> "", ""      <<< COLLIDES
+    pasteuriser by-products    -> null, null  ok
+    sieving outputs            -> "", ""      <<< COLLIDES
+    granule dust outputs       -> "", ""      <<< COLLIDES
+    blender outputs            -> "", ""      <<< COLLIDES
+    refining outputs           -> "", ""      <<< COLLIDES
+
+`serialOrNull()` now applies to every output path. A blank or whitespace-only
+serial is stored as NULL; a real serial is untouched. Safe in both directions:
+nothing in the app compares `bag_serial_no` to `''`, `prod_bagging.bag_serial_no`
+has no foreign key (unlike the debagging column), and the two partial indexes on
+it read `WHERE bag_serial_no IS NOT NULL` — which an empty string was quietly
+defeating. The change can only turn a failing insert into a succeeding one.
+
+9 new tests, including an invariant that no output path may emit `''`. The 33
+existing characterisation tests pass **unchanged**, which is the point: real
+serials behave exactly as before.
+
+526 tests. Lint at the 3021 baseline exactly; type errors at the 36 baseline.
+
+## 2026-09-04 — Alyssa (prod_debagging index drift verified against both databases)
+
+**Files changed:** `supabase/migrations/20260903_003_prod_debagging_unique_index_drift.sql`
+
+The migration carried a "VERIFY THE LIVE DEFINITION BEFORE TRUSTING THIS FILE"
+warning, because the index was added out of band and its exact shape was
+unconfirmed. It has now been checked on **both** databases. `pg_indexes` reports,
+identically on staging and production:
+
+    CREATE UNIQUE INDEX prod_debagging_session_bag_uidx
+      ON production.prod_debagging USING btree (session_id, bag_no)
+
+Same name, same columns, same order, unique, **not partial** — exactly what the
+migration declares. No correction needed. Applying it is a confirmed no-op whose
+only job is to make a database rebuilt from migrations match the live ones. The
+duplicate `(session_id, bag_no)` pre-flight also returned zero rows on both.
+
+Warning replaced with the verified result, so it does not outlive its purpose.
+
+### Two things the check turned up, neither urgent
+
+- **`prod_bagging` has not had the same check.** `20260901_001` states its index
+  exists live and that claim is still untested. A verification script sits
+  alongside the migrations in `Documents/Supabase Scripts/Refactor/`.
+- **`prod_debagging` carries three indexes covering `session_id`, two of them
+  redundant.** `prod_debagging_session_idx` and `prod_debagging_session_id_idx`
+  are the same index under two names, and both are already served by the
+  `(session_id, bag_no)` unique index, since a btree can be used on a prefix of
+  its columns. Every index is maintained on every write and the capture save
+  path is delete-then-insert of every row on every save, so dropping them
+  removes a third of the index maintenance on the busiest write path. Optional,
+  instantly reversible, script provided — not applied.
+
+## 2026-09-04 — Alyssa (Hooks gate without workflow scope; render smoke tests; changeover becomes core)
+
+**Files changed:** `package.json`, `vitest.config.mts`,
+`components/production/capture/render-smoke.test.tsx` (new),
+`lib/core/changeover.ts` (new), `lib/core/changeover.test.ts` (new),
+`app/(app)/production/capture/[section]/page.tsx`,
+`supabase/migrations/20260903_003_prod_debagging_unique_index_drift.sql` (renamed)
+
+### The hooks gate now runs in CI, without touching `.github/workflows/`
+
+`npm run lint:hooks` was written, passing, and gating nothing, because the PAT
+cannot write workflow files. Solved with npm's own `posttest` hook:
+
+    "test":     "vitest run",
+    "posttest": "npm run lint:hooks",
+
+CI already runs `npm run test` as a hard gate, and npm runs `posttest`
+automatically after it. Verified both ways: with a hook planted below an early
+return, `npm run test` exits **1**; clean, it exits **0**. `test:watch` is
+untouched, so the 11-second repo lint does not run on every keystroke.
+
+The four `ci.yml` lines are still worth adding when a token with `workflow`
+scope is to hand — a named step reads better in the Actions log — but the gate
+no longer depends on it.
+
+### Runtime cover over the capture components — the containment gap closed
+
+Yesterday's `<FeatureBoundary>` stopped one section's crash taking the screen
+down, but nothing detected the crash. `render-smoke.test.tsx` closes that with
+**22 tests** and no new dependency.
+
+`renderToStaticMarkup` runs the render pass in plain node. No jsdom, no auth, no
+mocking — `useEffect` does not run during a server render, so nothing reaches
+the database. Each section is rendered three ways: empty, with material
+captured, and locked. `CaptureOverview` is rendered against all five section
+shapes plus a both-shifts case, because it reads every section's data and is
+where the duck-typing bug lived.
+
+Proven to work rather than assumed: planting a crash in `GranuleCapture` fails
+exactly the three Granule cases and names the section.
+
+`vitest.config.mts` said component tests belong in Playwright. That assumed
+Playwright could run in CI; it cannot, because the app signs in through SSO.
+The premise changed, so the comment did.
+
+**A false alarm worth recording:** the first draft passed `assignment={null}`
+and appeared to find a crash in `SievingCapture`. It was not one — the capture
+page guards with `if (!assignment) return` far above the render, so a null never
+reaches the component, and the compiler rejects it if you try. A fixture that is
+not a state the app can be in is worse than no test.
+
+### The changeover is now a core function
+
+The rules were four expressions scattered through the capture page — the
+supervisor gate in one, the organic rule in a second, the leftover arithmetic in
+a third, the button's `disabled` in a fourth — all of which had to agree, none
+testable. That is the defect class ARCHITECTURE.md §4 names, with three PRs
+against it.
+
+`lib/core/changeover.ts` replaces them with one question:
+
+    planChangeover({ variant, totalIn, totalOut, isSupervisor }) -> ChangeoverPlan
+
+The trigger, the dialog and the handler all read the same plan, so the button
+cannot offer something the handler will refuse. **38 tests**, including an
+invariant sweep over every combination of variant, role and balance.
+
+Two axes are kept apart deliberately: `blockedReason` explains the **actor**
+("ask a supervisor"), `carryRefusal` explains the **material** (organic,
+unrecognised variant, nothing left). A supervisor who came to carry material now
+sees *why* it was refused instead of the option silently missing.
+
+`isPastShiftChangeover()` and `isEarlyChangeoverLikely()` moved too, taking
+`now` as an argument so the 16h00 hand-over and the 15h30 submit prompt are
+testable rather than clock-dependent.
+
+The handler re-derives the plan at the moment of the click rather than trusting
+the render's copy — the balance can move between opening the dialog and
+confirming it.
+
+### Migration renumbered
+
+`20260903_002_prod_debagging_unique_index_drift.sql` collided with
+`20260903_002_customer_aliases.sql`. Renumbered to `_003`.
+
+517 tests across 26 files. Lint at the 3021 baseline exactly; type errors at the
+36 baseline. Build clean.
+
+## 2026-09-04 — Alyssa (Row builders characterised and moved to core)
+
+**Files changed:** `lib/core/capture-rows/index.ts` (new),
+`lib/core/capture-rows/capture-rows.test.ts` (new),
+`app/(app)/production/capture/[section]/page.tsx`
+
+Step 3 of the capture-module plan, plus the step-4 move it unblocks.
+No behaviour change — the point is that the tests prove it.
+
+### What moved
+
+`buildDebag` and `buildBag` were two closures inside the 2,913-line capture page
+and therefore impossible to test, while being **what `persist()` writes** — every
+input and output row, for every section, for every save the floor makes. 207
+lines, 30% of the page's data layer.
+
+They now live in `lib/core/capture-rows/`, moved line for line. Only the two
+values they read off the component's closure became arguments:
+
+| Was | Now |
+|---|---|
+| `kind` (from `sectionKindFor(sectionId)`) | `ctx.kind` |
+| `meta.name`, stamped on every output row | `ctx.workCentre` |
+
+`persist()` itself is untouched — it calls them exactly as before, through two
+one-line adapters that keep the old names.
+
+### 33 characterisation tests
+
+These pin what the code does **today**, right or wrong. They are the rollback
+detector for this move and for the Phase 7 rewrite of the save path. Coverage
+per section, plus cross-section invariants:
+
+- Sieving's `spillage[0]` is Bucket Elevator and the rest Machine Spillage; farm
+  bags null `bag_serial_no` and keep the physical number in `notes`
+- Refining routes a scanned serial to `bag_serial_no` and a manual one to
+  `notes` — the FK to `bag_tags` would fail the whole insert otherwise
+- Granule joins the blend number into `notes`; the dust product type resolves
+  through the injected lookup
+- Blender names every output after the BOM, and writes `null` when none is chosen
+- Pasteuriser computes pallet kg as bags × per-bag weight with the line's own
+  weight winning, and counts by-products as output rows
+- `bag_no` continues across productions within a session — two batch records must
+  not both start at 1 and collide on `prod_debagging_session_bag_uidx`
+- An unhandled section kind **throws** rather than silently writing zero rows
+
+One current oddity is pinned rather than fixed: Granule's granule output carries
+`bagging_time` and its dust output does not. Recorded so a change to it is
+deliberate.
+
+### Two seams left open, deliberately
+
+- `dustProductType` arrives through the context instead of being imported. It
+  lives in `GranuleCapture.tsx`, a `'use client'` module, and core importing that
+  would pull React into a pure module at runtime. `DUST_META` belongs in core
+  next to `product-names.ts`.
+- The five section data types are still `import type` from their component files
+  — type-only, so nothing is pulled in at runtime. Phase 2 was supposed to move
+  all five into `lib/core/types/capture.ts` and only moved `SectionKind` and
+  `assertNever`. That is the remaining Phase 2 work.
+
+The capture page is now **2,769 lines**, down from 2,913.
+
+457 unit tests. Lint at the 3021 baseline exactly; type errors at the 36
+baseline. Build clean.
+
+## 2026-09-04 — Alyssa (Safety net: hooks gate in CI, crash containment mounted, E2E skip can no longer lie)
+
+**Files changed:** `.github/workflows/ci.yml`,
+`components/shared/FeatureBoundary.tsx`, `components/shared/FeatureBoundary.test.ts`,
+`app/(app)/production/capture/[section]/page.tsx`, `e2e/fixtures.ts`,
+`e2e/capture-smoke.spec.ts`, `e2e/concurrent-save.spec.ts`
+
+Steps 1 and 2 of the capture-module plan. No behaviour change to capture itself —
+this is the net that has to exist before anything is moved.
+
+### The Rules of Hooks gate — STILL NOT IN CI, needs a hand
+
+`npm run lint:hooks` was written on 2026-09-03, passes, and is wired into
+nothing. It is the gate for the React #310 class that showed
+"This page couldn't load" on every section for two days.
+
+It is **not** in this change: GitHub refuses a Personal Access Token without
+`workflow` scope on any push that edits `.github/workflows/`. The four lines to
+add to `ci.yml`, above the "Unit tests" step, are in the PR description. Hard
+zero, alongside the Core/Feature boundary — not a ratchet, because a ratchet is
+for stylistic debt and these violations white-screen an operator mid-shift.
+
+### FeatureBoundary is actually mounted — it had zero usages
+
+`components/shared/FeatureBoundary.tsx` was built in Phase 3, unit-tested, and
+never used anywhere in the app. Meanwhile the five section capture components
+render in a bare ternary chain, so **any one of them throwing during render
+blanked the entire route** — tab strip, Checks, Overview, Sign-off and all. That
+is precisely the failure this module's rework exists to prevent.
+
+Now wrapped in two places:
+
+- the section mount (one boundary — only one section renders at a time)
+- `CaptureOverview`, which reads every section's data shape including the other
+  shift's, and is where the duck-typing bug lived
+
+The file's own header used to say core capture logic must NOT be wrapped,
+because a broken mass balance should be loud. The intent was right and the
+conclusion was wrong: this boundary is not a silent swallow — it logs to the
+console and shows a red notice naming what failed. Corrected in place.
+
+Added a `fallback` prop, because the default notice reassures that "your capture
+is unaffected", which is true for a decorative panel and false for the form the
+operator enters bags into. The section fallback tells them their captured work
+is saved, that Checks and Sign-off still work, and not to re-enter bags
+elsewhere.
+
+### The E2E skip can no longer pass silently in CI
+
+Both specs skip when `e2e/.auth/user.json` is absent. That is right on a
+developer's machine and wrong in CI, where every spec would skip and the job
+would go green having tested nothing. `requireAuthState()` now **throws** when
+`CI` is set and no session artefact exists, so wiring the suite into a pipeline
+before the artefact is available produces a red build that names what is
+missing. `E2E_ALLOW_SKIP=1` opts out deliberately.
+
+424 unit tests (3 new for the fallback path). Lint at the 3021 baseline exactly;
+type errors at the 36 baseline. Build clean.
+
+## 2026-09-03 — Alyssa (Sieving checks: mesh sizes, no mass-balance re-confirm, VSD asked once; RB Blocks naming)
+
+**Files changed:** `lib/core/mesh.ts` (new), `lib/core/mesh.test.ts` (new),
+`lib/core/product-names.ts`, `lib/core/product-names.test.ts`,
+`lib/production/checks-config.ts`,
+`components/production/capture/ChecksPanel.tsx`,
+`components/production/capture/HourlyVsdPrompt.tsx`
+
+### Mesh sizes are three fields, not a free-text box
+
+"Sieving configuration" was `kind: 'text'` with the hint *State the screen
+configuration in use*, so what reached `check_events.value_text` was whatever
+the operator typed — `#12 #14 #16`, `12/14/16`, `top 12 mid 14 bot 16`. Four
+screens read that string back (Shift Report, Batch Consolidation, the batch API,
+yield analytics) and none can group or compare free text: two shifts that ran
+the identical configuration did not match.
+
+Now three numbered fields, top / middle / bottom deck, and `lib/core/mesh.ts`
+writes `#12 / #14 / #16`. Typing the `#` is the app's job.
+
+- A blank deck is written as `—` in position, so `#12 / — / #16` cannot be
+  misread as a two-deck machine.
+- `parseMeshConfig()` reads canonical strings **positionally** and falls back to
+  scanning numbers for old free text, so a blank middle deck stays in the middle.
+- An old free-text value leaves the three boxes **empty** and is shown
+  underneath as recorded. A guess at what the words meant would be accepted
+  without being read.
+- Stored as `kind: 'text'`, never `'mesh'` — `check_events.kind` has a CHECK
+  that lists five kinds (20260618_002), so writing a UI-only kind would be
+  rejected and the check would refuse to sign off. `storageKindFor()` in
+  `checks-config.ts` is the one place that mapping lives.
+
+### Mass balance removed from the Checks list
+
+It has its own tab, its own persisted `prod_mass_balance` row and its own ±1%
+tolerance. Confirming it again in Checks asked the operator to agree with a
+figure they had already agreed with, and blocked sign-off on it. The sign-off
+snapshot that wrote a duplicate `mass_balance` event is gone with it. The
+`massbalance` kind and its card are kept so historical records still read back.
+
+### Infeed VSD is asked once at start-up, then hinted
+
+`infeed_vsd` sat in the `running` phase with nothing asking for the first
+reading, so `HourlyVsdPrompt` treated it as due the moment material was captured
+— a full-screen modal with a backdrop and an autofocused input, appearing
+part-way through adding a bulk bag and taking the keyboard with it.
+
+The first reading is now a **start-up check**, asked once with the rest of the
+round. The hourly reminder became a bottom bar: no backdrop, no autoFocus,
+`pointerEvents: none` on the wrapper so only the bar is clickable, and a dismiss
+that snoozes it. It still lives at page level, so it stays usable after checks
+are signed — the reason the modal replaced the old status-strip badge.
+
+### RB Blocks
+
+The picker read `15IGBL-C-C · Blocks: Clean - Conventional` — Acumatica's item
+description — while the Sieving capture screen, its output grouping and the
+Acumatica summary all say **RB Blocks**, and Quality said *Rooibos Blocks*.
+Three names for one material, the same drift as Heavy Sticks. All spellings now
+canonicalise to `RB Blocks`. **Blocks: Cut / CHS is deliberately NOT folded in**
+— a different material, reported on its own line.
+
+421 unit tests (16 new for mesh, 3 for Blocks). Lint at the 3021 baseline
+exactly; type errors at the 36 baseline. Build clean.
+
+## 2026-09-03 — Alyssa (Variant written exactly as selected; Phase 1 core dedup closed)
+
+**Files changed:** `lib/core/variants.ts`, `lib/core/variants.test.ts`,
+`lib/production/scan-utils.ts`, `app/(app)/production/capture/[section]/page.tsx`,
+`app/(app)/production/live/capture/page.tsx`,
+`components/production/capture/{Blender,Granule,Refining,Sieving}Capture.tsx`,
+`docs/capture-phases.md`
+
+### If Organic is selected, the row must read exactly `Organic`
+
+`prod_sessions`, `bag_tags`, `prod_debagging`, `prod_bagging`, `shift_assignments`
+and `production_runs` all carry
+
+    CHECK (variant IN ('Conventional','Organic','RA-Conventional',
+                       'RA-Organic','FT-ORG','FT-CON'))
+
+so a short code such as `ORG` is not stored wrongly — **the whole write is
+rejected**. On a tablet that reads as "it won't save", with nothing naming the
+variant as the cause. `variantForDb()` in core canonicalises on the way in and
+is now applied at every variant write: 20 sites in the capture page, 8 across
+the capture components, 3 in Live Capture.
+
+Live Capture was the live one: its form state is typed with the **short** codes
+(`'CON'`, `'ORG'`) and wrote them straight into `bag_tags.variant`.
+
+Canonicalisation also happens at the **source**, so everything downstream
+inherits it: the assignment's variant, and any draft restored from
+`draft_data` or localStorage. A draft can be months old and carry a spelling
+that predates the current constraint; `withCanonicalVariants()` fixes it on the
+way back in, so what the operator sees and what a later save writes are the
+same word. An unrecognisable variant becomes blank, which the capture page
+already treats as "the operator must pick one" rather than defaulting.
+
+### Phase 1 (populate core) is closed
+
+- **`lookupSerial` deduplicated.** Two byte-identical private copies in
+  `GranuleCapture` and `RefiningCapture` are now
+  `scan-utils.lookupBagForAutofill()`. Deliberately **not** migrated onto
+  `validateBagScan()` — that additionally refuses consumed, cross-variant and
+  finished-product bags, which neither section does today, so it changes what
+  the floor may scan and belongs in its own change.
+- **`n()` was already finished.** The old status line ("11 files down to 7") was
+  counting every local `const n = ...`. The two remaining comma-decimal parsers
+  are different functions and must stay that way: `granule-quality.num()`
+  returns `number | null` so a missing QC reading is not averaged as 0%, and
+  `shift-report-builder.num()` is null-safe and finite-checked, which `n()`
+  deliberately is not.
+
+402 unit tests pass. Type errors unchanged at the 36 baseline. Build clean.
+
+## 2026-09-03 — Alyssa (Variant identity becomes core; four copies of the segregation rule reconciled)
+
+**Files changed:** `lib/core/variants.ts` (new), `lib/core/variants.test.ts` (new),
+`lib/constants/manufacturing.ts`, `lib/production/capture-config.ts`,
+`lib/production/bucket-elevator.ts`, `lib/production/carryover.ts`,
+`lib/production/scan-utils.ts`, `lib/production/validate-scan.ts`,
+`components/production/capture/GranuleCapture.tsx`,
+`components/production/capture/SievingCapture.tsx`,
+`app/(app)/production/capture/[section]/page.tsx`, `docs/capture-phases.md`
+
+The changeover shipped earlier today relies on "the carry-over ledger is keyed on
+variant family, so organic and conventional cannot combine". That claim was only
+as good as the function deciding the family — and there were **four** of them,
+which did not agree.
+
+### The disagreement
+
+`variantFamily` / `isOrganicVariant` existed in four places. On the short codes
+and id suffixes the app itself produces, two of them returned the opposite
+answer:
+
+| input | capture-config + bucket-elevator | scan-utils |
+|---|---|---|
+| `ORG` | conventional | organic |
+| `RA-ORG` | conventional | organic |
+| `O` | conventional | organic |
+| `RO` | conventional | organic |
+| `FO` | conventional | organic |
+
+`capture-config.isOrganicVariant` was an exact `Set` lookup on the raw string
+with no normalisation, and `bucket-elevator.variantFamily` was built on it. The
+carry-over ledger — the one keyed on family specifically so the pools cannot
+combine — was on the wrong side of that table.
+
+### `FC` meant Fairtrade Organic
+
+Separately, `lib/constants/manufacturing.ts` mapped the id suffix `FC` to
+`FT-ORG`. Every other map in the repo (`bom.ts`, `blends/page.tsx`,
+`acumatica-standards.ts`, `features/acumatica-items`, `database.types.ts`) reads
+`-FC` as Fairtrade **Conventional**, and `05RMDE-FC` is a real Acumatica item
+called "Raw Material Dry: Export Fairtrade Conventional". The root cause was
+that `manufacturing.ts`'s `Variant` union had no `FT-CON` to map it to, so it
+was pointed at the nearest Fairtrade entry. That is the more dangerous
+direction: organic is the certified claim. `FT-CON` added; `FC` now maps to it.
+
+### One owner, and it fails closed
+
+`lib/core/variants.ts` is now the only place that decides what a variant is and
+which pool it belongs to. The other four are thin delegates.
+
+`variantFamily()` returns `null` for anything it does not recognise. It never
+guesses `'conventional'`, which is what the ledger copy did — so an unset or
+mistyped variant was silently filed as conventional. `mayPoolMaterial()` asks
+the positive question ("is this definitely conventional?") so that an
+unrecognised variant refuses rather than passes; the changeover now uses it in
+place of `!isOrganicVariant(...)`, and the button and the handler are gated on
+the identical predicate.
+
+### The compiler found four more of these
+
+Making the return type nullable turned up four further call sites that had been
+relying on the fail-open default — the Granule dust carry-over ledger (three)
+and Sieving's bucket-elevator lock. All were reachable: `active.variant` is `''`
+when the batch record has no variant set, which the old code read as
+conventional.
+
+- `outstandingCarryover()` / `outstandingBucketElevator()` return 0 for an
+  unknown family — offer no carry-over, rather than the conventional pool's.
+- `logCarryover()` / `logBucketElevator()` throw rather than write a guessed
+  family.
+- Granule's Confirm carry-over button stays enabled and explains on press.
+- Sieving's bucket lock does **not** mark the ledger entry as logged when the
+  family is unknown, so the amount stays owed and the next lock retries.
+
+42 new unit tests; 398 pass in total. Type errors unchanged at the 36 baseline.
+
+## 2026-09-03 — Alyssa (Changeover: supervisor-only, single-fire, clean slate by default)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`
+
+Builds the changeover to the rule as stated on the floor: the leftover is
+normally all bagged out, so a changeover starts its own record with a clean
+slate — unless a supervisor explicitly says the material continues, which
+organic may never do.
+
+### Clean slate is the default; continuing is the exception
+
+The modal now leads with **Start a clean record** and offers **Continue leftover
+material into the new record** as a secondary action.
+
+Continuing does NOT mean sharing a session — that is the mechanism that reached
+262 rows for 17 bags. The leftover is appended to
+`production.bucket_elevator_log` as `generated`, and the new session picks it up
+as carry-over IN through `outstandingBucketElevator()`, the path that already
+exists for exactly this. **That ledger is keyed on variant family**, so organic
+and conventional are separate pools that cannot combine — the organic rule is a
+property of the ledger rather than a check someone could forget. The option is
+also simply not rendered for organic, and the handler re-checks.
+
+If the carry-over write fails the changeover is abandoned with a message, rather
+than opening a new record that silently loses the material.
+
+### Supervisor only
+
+The trigger is gated on `canApprove` (supervisor / IT / admin) — the same signal
+sign-off already uses on this screen. Closing a record and opening another is a
+decision about the production record, not a capture action.
+
+An operator now sees *"To switch grade or variant, ask a supervisor"* instead of
+a dead button. A control that silently does nothing gets tapped repeatedly,
+which is the behaviour the next item exists to stop.
+
+### Single-fire — the double-tap problem
+
+The changeover is guarded by a `useRef`, not just disabled state. `setState` is
+async, so two taps landing in the same tick both read the old value and both
+proceed; a ref flips synchronously. The same pattern as `creatingSessionRef`,
+which exists because a double-fire there double-inserted a session.
+
+Every button in the dialog is disabled while the work is in flight and the
+primary one shows "Opening new record…". **On a slow tablet the operator sees
+nothing happen and taps again — that is the expected input, not the exception.**
+
+**Verification:** 356 unit tests, both hard gates clean, 36 type errors
+(unchanged), `next build` compiles. **Not yet exercised on the floor** — needs a
+real changeover, and a deliberate double-tap, to confirm.
 
 ---
 
-## 2026-09-03 — Alyssa (PRODUCTION: Blender scans bags in the same way Refining does)
+## 2026-09-03 — Alyssa (Changeover opens its own session — closing the row-doubling mechanism)
 
-**Files changed:** `components/production/capture/BlenderCapture.tsx`
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`
 
-Promotion to `main` of the Blender scan-in fix. Two things, both needed for the Big
-Blender to scan at all on production:
+Staging still carried the mid-shift grade/variant **Changeover** button that
+**production removed on 2026-09-01**. The two branches had fixed the same
+incident differently: production deleted the button and added
+`self-heal-reconcile.ts`; staging kept the button and made the self-heal
+idempotent via `debag-reconcile.ts`. Staging never received production's lesson,
+which is recorded in `main`:
 
-**1. Scan-first debagging (ported from `staging`, PR #708).** The Blender now has the same
-top-level scan box as Refining and Pasteuriser — the shared `ScanBox` / `BagScanModal` from
-`BagScanIn.tsx`, which was already on production but only wired into Refining. Scan a bag →
-its `bag_tags` record and validity pop up → **Consume into &lt;ingredient&gt;** files it under
-the matching ingredient group in the Debagging tab, decided by the bag's own product type
-(matched against the blend's declared components, or a new "not in recipe" group created for
-it, same mechanism as "+ Add Other"). No pick-the-group-first step. The manual group pick and
-"Add Other" both remain.
+> It called `addProduction()`, which appends a batch to this session and makes it
+> active. SievingCapture is mounted `key={active.id}`, so that remounted it
+> against a brand-new EMPTY batch — and its debag self-heal, scoped to
+> `session_id` with no batch discriminator, then read the whole session as
+> "missing from this batch" and copied all of it in. persist() wrote that back,
+> doubling the session's debagging rows on every changeover: 8, 16, 32, 64, 128.
+> **2026-09-01 morning reached 262 rows for 17 bags actually debagged.**
 
-**2. One unregistered bag no longer stops all further scanning.** In the add/edit bag modal,
-a `not_found` lookup switches the row to manual entry (`setInputMode('manual')`) and the
-auto-lookup effect was gated on `inputMode !== 'manual'` — with nothing resetting that when a
-*different* serial was entered. So after scanning one bag that isn't in `bag_tags`, every
-later scan in that modal did nothing: no popup, no message (`onChange` cleared `scanMsg` on
-each keystroke, so the stale error vanished too). Enter and the "Look up" button still fired,
-but a hardware scanner sends neither — which is the whole reason the auto-fire exists. The
-gate was really protecting the *mount* case (re-reading `bag_tags` for a row opened for
-editing would overwrite a hand-captured weight or lot), so it now keys on that directly via
-an `openedWithSerial` ref, and all three input paths (typing, scanner burst, camera) go
-through one `changeSerial()` helper that clears the previous bag's verdict.
+### What changed
 
-Scoped deliberately: only `BlenderCapture.tsx`. The Granule trailing-space lot fix that
-shared PR #708, and the rest of the capture work on `staging`, are NOT included.
+`confirmGradeChangeover()` now **always** opens a new session, for every
+variant, rather than appending a sibling batch for non-organic material. The
+organic path already did this; it is now the only path.
 
-## 2026-08-21 — Gustav (COA: fix signature resize distortion, screen/print layout mismatch, and add a "Ready to print" queue + Lab Manager notification)
+The old reasoning — that the leftover is still part of the same run, so it
+should share a session and a combined mass balance — is true on the floor and
+false in the database. One session holding two batches is precisely the shape
+the session-scoped self-heal cannot tell apart. A separate session **removes the
+mechanism** instead of patching it.
 
-**Files changed:** `app/(app)/quality/coa/page.tsx`, `app/api/quality/coa-signoff/route.ts`
+- `addProduction()` is gone; its only caller was the changeover. Its useful half
+  — snapshotting the closing mass balance into the append-only checks trail — is
+  kept as `snapshotChangeoverBalance()`.
+- Unsaved edits are **flushed before** the switch: `startNewProduction()` drops
+  the current session from local state, so anything not yet persisted would have
+  gone with it.
+- The confirm dialog no longer tells the operator the leftover "carries into the
+  new batch". It now says the record closes with its own mass balance, and that
+  leftover can still be bagged out under the new grade — recorded against the
+  new record. The old wording would have promised the opposite of the behaviour.
 
-Three separate reports on the COA generator:
+`otherBatchRows` and `debag-reconcile.ts` stay: changeover no longer creates
+sibling batches, but sessions captured before this change still hold them.
 
-1. **Signature resize handle only made signatures taller, not wider.** `DraggableSignature` set an explicit `height` and `width: 'auto'` with a fixed `maxWidth: 260` on the `<img>`. Past the scale where the aspect-correct width would exceed 260px, the browser clamped width there but kept growing the explicit height — a silent squash, not a stop, so dragging the resize handle further only stretched the signature taller. Fixed by measuring the image's real width:height ratio on load and deriving both dimensions from `baseH * scale`, so there is no separate width ceiling left to hit — both directions scale together by construction.
-2. **The on-screen preview cut content off that printed/exported fine.** Root cause: `app/(app)/layout.tsx`'s `<main>` is `overflow-x-hidden` app-wide (deliberate, so no page can put a stray scrollbar on the whole shell) — anything in the COA preview wider than the sidebar-shrunk viewport was silently clipped with no scrollbar to reveal it. Printing was unaffected because the print stylesheet takes `.coa-print` out of flow (`position: absolute`), escaping the shell's clipping entirely; the on-screen version had no such escape. Fixed by wrapping the preview in its own `overflow-x: auto` container with a `minWidth: 720` matching the real PDF content box (A4 minus margins, ~687px) — a descendant's own overflow handling isn't overridden by an ancestor's `overflow-x: hidden`, so the preview now either fits or scrolls, never clips invisibly, and can't differ from the print/PDF layout by being squeezed narrower than the export ever uses.
-3. **No signal when a COA was fully signed and ready to print.** The lab → QA hand-off already notified the QA manager when the lab manager signed (`notifyQaManager`); signing the other direction had no equivalent. Added `notifyLabManager()` (mirrors the existing function) fired when the QA manager signs, and a new **"🖨 Ready to print"** tab next to the existing "Awaiting QA sign-off" one, listing every `coa_signoffs` row with a QA signature that has no `coa_generated` entry (the existing Print/Export log, unchanged) logged after that signature — i.e. genuinely not yet printed/exported since being signed. No new table: derived from what Print/Export already writes to `qms.coa_generated` for History. Printing or exporting a batch drops it off this list immediately (`logGeneration()` now also refreshes the queue), not on next reload.
+**Verification:** 348 unit tests, both hard gates clean, 36 type errors
+(unchanged), `next build` compiles. **Not yet exercised on the floor** — needs a
+real changeover to confirm the new session opens and no rows duplicate.
+
+---
+
+## 2026-09-03 — Alyssa (HOTFIX 2: debagging rows silently stopped saving)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `supabase/migrations/20260903_002_prod_debagging_unique_index_drift.sql` (new)
+
+Found in the console right after the render-gate hotfix went out. Sieving capture
+was returning **409 Conflict** on every save:
+
+    POST /prod_debagging 409
+    duplicate key value violates unique constraint
+    "prod_debagging_session_bag_uidx" — [23505]
+
+The operator's debagging rows were not persisting, while the mass balance on
+screen kept updating correctly from `draft_data` — so nothing looked wrong.
+
+### Cause
+
+The save wrote the new rows BEFORE deleting the old ones, so that a failed
+insert could never wipe existing data. Sound reasoning, resting on a comment
+that said prod_debagging *"has no unique constraint on (session_id, bag_no), so
+temporary duplicates are harmless"*.
+
+That stopped being true. `prod_debagging_session_bag_uidx` now exists in the
+live databases — and, exactly like `prod_bagging_session_bag_uidx` before it, **in
+no migration file**. The moment it existed, every save collided with the very
+rows it was replacing.
+
+### Fix
+
+Delete first, then insert, and **restore the previous rows if the insert fails**
+— the safety property is kept explicitly rather than structurally. The previous
+rows are now read in full (`select('*')`) so they can be put back, and a failed
+restore is reported too.
+
+Deliberately not an upsert with an `ON CONFLICT` target: that resolves the index
+through PostgREST's cached constraint metadata, which is what emptied Sieving
+Tower's bagging rows for a day, and it would bind the code to an index the repo
+does not declare.
+
+`20260903_002` closes the repo/live gap. **It carries a warning:** the index was
+added out of band and its exact columns are unconfirmed, so verify
+`pg_indexes.indexdef` before trusting the file rather than creating a second,
+differently-shaped index.
+
+### Two out-of-band indexes now, same pattern
+
+`20260901_001` (bagging, still unapplied) and this one. Both were added straight
+to the live database; the app was written against the first and against the
+*absence* of the second. That is worth a look as a practice, not just two fixes.
+
+**Verification:** 348 unit tests, both hard gates clean, 36 type errors
+(unchanged), `next build` compiles. Not yet observed on the floor — needs a save
+on the live page to confirm the 409 is gone.
+
+---
+
+## 2026-09-03 — Alyssa (HOTFIX: the capture page has been down since 01-09 — a hook below the render gates)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `app/(app)/admin/inventory-import/page.tsx`, `eslint.hooks.mjs` (new), `lib/config/hooks-rule.test.ts` (new), `package.json`
+
+> **CI step still to add by hand.** The `~/.claude_github_token` PAT has no
+> `workflow` scope, so a commit touching `.github/workflows/ci.yml` is rejected.
+> The gate runs locally (`npm run lint:hooks`) but is NOT yet enforced in CI —
+> add the `Rules of Hooks` step next to `Core/Feature boundary`.
+
+### The fault
+
+Sieving capture on staging: **"This page couldn't load"**, with
+
+    Uncaught Error: Minified React error #310
+      at Object.ol [as useMemo]
+
+React #310 is *"Rendered more hooks than during the previous render."*
+
+`CaptureScreen()` in `production/capture/[section]/page.tsx` has three render
+gates — `if (loading)`, `if (!assignment)`, `if (!meta.built)` — and a
+`useMemo` (`otherBatchRows`) sat **below** them. First render: `loading` is
+true, gate returns, N hooks. Second render: `loading` is false, execution
+reaches the `useMemo`, N+1 hooks. React throws and the whole screen goes.
+
+It failed on every section that HAD an assignment — which is to say, whenever
+capture would otherwise have worked. With no assignment it hit the second gate
+and never reached the hook, so it looked intermittent.
+
+Introduced by `d30b479` (#867) on **2026-09-01**, the Sieving changeover fix.
+Two days live.
+
+**Fixed by moving the hook above the gates.** Its inputs (`kind`, `productions`,
+`activeIdx`) are all defined hundreds of lines earlier, so there was never a
+reason for it to be down there. No behaviour change.
+
+A second instance of the same bug, found while sweeping:
+`admin/inventory-import/page.tsx` had a `useCallback` below an `if (role !==
+'admin') return`. It crashed for admins — exactly the people allowed to use the
+page — as `role` resolved. Also moved up.
+
+### Why nothing caught it
+
+**`react-hooks/rules-of-hooks` was already enabled, and it did report it:**
+
+    1810:26  error  React Hook "useMemo" is called conditionally... Did you
+    accidentally call a React Hook after an early return?
+
+It changed nothing, because the full lint is a **ratchet** in CI — it fails only
+when the total rises above a baseline of ~3,000 pre-existing errors, and one
+more does not move a baseline anyone reads.
+
+A ratchet is right for stylistic debt paid down slowly. It is wrong for a rule
+whose violations white-screen a page an operator is mid-shift on.
+
+So Rules of Hooks now gets what the Core/Feature boundary already has:
+`eslint.hooks.mjs`, `npm run lint:hooks`, and a **hard zero** in CI. The repo is
+at zero violations. `noInlineConfig` means an `eslint-disable` comment cannot
+put a page-killer back — Rules of Hooks has no legitimate per-line exception.
+`exhaustive-deps` is deliberately NOT in this gate: it has a large backlog and
+real false positives, and an unpassable gate gets ignored, which is how the
+ratchet failed.
+
+`lib/config/hooks-rule.test.ts` pins it, including that the gate rejects the
+exact shape that broke capture and cannot be silenced by a disable comment.
+Mutation-checked: a planted violation exits 1.
+
+**Verification:** 348 unit tests (up from 306), both hard gates clean, 36 type
+errors (unchanged), `next build` compiles.
+
+---
 
 ## 2026-09-03 — Gustav (Customer name aliases: one customer, many spellings)
 
@@ -836,6 +2027,657 @@ records is a separate decision — say which should be corrected (to the suggest
 value) and which left as-is, and I will write the migration.
 
 Tests **312/312** (26 new). Lint 3021, at baseline. Typecheck introduces nothing.
+
+## 2026-09-02 — Alyssa (Phase plan committed to the repo; Phase 3 closed with proof)
+
+**Files changed:** `docs/capture-phases.md` (new), `lib/config/boundary-rule.test.ts` (new), `components/shared/FeatureBoundary.test.ts` (new), `vitest.config.mts`, `ARCHITECTURE.md`
+
+### The plan now lives in the repo
+
+`docs/capture-phases.md` is the plan of record for the capture module — Phases 0
+through 7, the two independent causes behind sections breaking each other, and the
+architecture decisions. It existed **only in chat** until today, which is exactly how the
+work drifted from it without anyone noticing.
+
+It carries a **live status table** and a list of deviations with the reason for each,
+including the one that matters: `features/acumatica-items` was built out of sequence
+(Phase 3 says "no feature moved yet"; Phase 6 designates `supervisor-adjustments` as the
+first feature module). `ARCHITECTURE.md` now points at it.
+
+The table records what the audit found: **Phase 0 is not closed** (the
+`prod_bagging_session_bag_uidx` drift migration is written but applied nowhere),
+**Phase 1B is built but never shipped** (flag unset, so the duplicate-serial race is
+still live), **Phase 2 regressed** (`as any` in the capture page went 57 → 61), and
+**Phases 4–7 are untouched** — including the `scan_events` bulk-delete that the plan
+names as the one place actively corrupting the audit ledger.
+
+### Phase 3 closed — both guardrails proven, not merely present
+
+Phase 3's own wording is *"this phase only proves the guardrails hold on a green build"*.
+Neither guardrail had ever been observed to work.
+
+**`lib/config/boundary-rule.test.ts`** runs ESLint programmatically over fixture source
+and asserts the boundary rule reports at **error** severity. A rule nobody has seen fail
+is indistinguishable from one that matches nothing — a typo'd glob, a config that
+silently stopped loading, a severity downgraded during unrelated cleanup. 11 cases cover
+what must be rejected (core importing features by alias *or* relative path, app, React,
+supabase), what must be allowed (core importing core, a feature importing core and doing
+I/O), the documented `lib/core/ledger` I/O exemption, and the ban on deep-importing
+another feature past its `index.ts`.
+
+Verified non-vacuous by mutation: downgrading the rule from `error` to `warn` fails 7 of
+the 11.
+
+**`components/shared/FeatureBoundary.test.ts`** exercises the crash guard, which had
+zero usages and zero tests. The load-bearing part is `getDerivedStateFromError` being a
+**static on a class** — that is the whole reason React treats it as an error boundary.
+Convert it to a function component, or lose the static in a refactor, and it silently
+stops catching while still rendering its children perfectly. Also pinned: the fallback
+names the feature and tells the operator their capture is unaffected, `silent` renders
+nothing, and the crash is logged rather than hidden.
+
+No DOM: React elements are plain objects, so the contract is checkable while the unit
+suite stays node-only. `vitest.config.mts` includes `components/shared/*.test.ts` for
+this one component, with a comment saying it is not an invitation to unit-test components
+generally — those belong in Playwright.
+
+**Verification:** 306 unit tests (up from 286), boundary lint clean, 36 type errors
+(unchanged), `next build` compiles. No product code changed.
+
+---
+
+## 2026-09-02 — Alyssa (Reliability: a feature must not slow a core screen, or be able to crash it)
+
+**Files changed:** `lib/production/use-item-codes.ts`, `lib/production/use-item-codes.test.ts` (new), `lib/production/inventory.ts`, `lib/production/inventory.suggest.test.ts`, `features/acumatica-items/index.ts`, `ARCHITECTURE.md`
+
+A hardening pass over the resolver wiring from the previous entry. Two real
+defects, both introduced by that change, both found by re-reading it against the
+rule that a feature must never degrade the screen it is added to.
+
+### 1. It fetched the same table twice
+
+`features/acumatica-items` owned a `loadCatalogue()` that queried
+`production.inventory_items` itself. `lib/production/inventory.ts` already caches
+exactly those rows via `loadAllInventory()`, and `RefiningCapture` calls **both**
+— so a Refining capture screen read the same ~630-row table twice on every load,
+once for the item picker and once for code resolution.
+
+The second read existed only to dodge an import cycle (`inventory.ts` imports the
+feature). Taking the rows as an argument removes the cycle *and* the read. **The
+feature now performs no I/O at all**, which also makes it unit-testable with no
+mocks — the same reason `lib/core` may not perform I/O (§2).
+
+`catalogueFrom()` is now memoised on the inventory array's **identity**, so the
+two callers on one screen build the index once and share the object, which also
+keeps it stable for `useMemo` downstream.
+
+### 2. It could have taken the capture screen down
+
+`useItemCodes()` is a **hook**, called by the capture page itself.
+`<FeatureBoundary>` cannot protect it: an error boundary catches a throw from a
+child *component* during render, not one from a hook the page called. Anything
+thrown inside the resolver would have blanked the screen of an operator
+mid-shift, with a half-captured session behind it.
+
+Every resolver call is now wrapped and degrades to the template path on any throw
+— the behaviour that shipped for months. It logs to the console rather than
+swallowing, because silent degradation would let capture run on the old path for
+weeks with nobody knowing why the stricter warnings stopped appearing.
+
+`itemCodesFrom()` is split out from the hook so this is directly testable: the
+tests feed it a catalogue that throws on first touch and assert the operator
+still gets an answer, gets no invented warning, and that the failure is logged.
+
+**`<FeatureBoundary>` currently has zero usages** anywhere in the app, despite
+§3 requiring it. Noted, not fixed here.
+
+### ARCHITECTURE.md §3
+
+Two rules added, both because this is where they were learnt:
+
+- a feature reached through a **hook or a plain function call** cannot be
+  protected by `<FeatureBoundary>`, so its adapter must be total — catch, log,
+  and fall back to the pre-feature behaviour;
+- a feature **takes data as an argument**; the app owns loading. A feature that
+  fetches for itself will duplicate a read the page already made.
+
+**Verification:** 286 unit tests (up from 275 on staging), boundary lint clean,
+36 type errors (unchanged), `next build` compiles. No behaviour change with
+either flag off, which is the default.
+
+---
+
+## 2026-09-03 — Alyssa (Acumatica REST: switch to Resource Owner Password grant)
+
+**Files changed:** `lib/acumatica/rest.ts`
+
+The Acumatica connected app rejects `client_credentials` (`unauthorized_client`); it's configured for the **Resource Owner Password** grant. `rest.ts` now requests the token with `grant_type=password` using a service user, reading `ACUMATICA_API_USER` / `ACUMATICA_API_PASSWORD` alongside `ACUMATICA_CLIENT_ID` / `ACUMATICA_CLIENT_SECRET`. Unblocks the LotDetail stock sync.
+
+**Deploy notes:** set `ACUMATICA_API_USER` / `ACUMATICA_API_PASSWORD` (the service login) in the env alongside the client id/secret.
+
+## 2026-09-03 — Alyssa (Blender: one unregistered bag stopped all further scanning)
+
+**Files changed:** `components/production/capture/BlenderCapture.tsx`
+
+Fixes the reported "Blender cannot scan in bags" on the Big Blender: in the add/edit
+debagging-bag modal, scanning a serial that isn't in `bag_tags` **silently disabled
+scanning for the rest of that modal's life**. Every subsequent scan did nothing at all —
+no popup, no message.
+
+**Cause.** A `not_found` lookup switches the row to manual entry (`setInputMode('manual')`),
+and the auto-lookup effect was gated on `inputMode !== 'manual'`. Nothing reset that
+verdict when a *different* serial was entered, so the debounced lookup never fired again.
+The `onChange` handler also cleared `scanMsg` on each keystroke, so the stale error
+disappeared too and the operator was left with no feedback whatsoever. Enter and the
+"Look up" button still worked — but a hardware scanner sends neither, which is exactly
+why the auto-fire exists.
+
+**Fix.** The gate was protecting the *mount* case (re-reading `bag_tags` for a row opened
+for editing would overwrite a hand-captured weight or lot), not the not-found case. It now
+gates on that directly — the serial the modal opened with — via an `openedWithSerial` ref.
+All three input paths (typing, scanner burst, camera) go through one `changeSerial()`
+helper that clears the previous bag's `inputMode`/`notInSystem` verdict, so an edited
+serial always gets a fresh lookup. Manual entry after a genuine not-found is unchanged.
+
+**Note — not the whole story on production.** `origin/main` has no scan-first `ScanBox` on
+the Blender at all (PR #708 and the later capture work are on `staging` only), so on
+production this modal is the *only* way to scan into the Blender and this latch made it
+unusable. Refining and Pasteuriser were unaffected either way — they use the scan-first
+`ScanBox`, which has no such gate.
+
+## 2026-09-03 — Alyssa (production dashboard: Grade Balance tab — Acumatica stock vs floor)
+
+**Files changed:** `app/api/production/grade-balance/route.ts` (new), `components/production/GradeBalanceSection.tsx` (new), `components/production/PivotDashboard.tsx`
+
+New **Grade balance** tab on the production Pivot dashboard reconciling Acumatica stock-on-hand against live floor output (raw → produced → stock → sold). The route aggregates `acumatica.lot_details` (BHW, via `acumatica_get_lot_details`) into SOH by grade family + ageing by harvest year. The tab shows a stock-mix-vs-target **balance index** (provisional default target until the costing/WaardeModel yield split is wired in), SOH-by-grade and floor-output-mix panels, and a **harvest-year ageing chart** (the locked-capital view — old stock flagged). Matches the dashboard's house SVG chart style. NOT deployed; needs migration `20260902_002` + `/api/acumatica/sync-lots` to populate stock.
+
+## 2026-09-02 — Alyssa (Acumatica lot details: OAuth2 REST client + stock-on-hand sync)
+
+**Files changed:** `lib/acumatica/rest.ts` (new), `lib/acumatica/lot-sync.ts` (new), `app/api/acumatica/sync-lots/route.ts` (new), `supabase/migrations/20260902_002_acumatica_lot_details.sql` (new)
+
+Adds the first **contract-based REST + OAuth2** path to Acumatica (client-credentials token, cached in memory + auto-refreshed on expiry/401) — reusable for the production-order push later. `syncLotDetails()` pulls the `LotDetail` endpoint (BHW warehouse) and full-replaces the new typed table `acumatica.lot_details` (qty on hand/available by lot × item × grade, plus harvest year for ageing and tea court), via a `SECURITY DEFINER` replace RPC with the empty-fetch guard — same pattern as `sales_lines`. Trigger endpoint gated by session or `x-sync-secret` (for n8n). Feeds live stock-on-hand + ageing + the grade-balance metric.
+
+**Deploy notes:** run migration `20260902_002` in Supabase + `NOTIFY pgrst,'reload schema'`; set `ACUMATICA_CLIENT_ID` / `ACUMATICA_CLIENT_SECRET` in the env. Read-only against Acumatica.
+
+## 2026-09-02 — Alyssa (Capture resolves Acumatica items, behind a flag)
+
+**Files changed:** `lib/production/use-item-codes.ts` (new), `lib/production/inventory.suggest.test.ts` (new), `lib/production/inventory.ts`, `lib/config/flags.ts`, `features/acumatica-items/index.ts`, `app/(app)/production/live/capture/page.tsx`, `components/production/capture/{Granule,Refining}Capture.tsx`, `components/production/capture/OutputPicker.tsx`
+
+The resolver shipped inert two entries ago. This wires all 11 call sites to it
+behind **`NEXT_PUBLIC_FF_ACUMATICA_RESOLVER`**. With the flag unset — the default
+— every screen behaves exactly as it does today.
+
+### How it is wired
+
+`getAcumaticaCode()` is synchronous. The resolver is too, but only once the
+master inventory is in memory, and that is a network read — and several call
+sites are inside render, so making them async would mean threading promises
+through JSX. So the catalogue loads once per screen and everything downstream
+stays synchronous.
+
+**`lib/production/use-item-codes.ts`** is the single place the app chooses
+between the two, so no capture screen knows there are two:
+
+    const codes = useItemCodes()
+    const acu = codes.codeFor(productType, variant, grade)   // same shape as before
+
+Until the catalogue arrives, and whenever the flag is off, it falls through to
+the templates. `OutputPicker` costs no extra request at all — it already loads
+the master list, so `catalogueFrom()` indexes the rows it is holding.
+
+The adapter lives in `lib/production/`, not in the feature: a feature that
+reaches back into the code it replaces can never be finished, so the app owns
+the changeover. When the flag is on everywhere and the templates go, that file
+collapses to a hook that returns the resolver and nothing else.
+
+### What an operator sees when the flag is on
+
+Measured against the live staging master inventory, across every section,
+variant and grade: **78 outputs resolve, 4 legitimately have no item (Bucket
+Elevator Spillage), and 6 warn.** All six are on the Granule Line:
+
+| section / variant | warns |
+|---|---|
+| granule / CON, ORG | SG Granules 002 |
+| granule / RA CON, RA ORG | SG Granules 002, Export Granules |
+
+Sieving, Refining 1 and Refining 2 are unaffected — every output resolves.
+
+Those six were already broken: the templates emit `20BGGSG-002-*` and
+`20BGGE-001-RC/-RO`, none of which exist in Acumatica, so the bags were failing
+the import silently. They now say so on screen, naming the id that was looked
+for and which variants do exist.
+
+**Nothing is blocked.** An unresolved output stays selectable and the bag still
+saves — without an item code. The material was made and has to be recorded;
+refusing the save because Acumatica lacks an item would stop production over a
+data gap. Two places changed from silence to a warning:
+
+- the live Acumatica strip under the output form, which previously rendered
+  nothing at all, so "this product has no item" and "the lookup failed" looked
+  identical — an empty space;
+- the output picker, which previously filtered rows without a code out of the
+  list entirely. An operator would have found the output simply missing, with no
+  reason given. Unresolved rows are now kept and labelled; genuine no-item
+  streams like spillage still drop out.
+
+### Why a plain boolean and not a per-section set
+
+Unlike the serial flag, an item code is not printed on anything and is not an
+identity — it is a field on a row that can be corrected afterwards. The blast
+radius of a bad flip is a re-save, not a re-labelled pallet.
+
+**Verification:** 199 unit tests (up from 191), boundary lint clean, 36 type
+errors (unchanged from staging), `next build` compiles. Picker behaviour
+simulated against the live staging master inventory with the flag both on and
+off.
+
+---
+
+## 2026-09-02 — Alyssa (Heavy Sticks named throughout; variant-matching fixed; Fairtrade unfolded)
+
+**Files changed:** `lib/core/product-names.ts`, `lib/core/product-names.test.ts`, `lib/core/serials.ts`, `features/acumatica-items/{catalogue,resolve,stems,index}.ts`, `features/acumatica-items/resolve.test.ts`, `lib/production/{inventory,capture-config,acumatica-codes,live-types}.ts`, `lib/constants/manufacturing.ts`, `lib/data/sections.ts`, `components/production/capture/{Sieving,Refining}Capture.tsx`, `components/production/capture/OutputPicker.tsx`, `components/production/AcumaticaSummary.tsx`, `app/(app)/production/capture/[section]/page.tsx`
+
+### 1. The floor name is Heavy Sticks
+
+Correcting the previous entry, which made the canonical name **Sticks** (the
+Acumatica wording). The operator-facing name is **Heavy Sticks**; Acumatica keeps
+its own name for the same item, `15IGST` "Sticks". Those two layers are allowed
+to differ and now do so explicitly:
+
+    floor / picker / printed tag     "Heavy Sticks"
+    Acumatica item + description     15IGST-C, "Sticks - Conventional"
+
+`RS`, `Rolsiev Sticks`, `Sticks` and `Heavy Sticks` are all the same material.
+All of them fold to **Heavy Sticks** for display and grouping, and all of them
+resolve to `15IGST-{variant}` for the import.
+
+Renamed in the Sieving output picker and group heading, the Refining 1 and 2
+input lists, the Acumatica summary row, the changeover note on the capture page,
+the monthly stock-count catalogue (both the Sieving and Refining 1 entries, which
+said "Sticks (RS)" and "Sticks"), and on the **printed bag tag**.
+
+The serial type code `HS` now abbreviates the floor name exactly, so the earlier
+open question about renaming it to `ST` falls away — no change, and nothing is
+blocked by the serial rollout.
+
+Two places keep the old spellings on purpose: the `bag_tags` query in
+`RefiningCapture` (it is a `.in()` filter and must list every value the column
+actually holds), and `SECTION_OUTPUT_GROUPS` in `capture-config.ts`, where
+"Sticks" is an Acumatica **product_group** — a bucket containing Indent Sticks,
+Blocks and the cut heavy sticks — not a product name.
+
+### 2. Variant matching now uses the item id, not the variant column
+
+**The bug:** `sectionOutputItems()` filtered the output picker on
+`inventory_items.variant`. Eight synced rows disagree with their own id, three of
+them the clean Blocks family. Measured against the live master inventory:
+
+| Sieving run | Blocks offered BEFORE | AFTER |
+|---|---|---|
+| Conventional | `15IGBL-C-C`, **`-O`, `-RC`, `-RO`** | `15IGBL-C-C` |
+| Organic | **none** | `15IGBL-C-O` |
+| RA Conventional | **none** | `15IGBL-C-RC` |
+| RA Organic | **none** | `15IGBL-C-RO` |
+
+So Organic and RA runs could not bag clean Blocks at all, **and** a Conventional
+run could pick the Organic block item — a segregation breach in the data, not
+merely a missing option.
+
+Fixed in the app (`sectionOutputItems`, `productionOrderItems`,
+`filterInventory`) by matching on the variant CODE carried by the inventory id.
+There were in fact **three** vocabularies for the same six variants:
+
+    inventory_items.variant   'Conventional' … 'FT-Conventional', 'FT-Organic'
+    app DbVariant             'Conventional' … 'FT-CON', 'FT-ORG'
+    short UI labels           'CON', 'ORG', 'RA CON', 'RA ORG', 'FT CON', 'FT ORG'
+
+They agree on the four common variants and diverge on Fairtrade, so a direct
+string comparison could never have matched an FT item even without the drift.
+`variantCodeForWord()` maps all three onto one code.
+
+The eight drifted rows are still wrong in Acumatica and worth correcting there:
+`15IGBL-C-O`, `15IGBL-C-RC`, `15IGBL-C-RO`, `01CP-RMD-O`, `01CP-RMD-RC`,
+`01CP-RMG-O`, `01CP-RMG-RC`, `40SDCP-001-O` — all filed as Conventional.
+
+### 3. Fairtrade no longer folds onto Conventional / Organic
+
+`variantToShort()` mapped `FT-CON`→CON and `FT-ORG`→ORG, so certified Fairtrade
+material was booked against the plain conventional or organic Acumatica item.
+`05RMDE-FC` ("Raw Material Dry: Export Fairtrade Conventional") is a real,
+separate item, and Fairtrade carries the same segregation requirement that
+`ORGANIC_VARIANTS` already exists to protect. A wrong code imports cleanly, which
+makes it worse than a blank one.
+
+FT now passes through, `variantSuffix()` maps it to `-FC` / `-FO` (it previously
+fell to a default arm producing the malformed `-FT CON`, with a space), and the
+`Variant` type was widened from four values to six. Widening surfaced exactly one
+real gap: `VARIANT_LABELS` had no FT entries and would have rendered `undefined`.
+
+**No Fairtrade has ever been captured** — zero rows in `bag_tags`,
+`prod_bagging`, `prod_debagging` and `prod_sessions` — so this changes no
+existing data and is forward-looking only.
+
+**Still needed on the Acumatica side:** FT items exist for raw material but not
+for any sieving output, so an FT run would have no output item to book against.
+`features/acumatica-items` reports that as `not-stocked` rather than emitting an
+id that does not exist.
+
+**Verification:** 191 unit tests (up from 186), boundary lint clean, 36 type
+errors (unchanged from staging), `next build` compiles. Blocks visibility
+measured against the live staging master inventory, before and after.
+
+---
+
+## 2026-09-02 — Alyssa (Sticks renamed everywhere; Acumatica items resolved, not guessed)
+
+**Files changed:** `lib/core/product-names.ts` (new), `lib/core/product-names.test.ts` (new), `features/acumatica-items/{catalogue,stems,resolve,index}.ts` (new), `features/acumatica-items/resolve.test.ts` (new), `lib/production/acumatica-codes.ts`, `lib/production/live-types.ts`, `lib/production/label-pplb.ts`, `lib/production/label-print.ts`, `lib/constants/manufacturing.ts`, `components/production/capture/{Sieving,Refining}Capture.tsx`, `components/production/capture/OutputPicker.tsx`, `components/production/AcumaticaSummary.tsx`, `app/(app)/production/capture/[section]/page.tsx`, `lib/core/serials.ts`
+
+### 1. Sticks is now called Sticks
+
+One material had four names: Acumatica `15IGST` "Sticks", the Sieving picker
+"Rolsiev Sticks", Refining "Sticks" (aliased back), and the serial code RS/HS. A
+bag could be tagged ROLSIEV STICKS, carry an HS serial and import as Sticks, and
+nobody could line those up by eye.
+
+The floor name is now **Sticks** — the picker, the group heading, the Acumatica
+summary row and, importantly, the **printed tag**. Both label renderers
+(PPLB/thermal and browser) print the canonical name, so re-printing an old bag
+also gives the new word rather than perpetuating the old one.
+
+**`lib/core/product-names.ts`** is the one owner of what a material is called.
+`canonicalProductType()` folds every historic spelling; a name it does not
+recognise passes through **unchanged**, so a product added next year is merely
+unaliased rather than silently mislabelled. It matches whole names, never
+substrings — "Indent Sticks" and "Cut Heavy Stick Fine" both contain "stick" and
+are both their own Acumatica items.
+
+No history was rewritten. The 8 `bag_tags` and 6 `prod_bagging` rows that still
+say "Rolsiev Sticks" keep saying it — a serial already printed on a bag in the
+warehouse is that bag's identity — and now group and display as Sticks.
+
+**One layer deliberately not renamed:** the serial type code is still `HS`, not
+`ST`. A type code is an app-local abbreviation, not the Acumatica id (nor are
+FL/CL/IS/RB). Changing it is free **only until the first section is switched on
+in `NEXT_PUBLIC_FF_DB_SERIAL_ALLOCATION`** — after that it is printed on bags.
+
+### 2. Acumatica items: resolved against the master inventory, not constructed
+
+`getAcumaticaCode()` does not look anything up. It builds an id from a template
+keyed on an exact display string. For a system whose master inventory and BOMs
+sync from Acumatica continuously, that is backwards — the app guesses at an
+answer it could ask for. Audited against the real 630 rows on staging:
+
+- **It returns ids that do not exist.** `Export Granules` in RA Conventional
+  yields `20BGGE-001-RC`; there is no such item (only `20BGGE-002-RC`). Six
+  combinations, and the bag ships a code Acumatica rejects with nothing on
+  screen to say so.
+- **`SG Granules 002` returns `20BGGSG-001`** — the same id as `SG Granules`.
+  Two different recipes, one code. `20BGGSG-002` does not exist at all.
+- **65 descriptions no longer match Acumatica's** (double spaces, a dropped
+  colon, and the granule recipes that Acumatica now carries in the text).
+- **It cannot tell "no code" from "wrong name"** — both return `null`.
+- **532 of the 630 items are unreachable** through it.
+
+**`features/acumatica-items`** resolves instead. It never emits an id that is
+not in the catalogue; when one is missing it says which was looked for and which
+variants **do** exist. Every outcome is a variant of one discriminated union
+(`resolved` / `not-stocked` / `no-item` / `unknown-product` / `bad-input`), so a
+caller that forgets a case fails to compile rather than blanking a field at a
+printer. Against the full catalogue: **234 combinations resolve cleanly, 22 are
+genuine data gaps, 0 are unmapped.**
+
+It also reads the variant from the **item id, not the `variant` column**. Eight
+synced rows disagree with their own id — `15IGBL-C-O` ("Blocks: Clean - Organic")
+is filed as Conventional, as are its RA siblings. `sectionOutputItems()` filters
+on that column, so **Blocks is missing from the Organic and RA output pickers
+today**. The id is what Acumatica matches on, so the id wins.
+
+**Two findings for the data side, not fixed here:**
+
+- `variantToShort()` folds `FT-CON`→CON and `FT-ORG`→ORG, so Fairtrade raw
+  material books against the plain conventional item. `05RMDE-FC` is real and
+  Fairtrade is a certification with segregation requirements — this is a *wrong*
+  code that imports cleanly, which is worse than a blank one. The resolver
+  handles FT correctly and is ready for the fold to be removed.
+- `ACUMATICA_IDS` in `lib/constants/manufacturing.ts` is a **second, dead** copy
+  of the same templates with zero importers. Marked for deletion.
+
+**Not yet wired.** `acumatica-codes.ts` remains the live path; the resolver ships
+alongside so the two can be compared on real data before anything switches over.
+The only behaviour change in this commit is the rename.
+
+**Verification:** 186 unit tests (up from 167), boundary lint clean, 36 type
+errors (unchanged from staging), `next build` compiles.
+
+---
+
+## 2026-09-02 — Alyssa (Serial scheme goes behind a per-section rollout flag)
+
+**Files changed:** `lib/config/flags.ts`, `lib/config/flags.test.ts` (new), `lib/production/serial-legacy.ts` (new), `components/production/capture/{Sieving,Granule,Refining,Blender}Capture.tsx`
+
+Correcting an omission in the wiring above. `flags.ts` already carried
+`dbSerialAllocation`, written during Phase 0, whose own comment said *"rolled out one
+section at a time; the old app-side seeding remains as the fallback"*. The wiring
+ignored it and hard-switched all five sections at once.
+
+That is the wrong risk to take here specifically. A serial is printed onto a physical
+bag: reverting the code does not un-print it, so the only real rollback is "stop
+minting the new format", and that has to be one line in the environment rather than a
+deploy.
+
+**The flag is now a set of section ids, not a boolean** — a boolean cannot express
+"one section at a time":
+
+    NEXT_PUBLIC_FF_DB_SERIAL_ALLOCATION=sieving
+    NEXT_PUBLIC_FF_DB_SERIAL_ALLOCATION=sieving,granule
+    NEXT_PUBLIC_FF_DB_SERIAL_ALLOCATION=all
+    unset                                        (the default — nothing changes)
+
+`all`, `true` and `1` are synonyms, so an environment already set to the old boolean
+form cannot silently come to mean "no sections". Refining 1 and 2 roll out separately,
+as do the two blenders — they are different work centres and one can be proven before
+the other moves.
+
+**`lib/production/serial-legacy.ts`** holds the four historic generators, moved rather
+than rewritten. They are not good code — the `max + 1` scan is the documented cause of
+bags going missing (§1B) — but they are the fallback, and gathering them in one module
+means the old behaviour has one owner while it lives and deleting it later is deleting a
+file rather than hunting four copies.
+
+**This ships dark.** With the flag unset, every section behaves exactly as it does on
+staging today. The one change that is NOT behind the flag is the Quality Sieving
+ordering fix, deliberately: it makes that page read both formats, which is a
+prerequisite for turning any section on and is correct either way.
+
+**Verification:** 155 unit tests pass (up from 149), boundary lint clean, 32 type errors
+(baseline), `next build` compiles.
+
+**To roll out:** set the env var to one section, deploy, watch a shift's bags, then add
+the next. Suggested order — `sieving` (feeds Quality, already proven), then `granule`
+(lot-scoped, the one with seeded counters), then `refining1`, `refining2`, `blender`,
+`smallblender`.
+
+---
+
+## 2026-09-02 — Alyssa (Serial scheme wired: Sieving, Granule, Refining 1/2, Blender, Small Blender)
+
+**Files changed:** `lib/core/serials.ts`, `lib/core/serials.scheme.test.ts`, `lib/production/serial-allocator.ts`, `components/production/capture/{Sieving,Granule,Refining,Blender}Capture.tsx`, `app/(app)/production/capture/[section]/page.tsx`, `app/(app)/quality/sieving/page.tsx`, `ARCHITECTURE.md`
+
+Every bagging section now takes its serial number from `production.next_bag_seq`
+instead of scanning `bag_tags` for a max and adding one. The Pasteuriser is still
+out of scheme by design.
+
+### What changes on the floor
+
+New bags carry the new format. Old bags keep theirs — nothing is rewritten, and a
+serial already printed on a bag in the warehouse is that bag's identity.
+
+Sequences restart at 001 for each new counting scope on the changeover day, so **do
+not read a bag count off the highest number that day**. Reporting counts `bag_tags`
+rows and is unaffected.
+
+### The counters that were wrong before
+
+**Refining 1 and 2 shared one counter for the whole section.** Indent and White Dust
+came off the same sequence, so neither number counted its own product. Now per
+product type, per day. R1 and R2 are also separated properly: they share
+`SectionKind 'refining'` but are different work centres, and one counter would have
+put R2's bought-in material under R1's numbering.
+
+**Granule counted dust and granules together.** A lot's granule sequence jumped every
+time dust was bagged. Dust now has its own codes (`SGD`, `SFD`, `BD`, `WD`, `ID`,
+`LD`, `AD`, `DE`) and its own counters. The matcher tests dust *before* granules,
+which is load-bearing: "SG Dust" contains the token identifying SG granules, so the
+other order puts dust and product on one counter under one indistinguishable serial.
+
+### Quality reads both formats
+
+`app/(app)/quality/sieving/page.tsx` had its own `serialOrderKey` requiring exactly
+six date digits. Every new serial would have returned null, and a null key
+short-circuits the out-of-order QC reminder to "nothing earlier is pending" — so QC
+done out of bagging order would simply stop being flagged, with no error and nothing
+different on screen. It now uses core's parser, which reads both formats, so a
+changeover day orders as one run instead of splitting in two.
+
+`productOfSerial` is deliberately unchanged. Its map omits BD, PD and HS because
+those are not QC products and there is no tab to send them to.
+
+### Spec correction: no serial contains a slash
+
+ARCHITECTURE §5 specified the Blender run separator as `{DDMMYYYY}/{n}`. A serial is
+used as a URL path segment at `/api/production/live/bag/[serial]` and in the Bag
+Tracking deep links, and a slash splits the route param. The Blender's previous
+format had already chosen `-` for this reason and said so in a comment. Corrected to
+`-`, with a test asserting no builder emits a slash.
+
+### Two additions the spec's product list did not cover
+
+Sieving's **`BE`** (bucket-elevator spillage) and the Granule dusts above — both are
+things the lines actually bag. And because the picker searches the Acumatica master
+inventory, an unmapped product is routine rather than a broken install:
+`typeCodeFor()` still returns null for callers needing certainty, while
+`resolveTypeCode()` derives a code and reports `configured: false`. The bag still
+bags, and the screen says the code was derived, because a guessed code is
+indistinguishable from a real one once printed.
+
+The same amber banner reports a locally-allocated number when the database is
+unreachable — the offline fallback works, but it is not collision-proof and is not
+allowed to look like the safe path.
+
+### Blender run numbers read both formats
+
+The run number is still derived rather than allocated — it is a property of the
+day's production, not a per-bag counter. It now matches both serial formats, because
+a production day can start on one and end on the other; reading only one would
+restart run numbering at 1 mid-day and silently fork a second "run 1" for the same
+blend.
+
+**Verification:** 149 unit tests pass (up from 140), boundary lint clean, 32 type
+errors (baseline), `next build` compiles 237 pages. The build was run with
+`--webpack`; Turbopack cannot resolve the junctioned `node_modules` in a scratch
+worktree, so the deploy's own Turbopack build is the one that has not been
+reproduced locally for this commit.
+
+**Migration:** `20260902_001_bag_serial_allocation.sql` is applied to staging.
+Production needs it before this is promoted. Note the seed covered the Granule
+granule scopes (`GLSG`/`GLSF`/`GLEXP`) only — the new dust scopes start at 001,
+which produces no collision because the serial strings differ in shape.
+
+---
+
+## 2026-09-02 — Alyssa (Bag serial scheme: core formats, anchored parser, database-side allocation)
+
+**Files changed:** `lib/core/serials.ts`, `lib/core/serials.scheme.test.ts` (new), `lib/production/serial-allocator.ts` (new), `supabase/migrations/20260902_001_bag_serial_allocation.sql` (new)
+
+The foundation for the serial scheme recorded in ARCHITECTURE.md §5. Formats and
+allocation only — no capture screen is wired to it yet, so nothing an operator sees
+changes with this.
+
+### One owner for every format
+
+Five sections minted serials five different ways, in four different formats, with
+`seqOf` and the date stem copy-pasted between them. `lib/core/serials.ts` now carries
+the current scheme alongside the historic formats, which are kept because bags carrying
+them are in the warehouse and a printed serial is that bag's identity.
+
+`{WC}{TYPE}-{DDMMYYYY}-{QUALIFIER}-{NNN}`, with the two per-section differences that are
+deliberate: **Granule puts the lot before the date** (the lot is its counting scope and
+runs across days as one continuous sequence) and **the Blender carries no type code**
+(the blend type and number are what the Pasteuriser consumes and what the order is
+raised against). Both are pinned by tests that would fail if either were "harmonised".
+
+The date stem went from six digits to eight. Six saved two characters and cost the
+century, on a record that outlives the decade it was printed in.
+
+### The parser is anchored, never split
+
+There was no parser at all before. The new one peels the sequence off the end and the
+work centre off the front, and never splits on `-` — Granule lots contain hyphens, so
+`'GLSG-RSGG-05626-01092026-001'.split('-')` reads the lot as `RSGG` and the date as
+`05626`. Both look plausible, which is what makes it dangerous. A test asserts the
+correct reading *and* what the naive version would have said.
+
+Legacy six-digit serials still parse and report `legacy: true`. Historic `RS` serials
+read back as `RS`, not rewritten to `HS` — that bag says RS.
+
+### Heavy Sticks is one material under four names
+
+`Heavy Sticks`, `Rolsiev Sticks`, `Sticks` and `RS` all map to type code `HS`, on
+Refining 2 as well as Sieving. This is the serial-code layer only; the Acumatica import
+must still send `15IGST` / "Sticks", and `acumatica-codes.ts` matches on the exact string
+`'Rolsiev Sticks'` — renaming the display without following it through there blanks the
+code silently, with no error.
+
+An unknown product now returns null instead of a code built from its first two letters.
+A guessed code is indistinguishable from a real one once it is printed on a bag.
+
+### Numbers come from the database
+
+`production.next_bag_seq(scope)` — one atomic upsert on a counter row, so two operators
+adding a bag in the same moment get 7 and 8 rather than 7 and 7. App-side `max + 1` is
+the documented cause of 44% of Fine/Coarse Leaf bags going missing from `prod_bagging`
+and 7 of 24 Sieving bags never reaching `bag_tags`, and the `limit(4000)` on that scan
+made it worse past 4000 rows.
+
+The counter is keyed on the counting **scope**, which is not always the serial prefix:
+`GLSG-RSGG-05626` carries no date, so one lot keeps one sequence across several days
+while its serials still say which day each bag was made.
+
+`allocateBagSerial()` falls back to a local max when the RPC is unreachable, scoped to
+the same counter so a tablet that loses signal keeps numbering upward instead of
+restarting at 001. It reports `source: 'local'` rather than letting a silent downgrade
+look like the safe path.
+
+### Two things found while building
+
+**The Small Blender was missing.** It is a real section with its own code (`SB`) that
+shares `SectionKind 'blender'`; leaving it out of the work-centre map would have returned
+null and silently disabled serials on that line. It gets its own counter — mapping it
+onto `BL` would interleave two physical lines' bags in one sequence.
+
+**A Granule bag with no lot produced `GLSG--01092026-001`** — a double hyphen that reads
+back as a valid serial with an empty lot, so the bag looks tagged while belonging to no
+counter. Granule and Blender serials now throw without their qualifier. Callers must gate
+on it, exactly as the floor does: you cannot label a granule bag before you know its lot.
+
+### Seeding, and the one scope that survives the format change
+
+Date-scoped sections need no seeding — a four-digit year cannot collide with a
+six-digit stem. The Granule Line does: a lot in progress today keeps running tomorrow
+under the new format. Historic Granule serials carry no type code, so a lot's existing
+bags cannot be attributed to SG, SF or EXP after the fact; all three scopes are seeded to
+that lot's highest number. That over-seeds two of the three and costs some gaps, which is
+explicitly fine. Under-seeding would reprint a number already on a bag in the warehouse.
+
+**Verification:** 140 unit tests pass (up from 106), boundary lint clean, 32 type errors
+(unchanged).
+
+**Migration pending — apply to STAGING first:** `20260902_001_bag_serial_allocation.sql`.
+It carries verification queries for the seeded lots and an atomicity self-test. Until it
+is applied, `allocateBagSerial()` returns `source: 'local'` for every call.
+
+---
 
 ## 2026-09-03 — Gustav (Granule Line: bulk Excel export for History and Active Runs; Entyce/Edelweiss promoted to production)
 
@@ -1235,228 +3077,290 @@ and no link from a run to the spec it is actually judged against.
   string matches and a batch's customer would filter the list to nothing
   whenever the spec row is the generic blank-customer one.
 
+## 2026-09-01 — Alyssa (Sieving changeover row duplication; additive UI stood down)
 
-## 2026-09-02 — Alyssa (The batch list is actually this session's, and the Overview mass balance shows on the afternoon shift)
+**Files changed:** `components/production/capture/SievingCapture.tsx`, `lib/production/debag-reconcile.ts` (new), `lib/production/debag-reconcile.test.ts` (new), `app/(app)/production/capture/[section]/page.tsx`, `components/production/capture/CaptureOverview.tsx`, `components/production/LiveCaptureKPIs.tsx`, `app/(app)/production/orders/page.tsx`, `app/(app)/production/orders/[id]/page.tsx`, `app/(app)/production/live/capture/page.tsx`, `supabase/migrations/20260901_001_repair_sieving_changeover_duplication_DRAFT.sql` (new)
 
-**Files changed:** `lib/production/inventory.ts`, `components/production/capture/SievingCapture.tsx`, `components/production/capture/CaptureOverview.tsx`
+### The bug: a changeover duplicated the session's debagging rows
 
-Two things reported from the capture page, both from today's work.
+Sieving / 2026-09-01 / morning had **258 farm-bag rows of one identical bag**
+(E-744, lot GS-0314, 350.0 kg) — 90 336 kg of input against 4 260 kg out, and 259
+rows on the production order's Debagging panel.
 
-### The batch list said "this session" and offered 32 historical lots
+`SievingCapture`'s debag self-heal reads `production.prod_debagging` scoped to
+`session_id`. That table carries **no batch discriminator**, so after a changeover
+every batch's rows sit under one session id. The component is mounted with
+`key={active.id}`, so a changeover remounts it against a brand-new *empty* batch —
+and the self-heal then read the entire session as "missing from this batch" and
+restored a copy of all of it into the new batch. `persist()` wrote that back, so
+each changeover doubled the row count: 8, 16, 32, 64, 128.
 
-The restriction was on — the field read *"Must match a batch debagged this session"* — and the tap list held `GS-0424`, `GS-0208`, `GS-0332` and thirty others from weeks back. Technically restricted, practically useless, and my earlier diagnosis (that the guard had been lost entirely) was wrong.
+Replaying that logic reproduces the screenshots exactly — per-batch 2800, 5600,
+11200, 22400, 44800 kg, 258 rows, 90 336 kg total.
 
-`debaggedBatches` had **no date filter at all**: up to 60 lots across all history for the variant family and grade. The carve-out exists for one case — material fed in on an earlier shift that is still legitimately being bagged out — so it now takes a `sinceDate` and Sieving passes **yesterday**. This morning's debagging bagged out this afternoon still works; a lot from three weeks ago is no longer offered, because it is not what is on the machine.
+The page now tells the component what the session's **other** batches already
+hold, so a row living in another batch of `draft_data` is no longer read as lost
+and copied. That reconciliation moved to `lib/production/debag-reconcile.ts` with
+tests, because it also had to change shape: a debag row's identity is (bag label,
+lot, net weight), which is **not unique** — bags off one farm pallet are
+byte-identical — so it now matches on **multiplicity**. A `Set` called the
+ledger's ten identical rows "known" as soon as the batch held one, quietly
+recovering none of the nine that were lost, which is the loss the self-heal exists
+to prevent. The test that pins this fails against the old `Set` behaviour.
 
-### The mass balance was missing on the afternoon shift
+The two self-heal effects were also merged into one. They each built their patch
+from the same mount-time `value` closure, so whichever query resolved last
+silently discarded the other's restore — outputs were being dropped that way
+whenever the debag query won the race. That race is also why `bag_tags` stayed
+clean and only inputs multiplied, which makes `bag_tags` the trustworthy record
+for the repair.
 
-It sat inside the card's `hasData` gate, which asks whether **this record** captured anything. The afternoon session's debagging is often all on the morning record, so the gate showed "Nothing captured yet" and hid the balance — even though the balance is deliberately the **whole day** and had figures to show.
+### Additive UI stood down, to be rebuilt
 
-The balance now renders above that gate, on the day's data. The empty state also says so, instead of implying the day is empty.
+The derived layer was reporting figures computed from those duplicated rows, so it
+read confidently and wrongly (+86 076 kg, 5% yield). It is removed from the
+capture and orders flow rather than left showing numbers nobody can trust:
+
+- **Production order** — the "Mass balance — full run" panel, the Yield field, the
+  per-shift Input/Output/Balance grid, and the bucket-elevator reclassification
+  that moved an afternoon debag row onto the output side. Debagging rows now show
+  as captured.
+- **Orders list** — the KPI strip (tons, tons/day, tons/week, throughput, yield),
+  the whole Analytics view and its toggle, the per-record variance pill and yield,
+  and the mass-balance flags in the actions panel.
+- **Capture screen** — `MassBalanceTable` on the Production and Sign-off tabs, the
+  per-batch `BalanceBadge`, and the balance readout in the changeover prompt. The
+  capture tab now shows what went in (debagging) and what came out (bagging).
+- **Capture Overview** — the KPI strip (kg in, kg out, yield, tons, bags, balance
+  ±tol), the output-share bars, and the balance line in the copy-for-Acumatica
+  export.
+- **Live capture / LiveCaptureKPIs** — the balance tile, tolerance warning,
+  Granule G − I line and the variance column.
+
+**A general mass balance stays on the Overview**: total in, total out, difference.
+Nothing more — no tolerance verdict, no yield, no per-shift decomposition. Both
+figures are the totals of the debagging and bagging tables directly above it, so it
+cannot disagree with them.
+
+**This is a UI removal only.** `prod_mass_balance` is still written on every save,
+the checks trail still records its shutdown mass-balance event, and
+`/api/production/orders-kpis` still exists and still works — nothing on these pages
+calls it. So there is no gap in the data to backfill when it is rebuilt.
+
+Lint 3028 → 3022; type errors unchanged at the 34 baseline; `npm run test` 86
+passing, including 9 new.
+
+### Data repair — written, NOT run
+
+`20260901_001_..._DRAFT.sql` inspects, repairs and sweeps. It **keeps every batch
+record** — a changeover is a real event, and 31 Aug genuinely ran Export then
+changed over to Export Blend — and removes only rows carrying the copy signature:
+batch *k* holding exactly the union of batches 1..*k*-1 and nothing of its own. A
+batch that captured rows of its own is left alone. `prod_debagging` is trimmed
+oldest-first to the corrected count per row identity rather than deleted and
+rebuilt, so the originals survive and the order panels stay populated. `bag_tags`,
+`prod_bagging` and `scan_events` are not written at all.
+
+Needs a human to read Step 1 before Step 2 runs, and the code fix must be deployed
+first or the next changeover re-creates the duplication.
+## 2026-09-01 — Alyssa (Per-section mass balance: ±1% tolerance, Granule dust carry-over, Blender bag-to-bag transfers)
+
+**Files changed:** `lib/core/mass-balance/{tolerance,types,granule,index}.ts` (tolerance.ts new), `lib/core/mass-balance/section-rules.test.ts` (new), `lib/production/{capture-config,carryover,order-detail,shift-report-builder}.ts`, `lib/constants/manufacturing.ts`, `components/production/capture/{Granule,Blender,Pasteuriser,Refining}Capture.tsx`, `components/production/capture/CaptureOverview.tsx`, `app/(app)/production/capture/[section]/page.tsx`, `app/(app)/supervisor/analytics/page.tsx`, `app/api/production/{capture-ratings,dashboard-rows,orders-kpis}/route.ts`, `supabase/migrations/20260901_002_dust_carryover_variant.sql` (new), `supabase/migrations/20260901_003_mass_balance_tolerance_pct.sql` (new), `ARCHITECTURE.md`
+
+Mass balance is calculated differently for every section. The previous change gave the five
+sections one shared *vocabulary*; this one implements each section's own specification on top
+of it. The only thing genuinely shared is the tolerance.
+
+### Tolerance is now ±1% of Total Input, everywhere
+
+`MASS_BALANCE_TOLERANCE_KG = 15` — with a 100 kg special case for `refining2` — is gone. A
+fixed kg allowance is the wrong shape for a line running anything from a 200 kg trial to a
+4 t shift: 15 kg is ~7% of the first and ~0.4% of the second, so one never flagged and the
+other always did. The `refining2` exception existed only because that line runs bigger
+volumes, which is exactly what a percentage handles without an exception.
+
+It is a percentage of **input**, deliberately: input is known before the shift produces
+anything, so a shift that under-produces cannot widen its own goalposts. Rounded to 0.1 kg —
+the precision every weight on the floor is captured at — so the figure shown is the figure
+compared, rather than a screen reading "±12.3 kg" while comparing against 12.3456.
+
+Two copies of the old constant existed (`capture-config.ts` and an unused one in
+`constants/manufacturing.ts`); both now re-export the single core source. The signature
+changed from `(sectionId)` to `(totalInKg)` on purpose, so nothing can keep calling it with a
+section id and silently receive a tolerance for the wrong quantity — every one of the ~20
+call sites had to be looked at.
+
+`prod_mass_balance.tolerance_kg` had `DEFAULT 15` and was **never written**, so every row on
+the table claimed a flat 15 kg. The capture save now writes the real figure and the default is
+dropped. `v_session_yield` derives ±1% in SQL rather than reading the stored column, because
+historical rows all carry 15 and trusting them would leave two tolerance regimes side by side
+on the same screen — an operator could not tell why two similar sessions flagged differently.
+
+**This changes which sessions flag.** Small runs are now held tighter and large ones get more
+room. The migration carries a before/after query to see exactly which ones move.
+
+### Granule Line — leftover dust carries over, per product type
+
+A PO run under SG Granules leaves SG dust; one under SF Granules leaves SF dust. Both are
+real, recurring, and were showing up as an unexplained `H − G` shortfall on every shift that
+had any — the variance an operator learns to ignore.
+
+Dust held for tomorrow is now `carryOverOut`: excluded from Total Output, given its own
+column, subtracted from the variance. Dust consumed from a previous day is `carryOverIn` — it
+was already inside A (the Carry-over banner adds it as a real blend input row) but invisible;
+it is now reported, and lands in its designated product-type column instead of the `Other`
+catch-all. An `SF Dust` column was added, which had been missing entirely.
+
+The confirmed leftover is written to `GranuleData.dustCarryOverKg` as well as to the ledger.
+Without that the balance reverted to showing a shortfall the moment the page was reopened,
+and the operator could confirm the same leftover a second time.
+
+`production.dust_carryover_log` gained **`variant_family`**. It already kept SG and SF apart
+via `item_key`, but conventional and organic — separate physical pools — summed into one
+outstanding balance, and whichever line asked first was offered the lot. That is a
+certification failure, not a rounding error. Existing rows backfill to `conventional` (the
+line has run conventional only to this point); the migration says to check for organic rows
+before the `NOT NULL`.
+
+### Blender — a new bag made from an existing one is not new production
+
+The half-bag component can draw material from an existing bag to make up a **new** bag. That
+new bag is captured as output like any other, but its mass was already counted as output when
+the source bag was bagged. Left in, the shift reports the same material twice — and because
+the production-order summaries read the same figure, so does the order.
+
+`BalanceContext.transferInKg` subtracts it. Only transfers whose **target** is one of this
+session's own output bags qualify: a transfer into a bag from an earlier day was never in
+these outputs, so there is nothing to take back off. The session's output serials are
+resolved by a new `outputSerialSet(kind, prods)` that dispatches on section kind and ends in
+`assertNever`, because the five sections keep their output bags under different field names.
+
+`withTopUp()` became `withSessionAdjustments()`, applying both directions at once: top-ups add
+(material produced here that went into an older bag), transfers subtract. `withTopUp` remains
+as a thin wrapper so existing callers keep working. The Blend Ratio breakdown is untouched.
+
+### Pasteuriser and Refining — verified rather than changed
+
+Both already satisfied their specifications; the work was proving it and closing one gap.
+
+Pasteuriser Total Output counts Final Product, High Moisture **and** Refill pallet lines —
+because `pasteuriserTotals` sums the lines *without* filtering on `kind`. That is now pinned
+by a test, since adding a filter there is an easy-looking change that would silently drop
+rework and refills out of production. Total Input counts blend bags and High Moisture rework
+(stream `main`), bags from the Granule Line (stream `postsieve`), and leftover part-bags at
+their actual weight.
+
+The gap: the system pick list was **not** variant-filtered, while a scan of the same bag was
+already refused (`validateBagScan` → `wrong_variant`). Two paths to the same bag disagreeing
+is how a cross-family bag gets in. The pick list now filters on variant family; bags with no
+recorded variant stay visible, since hiding them would strand older hand-registered stock.
+
+Refining's "bags from the outside" count at their typed weight like any other input — nothing
+in the balance treats them differently. What they need is a `bag_tags` record, not a different
+formula, so no formula changed; a test pins it.
+
+### Merged after the derived-figures stand-down
+
+This branch was open while the entry above stood down the derived mass-balance displays —
+`MassBalanceTable`, the YieldStrip, the per-batch balance badges, the flag counts on Live
+Capture KPIs and Production Orders. Those are the surfaces this change was going to relabel,
+so the display half of it is gone: no `carryOverLabel` prop, no per-batch badge fix, no
+`MassBalanceTable`. The stand-down wins; a corrected figure nobody is meant to be reading yet
+is still a figure nobody is meant to be reading.
+
+What survives is all of the calculation: the ±1% rule, Granule's dust carry-over, the Blender
+transfer subtraction, the variant-family gates, and `prod_mass_balance.tolerance_kg` finally
+being written. Those feed the persisted row, the checks panel's mass-balance snapshot and
+`v_session_yield` — so when the displays come back, they come back reading a correct figure
+rather than needing this work done again.
+
+**Verification:** 97 unit tests pass (up from 77), boundary lint clean, production build
+compiles, type errors unchanged at the 34 baseline.
+
+**Migrations:** `20260901_002_dust_carryover_variant.sql` and
+`20260901_003_mass_balance_tolerance_pct.sql` are applied to STAGING. Production needs both
+when this is promoted. Still pending everywhere:
+`20260901_001_prod_bagging_unique_index_drift.sql` (run its pre-flight duplicate query first).
 
 ---
 
-## 2026-09-02 — Alyssa (Restored: an output bag may only be tagged with a batch debagged this session)
+## 2026-09-01 — Alyssa (Mass balance moved to core; Total Output redefined; capture page branching removed)
 
-**Files changed:** `components/production/capture/SievingCapture.tsx`, `components/production/capture/OutputPicker.tsx`, `app/(app)/production/capture/[section]/page.tsx`, `scripts/verify-output-batch-hints.py` (new)
+**Files changed:** `lib/core/mass-balance/{types,sieving,refining,granule,blender,pasteuriser,index}.ts` (new), `lib/core/mass-balance/mass-balance.test.ts` (new), `components/production/capture/{Sieving,Refining,Granule,Blender,Pasteuriser}Capture.tsx`, `components/production/capture/MassBalanceTable.tsx`, `app/(app)/production/capture/[section]/page.tsx`, `ARCHITECTURE.md`, `.github/workflows/ci.yml`
 
-Reported from the floor: the restriction that only a debagged batch is offered when bagging out had disappeared. **A regression from today's changeover-duplication fix.**
+Mass balance is now a core feature with **one module per section**, kept deliberately separate because the five formulas mirror five different paper forms with different sign conventions. What is shared is the vocabulary and a single dispatch, `productionTotals(kind, data, ctx)`.
 
-`batchHints` was read off the **mounted batch's** own `debag` array. That worked by accident — the self-heal used to copy every sibling batch's debag rows into whichever batch was on screen, so the array was always full. Removing that duplication removed the accidental source, and a batch with no debag rows of its own then produced no hints at all. `OutputPicker` treats no hints as nothing to restrict against, so it fell back to **every recent batch at the section with the check off** — which is exactly the free-typed, mistyped batch the guard exists to prevent.
+**Everything now reads one balance.** The capture screen, the persisted `prod_mass_balance` row and the production-order summaries previously computed "what did this shift produce" three different ways. The screen ignored half-bag top-ups entirely while the persisted row counted them — and only for Sieving. Because the PO summaries read `total_output_b_kg` off the persisted row, correcting what `persist()` writes carries straight through to them.
 
-The rule was always "debagged **this session**", so it is now sourced from the session — every batch of it — rather than from whichever batch happens to be mounted. The earlier-session, same-variant-and-grade carve-out is unchanged.
+**Total Output now means finished product.**
 
-**And it no longer fails silently.** With genuinely nothing debagged yet the field still allows free entry — blocking the floor from bagging would be worse — but the screen now says the batch cannot be checked and to capture the debagging first. A lost guard looked identical to a working one, which is why this went unnoticed.
+- **Includes half-bag top-ups** made from the shift's own loose production — the increment only, never the whole bag, since the bag it went into may have been created on an earlier day and so never appears in this session's outputs. Restricted to `mode === 'production'`; a `mode === 'existing'` bag-to-bag transfer moves mass already counted when the source bag was bagged, and counting it again would double-count.
+- **Excludes bucket-elevator material left for the next day.** That is work in progress, not product. It is reported as `carryOverOut` and now has its own "left in elevator" column in the mass-balance table, with the variance subtracting it — so the balance still reconciles to zero instead of showing a shortfall on every afternoon Sieving shift. The arithmetic of the variance is unchanged: `totalIn − totalOut − carryOverOut` is identical to the old `totalIn − (product + leftover)`.
 
-`scripts/verify-output-batch-hints.py` — 9 checks including the exact regression case (debagging on batch 1, bagging on batch 2) and proof the typo batch is no longer offered.
+**Total Input includes carry-over consumed from a previous day**, matched on **variant family** — conventional and organic are separate physical pools that never mix. Read from `production.bucket_elevator_log` via the existing `outstandingBucketElevator()`; the figure typed on the capture screen is now only a fallback.
 
----
+Top-ups are session-scoped, so they are added **once** after summing, through a new `withTopUp()` that knows which way each section's balance sign runs — Blender and Pasteuriser follow their paper forms' `out − in`, so more output moves their balance *up*, the opposite of the other three. Getting that sign wrong would silently mis-state the variance, so it sits behind an exhaustive switch rather than being open-coded.
 
-## 2026-09-02 — Alyssa (Debagging's Per batch table stops calling the bucket elevator "(no batch)")
+**Latent bug fixed:** in the persisted-balance path, Blender fell through to `sievingTotals` and only produced the right number by accident, because both data shapes happen to have an `outputs` array keyed on `weight`. It now uses `blenderTotals`.
 
-**Files changed:** `app/(app)/production/orders/[id]/page.tsx`
+**Capture page branching.** The empty-data factory and both `persist()` build chains (debag rows and bagging rows) now dispatch on the section kind and end in `assertNever`, replacing `sectionId.startsWith('refining')` / `isBlenderSection` / `isPasteuriser` chains that fell through to Sieving. Verified by temporarily adding a sixth section kind: the build then fails in **7 places across 3 files** — the capture page, `CaptureOverview`, and the core balance dispatch — and nowhere else.
 
-Reported from the 1 September order. The `Per batch` table added earlier today collapsed every lot-less row into one line labelled `(no batch)` — and in Debagging those rows are the **bucket elevator and machine spillage**. It read as though the elevator were a batch by that name.
+Type errors fell from 36 to **34** as a side effect of deleting the duplicated totals functions; the CI baseline has been lowered to match.
 
-They are not batches at all: the elevator is yesterday's carry-over and spillage is loss off the machine. They are now listed below the batches under a **`No batch of its own`** heading, named for what they are, with no bag count (neither is a bag) and a line saying both are still counted in Total input.
-
-The `batches · kg` figure in the header is now the batched weight only, so it matches the rows beneath it rather than silently including the elevator.
-
-The shared `batchTotals` helper keeps its `(no batch)` fallback — that is the right label for an **output** bag that genuinely has no batch, which is a different case.
+**Verification:** 77 unit tests pass (up from 56), boundary lint clean, production build compiles.
 
 ---
 
-## 2026-09-02 — Alyssa (An output bag's grade follows the lot it was sieved from)
+## 2026-09-01 — Alyssa (Phase 1 & 2: shared logic moved to core, section duck-typing removed)
 
-**Files changed:** `lib/production/order-detail.ts`, `app/(app)/production/orders/[id]/page.tsx`, `scripts/verify-output-grade-from-lot.py` (new)
+**Files changed:** `lib/core/types/capture.ts` (new), `lib/core/types/capture.test.ts` (new), `lib/production/section-kind-drift.test.ts` (new), `components/production/capture/CaptureOverview.tsx`, `components/production/capture/{Sieving,Refining,Granule,Blender,Pasteuriser}Capture.tsx`, `components/production/capture/{OutputPicker,ShiftBagLog,HalfBagTopUpModal}.tsx`, `app/(app)/production/capture/[section]/page.tsx`, `app/(app)/production/orders/page.tsx`, `app/(app)/production/orders/[id]/page.tsx`, `app/(app)/supervisor/analytics/page.tsx`, `app/api/production/orders-kpis/route.ts`, `app/api/production/yield-analytics/route.ts`, `lib/production/shift-report-builder.ts`, `ARCHITECTURE.md`
 
-Reported from the 31-08 report: the debagging list shows which lots are Export Blend, but the Fine Leaf bags sieved from them still read Export.
+Follows the Phase 0 guardrails. **No intended behaviour change** other than the one divergence noted below.
 
-A lot's grade is settled when it is **debagged** — the operator picks Export or Export Blend per bulk bag, and everything sieved from that lot is that grade. An output bag's grade came from `bag_tags.destination`, which defaults to the batch's grade when the bag is added — so after the changeover misfired, bags off Export Blend lots kept being tagged Export.
+**Phase 1 — call sites moved onto `lib/core`.**
 
-On 31-08, `GS-22-157` and `MAT-0336` were both debagged as Export Blend, and `STFL-310826-010` and `-012` came off them reading Export. `GS-20-238` happened to be tagged right, which is why one Export Blend bag showed and two did not — **Export Blend Fine Leaf output was 300 kg when it should have been 900 kg**.
+- The 10 byte-identical copies of `n()` now import `lib/core/num`. Call sites are untouched: where the local name was `num` the import is aliased, so the diff is the definition line only — 10 insertions, 14 deletions. Three files also shed a now-redundant comment about comma handling.
+- Left alone deliberately: `lib/production/granule-quality.ts` and `shift-report-builder.ts` have parsers with genuinely different semantics (`number | null`, and a `typeof v === 'number'` branch). They were never duplicates.
+- `round1` / `kgPerHour` / `yieldPct` now come from `lib/core/metrics` across the shift report, orders KPIs, yield analytics, the orders list, order detail and supervisor analytics. `round1` keeps other callers in each file, so its local definition became an import rather than being dropped.
+- **One deliberate behaviour difference:** order detail gated its yield on truthiness (`mb.total_input_kg`) rather than `> 0`. Identical for 0/null/undefined; differs only for a **negative** input, where the old code produced a negative percentage and the shared function returns null. Negative input kg is a data error and null is the more honest answer.
+- Left alone: `quality/granule`'s `Math.round((g/totalG)*1000)/10` is a sieve fraction, not a yield — different meaning, returns 0 rather than null.
+- Caught by the typecheck ratchet during this work: three files assign to a local `const yieldPct`, which shadowed the import and self-referenced. The count went 36 → 42 and back to 36 once the import was aliased. This is exactly what the ratchet is for.
 
-- **The lot now wins**, because debagging is where the grade was decided and it is what the floor's own sheet matches.
-- **Except where it cannot.** `GS-0313` was debagged twice that morning, once as Export (`X-1602`) and once as Export Blend (`1073`). A lot debagged under two grades says nothing about a bag sieved from it, so the tag stands and the row is marked `lot mixed` rather than guessed at.
-- **The override is never silent.** A grade taken from the lot is shown in the warning colour, marked `from lot`, with what the tag actually said — because someone holding a label that reads Export needs to see why the report says Export Blend. The panel also states how many bags were corrected and that **their printed labels are wrong and need reprinting**.
+**Phase 2 — the section discriminant. This is the fix for "a change to one section breaks another".**
 
-`scripts/verify-output-grade-from-lot.py` checks the rule against the real 31-08 rows: the two wrong bags, the one already right, both `GS-0313` cases, every correctly-tagged Export bag, a lot absent from the sheet, an untagged bag, and the corrected Export Blend total. **15 checks, all passing.**
+- `CaptureOverview` told the five data shapes apart by guessing at their fields — `if ('bomId' in d)` / `else if ('inputs' in d)` / `else if ('blends' in d)` / `else if ('byProducts' in d)`, with Sieving as an unguarded `else`. Adding a field named `inputs` to any section silently rerouted it into Refining's branch, and anything unrecognised became Sieving. Both dispatches now switch on the section kind, which comes from the route.
+- Verified the premise before relying on it: the sibling-session and other-shift queries both filter `.eq('section_id', sectionId)`, so every production reaching Overview really is from one section.
+- Both chains end in `assertNever(kind)`, so **adding a section kind without handling it everywhere now fails the build**. Proven by temporarily adding a sixth kind: `tsc` errored at both dispatch sites and nowhere else.
+- `sectionId` on `CaptureOverview` was typed optional though its only caller always passes it; now required, so this is a compiler guarantee rather than a fallback.
+- **Found while doing this: `smallblender` was missing from the section map.** It is a real section (work centre `05-BLENDER SMALL`, added by `20260714_001_smallblender_section.sql` a month after the original capture migration) sharing Blender's data shape — which is why the existing `isBlenderSection()` accepts both ids. The map had been written from the original migration and was stale. Left uncorrected it would have routed Small Blender down the Sieving fallback: the very bug being removed.
+- Added `lib/production/section-kind-drift.test.ts`, which fails if `SECTION_KIND` and `SECTION_MODE` ever disagree, so that specific mistake cannot recur.
 
----
-
-## 2026-09-02 — Alyssa (HOTFIX: a bag's kg on an order is the bag now, minus later top-ups)
-
-**Files changed:** `lib/production/order-detail.ts`, `scripts/verify-order-day-kg.py` (new)
-
-Fixes the change made earlier today in the same session, which was wrong and shipped.
-
-Earlier today the order page stopped reading `bag_tags.weight_kg` for a bag's kg — correctly, because that column is overwritten on every top-up, so an earlier day's order grew by a later day's increment. The replacement was wrong: it took the weight from the bag's **earliest `scan_events` row**, on the reasoning that the row is never rewritten.
-
-It is never rewritten, and that is exactly why it is the wrong source. A bag's `bagging_out` event is written **once, at creation** (see `addOutput`), so a weight the operator corrects afterwards is corrected in `bag_tags` and never on the event. Live data, found by running `20260902_004` on production:
-
-| bag | event says | bag says | order would have shown |
-|---|---|---|---|
-| `25SFCKUN25C-1-10` | 3505 | 350 | **3505** — a mistyped 350.5 |
-| `06-08-26-004` | 170 | 500 | 170 |
-| `31-07-26-007` | 300 | 100 | 300 |
-
-That would have added **3 205.5 kg** to the 31-08 Blender day alone. Fifteen bags across Blender and Granule had a corrected weight and no top-up at all.
-
-**The rule now:** a bag's kg on an order is its **current weight** — the corrected truth, including any same-day top-up — **minus only the increments added on a later production day**, which belong to that later day's order. The production day comes from the top-up's own session, not the wall clock, because the afternoon shift runs to 01h00.
-
-`scripts/verify-order-day-kg.py` checks the arithmetic against the real production rows: 9 genuine top-up cases, the 7 corrected-weight bags that broke the first attempt, same-day top-ups, two-day reconciliation (both days together equal the bag's current weight), multiple later top-ups, the never-negative floor, and a bag with no events. **26 checks, all passing.**
+**Verification:** 56 unit tests pass (up from 46), boundary lint clean, type errors unchanged at the 36 baseline.
 
 ---
 
-## 2026-09-02 — Alyssa (Bag serials generated wrong and skipped: manual database corrections, logged after the fact)
+## 2026-09-01 — Alyssa (Architecture guardrails: Core/Feature boundary, first tests, CI, schema-drift fix)
 
-**Files changed:** none — this was done directly in the database, in earlier sessions, with no migration file. Logged here because it happened and nothing recorded it.
+**Files changed:** `ARCHITECTURE.md` (new), `CLAUDE.md`, `CODEOWNERS` (new), `eslint.config.mjs`, `vitest.config.mts` (new), `package.json`, `lib/core/num.ts` (new), `lib/core/num.test.ts` (new), `lib/core/metrics.ts` (new), `lib/core/metrics.test.ts` (new), `lib/config/flags.ts` (new), `components/shared/FeatureBoundary.tsx` (new), `.github/workflows/ci.yml` (new), `lib/core/serials.ts` (new), `lib/core/serials.test.ts` (new), `playwright.config.ts` (new), `e2e/fixtures.ts` (new), `e2e/capture-smoke.spec.ts` (new), `e2e/concurrent-save.spec.ts` (new), `.gitignore`, `supabase/migrations/20260901_001_prod_bagging_unique_index_drift.sql` (new, NOT yet applied)
 
-Before the serial scheme was rewritten (see the *Serial scheme wired* entry below, and `lib/core/serials.ts`), bag serials were minted by scanning `bag_tags` for the highest number and adding one. That produced **wrong and skipping serials**: numbers allocated to bags that were never printed, sequences jumping, and counters shared across products that should each have had their own. The rewrite fixed the cause; the bad rows it left behind were **removed by hand from the database, across several sessions**, before this one.
+Phase 0 of the capture-module rework. No product behaviour changes — this is the safety net that the rest of the work depends on. Adding a feature to one capture section has repeatedly broken another, and there was nothing in place to catch it.
 
-### Why this matters and why it is in the log
-
-The removals were correct, but they were done as ad-hoc statements: no migration, no backup table, and no record of which serials went or when. For an FSSC-relevant table that is a traceability gap — the rows are gone and nothing says a person decided that, or why. Worth writing the specifics in below while they are still known.
-
-**Still to fill in — only Alyssa has these:** the dates the corrections ran, which serials were removed, and from which tables (`bag_tags` / `prod_bagging` / `scan_events`). If any of it is recoverable from session history it belongs here rather than in a transcript.
-
-### The consequence found today
-
-Quality's awaiting-QC queue held **42 bags with no Final QC at all** — 2026-08-21 through 2026-09-02. Not a broken link: no final `sd_run` carries any of those 42 serials, and the runs that do exist for the same lot and day belong to bags that already cleared (Step 8a in `20260902_001`). On 26-08 GS-0417 Fine Leaf, three runs exist for bags `013/014/015` and the six still pending are `016`–`021`.
-
-**These are that period's bags.** Their serials came from the faulty allocator, and the sampled counterparts were among the rows removed by hand — so most of them will never have a sample, because the sample record went with the row it pointed at. They are not going to clear by being sampled again.
-
-`qms.bag_qc_waivers` (`20260902_003`) is how they close: an attributable "not sampled, here is who accepted that and why", never a pass. The reason text in that file now names this cause rather than the sampling plan.
-
-### Deferred, deliberately
-
-The queue asks for a Final QC per **bag** while QC samples per **lot**, so bags the sampling plan does not cover will keep arriving in it. That needs `qc_required` to reflect what the plan actually requires, and it is a Quality policy decision, not a data fix. **Agreed to build in a later session** — the waiver clears today's backlog without pretending the policy question is answered.
-
----
-
-## 2026-09-02 — Alyssa (Sieving: stop the changeover duplication at source; one mass balance on Capture Overview; repair script for both tables)
-
-**Files changed:** `components/production/capture/SievingCapture.tsx`, `components/production/capture/CaptureOverview.tsx`, `app/(app)/production/capture/[section]/page.tsx`, `lib/production/self-heal-reconcile.ts` (new), `supabase/migrations/20260902_001_repair_sieving_changeover_duplicates.sql` (new — **not applied**, run by hand)
-
-Closes out the 2026-08-31 changeover incident. Everything before this was display-side: the wrong figures were hidden, but the duplicate rows were still being **created** on every page load, and the repair script only covered `prod_debagging`.
-
-### Rows are no longer duplicated on page load
-
-- **Root cause.** `SievingCapture` self-heals its `debag` and `outputs` arrays from the ledger on mount, and both reads are scoped `.eq('session_id', …)`. But a session can hold several **batches** (a grade changeover creates a second one mid-shift), the capture screen mounts **one** batch at a time (`key={active.id}`), and `persist()` writes the mounted batch's array back to those same session-scoped rows. So the batch on screen treated every sibling batch's row as missing and adopted it, and the next save made the copies permanent. Every load doubled them — 8 → 16 → 32 → 64 → 128 → 258 rows for 41 physical bags.
-- **Fix.** The capture page now hands each batch the row identities its **siblings** already hold, and the self-heal restores only the surplus. New `lib/production/self-heal-reconcile.ts` does the reconciliation on **multiplicity**, not set membership: two ledger rows sharing an identity against one held row means one genuinely is missing and must come back, which a `Set` cannot express.
-- **The two self-heal effects are now one.** `patch` is `onChange({ ...value, ...p })` over the effect's own captured `value`, so two effects each resolving their own query and each patching from the same mount-time closure meant whichever landed second silently overwrote the other's restored rows with the mount-time version.
-- Restoring still never removes anything and never writes to `bag_tags`/`prod_debagging` — it remains a read-and-backfill of the display.
-
-### One mass balance on Capture Overview
-
-- The Overview now shows **a single mass balance**, computed the same way as the production order page: **Total Output − Total Input**.
-  - **Total input** — everything debagged, plus machine spillage, plus the bucket elevator carried in from yesterday. That carry-over is always this run's own variant: `production.bucket_elevator_log` keeps conventional and organic as separate pools and a shift can only draw on its own family's balance, so there is nothing to exclude at this level.
-  - **Total output** — bags bagged out, plus half-bag **top-up increments** (the weight added into an older bag today, never that bag's full weight). Top-ups are a side-channel write that never reaches a batch's `outputs`, so every total on this screen was short by exactly that weight until now.
-  - **Bucket elevator left for tomorrow** is work in progress, not product: excluded from output, counted on neither side, and shown separately below the total.
-  - Read as out − in, so the normal case (moisture, dust, spillage) is a negative number that says "material lost" at a glance. Flagged outside ±1% of total input.
-- **The debagging and bagging cards now use the same names and the same arithmetic as the panel** — "Total input", "Total output" — so the balance can be checked against the cards line by line. Previously the bagging card's "Total out" folded the carry-over in while the balance did not, which is exactly the "same figure shown two inconsistent ways" that reads as confusion on the floor.
-- Everything the balance leaves out is named underneath it, in kg: the carry-over, the top-ups, and any duplicate rows still being hidden.
-- **Deleted** the `SHOW_DERIVED_FIGURES` flag and the `YieldStrip` (kg in / kg out / yield / tons / bags / balance tiles + output split) from `CaptureOverview` — the figures it gated are replaced by the single balance, so the dead code goes rather than sitting switched off.
-
-### Production order — the grade per bag
-
-Monday 31-08 ran Export, then Export Blend after the changeover, and the order showed neither split.
-
-- **The order header took the first batch's grade for the whole day**, so a changeover run read as pure Export. It now names every grade the day ran (`Export + Export Blend`) and, when there is more than one, states outright that the Grade column identifies each bag.
-- **Neither table showed a grade at all.** `prod_debagging.grade` was already correct per row and simply was not rendered; output bags had no grade because `bag_tags.destination` was never selected. Both tables now carry a **Grade** column, and a group holding more than one grade shows the per-grade kg split on its header. A single-grade run gains no noise.
-- Confirmed against the floor's sheet for 31-08: **13 Export, 8 Export Blend**, matching the stored grades exactly. The data was right; only the display was missing.
-
-### Each top-up line explains itself
-
-Under every top-up on the Capture Overview, a second line reads the bag's whole story from its `scan_events` rows:
-
-> `+22.0 kg counted in today's output.` This bag was bagged at 300.0 kg and now weighs 337.0 kg. Topped up 3 times in total — 15.0 kg on 28 Aug, 22.0 kg on 31 Aug, each counted on the day it was added, not today.
-
-The reason it earns the space: a bag topped up three times over three days has all three on its record, and each counted on **its own** day. Seeing `+22.0 today` beside `15.0 on 28 Aug` is what stops the earlier increments looking missing — without it the figure invites exactly the wrong correction.
-
-The history is read from `scan_events`, which is the log and is never rewritten. It is shown to explain the total, never added to it.
-
-### Capture screens were SHORT by any same-day top-up
-
-The Sieving capture total and the Capture Overview both excluded a top-up whose bag had been bagged in the same record, on the stated grounds that it was "already inside that bag's captured weight". That premise was wrong: `HalfBagTopUpModal` never touches `draft_data` — it says so at the top of the file — so the increment lives only in `bag_tags` and `scan_events`. A bag captured at 300 kg still reads 300 kg locally after a 22 kg top-up, so excluding the increment left the displayed output **short by it** rather than guarding a double count.
-
-Every increment the day recorded now counts, wherever the topped bag came from. Only the increment, and only that day's: a top-up on a later day is that day's output. The full history of a bag — how many times, when, how much — stays on its `scan_events` rows, which are never rewritten, and is what the top-up activity list and Bag Tracking read.
-
-### Production order counts the top-up increment, never the bag's later total
-
-`addFreshWeightToBag` overwrites `bag_tags.weight_kg` in place — current + increment — while the `scan_events` row it writes alongside carries only the **increment** and is never rewritten. The order page took each bag's kg from `bag_tags.weight_kg`, i.e. the bag's weight *today*.
-
-So a bag bagged at 300 kg on 31-08 and topped up 22 kg on 01-09 had been reading **322 kg on the 31-08 order** ever since, while 01-09 separately counted the 22 kg as a fresh top-up. The same 22 kg on two orders, and the earlier day overstated by it.
-
-- A bag's kg on an order is now its **starting weight** — the earliest `scan_events` row, which is never rewritten — plus only **that day's own** top-up increments. A top-up from another day stays that day's output, as a `freshTopUp`.
-- Bags predating event logging (no weight on any event) fall back to `bag_tags.weight_kg` and keep the old behaviour.
-- `20260902_004_topup_inflation_impact.sql` (read-only) lists every affected bag with what the order used to show, what it will show, the gap, and the dates it was topped up — plus per-order totals, so the correction is not a surprise on a day already signed off.
-
-Capture Overview was never affected: its outputs come from `draft_data`'s captured weight, not `bag_tags`.
-
-### Capture Overview — one balance for the whole day, and top-ups shown where they land
-
-- **The mass balance now covers both shifts.** New `dayProductions` prop, used for the balance and nothing else: the debagging and bagging tables stay this record's own capture so they still match the Capture tab bag for bag. The panel header says which scope it is (`full day, both shifts` vs `this shift`) and the note underneath says outright that the tables above are smaller and why — the two disagreeing silently is what caused the earlier confusion.
-- Each shift's productions are tagged with their own shift, so Sieving's bucket elevator is read in the right direction on both sides of the day (morning consumes yesterday's, afternoon leaves tomorrow's).
-- **Half-bag top-ups now appear under the product they went into**, as a line carrying the same facts as the "Half-bag top-ups this shift" card — serial, product, variant, batch, time, kg. The product's own heading shows `+N top-up` beside its bagged weight, so the group explains its own figure instead of the weight only surfacing as an unexplained `+22.0 kg` on Total output.
-- A top-up into a product **nothing was bagged of today** gets its own heading rather than vanishing from the list while still counting toward the total.
-
-### Batch numbers, and per-batch totals
-
-- **Debagging now opens with a `Per batch` table** — batch number, bag count, kg — above the per-type tables, which still list every bag. "How much of each batch went in" is now read, not counted by eye.
-- **Every output bag shows its batch number.** `OrderBagRow` never carried `lot_number` and `bag_tags.lot_number` was never selected, so a Fine Leaf or Coarse Leaf bag on the report was a serial and a weight with nothing tying it to its material. Both fixed, and a product group holding more than one batch shows the per-batch kg and bag count on a strip above its bags.
-
-### Capture Overview — one balance per shift, split only on a changeover
-
-One grade, one mass balance, no extra table. When the record holds **more than one grade**, a `By grade` block appears under the balance with input kg, output kg and bag count per grade. Same rule as the production order: no balance per grade, because the elevator carries material across the changeover and what went in as one grade can come out as the other. Unattributable weight (elevator, spillage, top-ups) gets its own line so the split adds up.
-
-### The production order summary splits by grade
-
-The printed order for 31-08 read `Conventional · Grade A`, one raw grade letter, over `TOTAL INPUT 14 385.0 kg` / `TOTAL OUTPUT 14 103.0 kg`. Correct to the kilogram and misleading: the day ran Export and Export Blend, and nothing on the report distinguished them.
-
-- **A `By grade` table in the mass-balance summary** — input kg, output kg and bag count per grade. Only appears when the run actually held more than one grade.
-- **No balance per grade, deliberately.** The tower is one physical stream: the bucket elevator carries across the changeover, spillage belongs to no single grade, and material in the machine when the grade changed went in as one and came out as the other. Input and output are captured per bag and are real; a per-grade balance would be false precision. Anything unattributable gets its own line, so the split still adds up to the totals above it.
-- **Print fix.** The input/output tables live in `overflow-x-auto` wrappers with min-widths. On screen they scroll; on paper there is nothing to scroll, so the rightmost column is cut off silently — which would have been the new Grade column. `@media print` now lets them wrap and drops the min-widths.
-
-### Quality's awaiting-QC queue — closing a bag that was never sampled
-
-The queue stood at 62. About 20 were the changeover's serial-less twins and Step 3b deleted those; they were never physical bags. The other **42 are real bags with no Final QC at all** — Step 8a established that no final `sd_run` carries their serial, and the runs that do exist for the same lot and day belong to bags that already cleared. There was no broken link to repair (Step 8b looked and found none). QC samples some bags per lot; the queue asks for a Final QC per **bag**, so every bag the sampling plan doesn't cover sits there permanently.
-
-- **Not fixed by writing the missing `sd_runs`.** A final run carries a needle count, a leaf shade and a QC's name; manufacturing 42 of them to empty a screen would put fabricated readings into the FSSC record against a real operator. Declined.
-- **New `qms.bag_qc_waivers`** (`20260902_003`) records an explicit, attributable decision instead: this bag was not sampled, here is who accepted that and why. `v_pending_bag_qc` skips a waived bag — `CREATE OR REPLACE` with `SELECT *`, so no dependent view is dropped and `v_bag_qc_status`/`v_bag_events` are untouched (rebuilding those is what once took the queue from 8 rows to 847). Deleting the waiver row puts the bag back.
-- **It never reads as a pass.** The Sieving QC panel now shows `N closed unsampled` with the reason and who accepted it. A shorter queue with no visible reason is the same failure as silently hiding the duplicate rows.
-- **The standing problem is policy, not data:** per-bag QC vs per-lot sampling. Waiving each backlog is not a fix — `qc_required` needs to reflect what the sampling plan actually requires. Flagged for Quality.
-
-### Repair script — now covers `prod_bagging` and `draft_data`
-
-`supabase/migrations/20260902_001_repair_sieving_changeover_duplicates.sql`. **Not applied by CI — run by hand, one step at a time.** Steps 1, 2 and 6 are read-only.
-
-- **`prod_debagging`** — deduplicated on `(session, lot, bag label)`, because a farm bag is a physical object debagged once. A row with a **blank** label is never deduplicated: two different unlabelled bags would collapse into one and under-count.
-- **`prod_bagging`** — clears the serial-less twins. `persist()` nulls a repeated serial to get the write through and keeps the row, so each copied bag survived as a `—` row on the production order and an unidentified bag in Quality's awaiting-QC queue. A serial-less row is only dropped when it matches a serialed bag on session + product + weight + bagging time; a genuine serial-less by-product will not coincide on all four.
-- **`prod_sessions.draft_data`** — deduplicated too, and this is the step that must not be skipped: both tables are **rebuilt from `draft_data`** on every save, so deleting the rows alone undoes itself the moment an operator next touches the session.
-- **Nothing is lost.** Every row and every `draft_data` document is copied whole into `production.repair_20260902_backup` before being touched; step 6 gives the statements to put any of it back.
-- **It refuses to run** if any bag identity has rows that disagree on weight — those are not copies, and dropping one would lose a real figure.
-- **Deliberately no `bag_tags` cleanup.** The duplication never created a `bag_tags` row (the self-heal reads it and copies bags *into* `draft_data`, never back), so `bag_tags` already holds exactly one row per physical bag and is the source of truth on the output side. Voiding tags on the strength of `draft_data` would invert that and destroy real bags whenever `draft_data` is behind — the very condition the self-heal exists to recover from.
+- **`ARCHITECTURE.md`** now records the Core/Feature boundary, the "adding a feature" checklist, and the rules that exist because of a specific incident (the 44% Fine/Coarse Leaf bag loss, the day Sieving Tower's bagging rows emptied, the recurring hidden-field save failures). Imported from `CLAUDE.md` with `@ARCHITECTURE.md`, the same idiom already used for `@AGENTS.md`, so it loads as context in every session.
+- **ESLint now enforces the boundary.** `lib/core/**` cannot import from `features/**`, `app/**`, React, or the Supabase client; features cannot deep-import each other's internals. Verified against a deliberate violation — it errors with a pointer to the relevant section of `ARCHITECTURE.md`. Note `npm run build` runs with `DISABLE_ESLINT_PLUGIN=true`, so the build does **not** catch this; CI runs `npm run lint` as its own step for that reason.
+- **First tests in the repo.** There were none, and no runner installed. Added vitest plus characterisation tests over the first two extracted core modules — 21 tests, all green. These pin *current* behaviour so the extraction cannot silently change what a capture screen computes.
+- **`lib/core/num.ts`** — the `n()` numeric parser, previously byte-identical in **12 source files**, two of which were added recently, so the duplication was still spreading. Behaviour preserved exactly, including two quirks now pinned by tests rather than silently fixed: only the first comma is replaced (`n('1,234')` is `1.234`, not `1234`), and a genuine zero is indistinguishable from unparseable input.
+- **`lib/core/metrics.ts`** — `kgPerHour`, `yieldPct` and `round1`, previously hand-written in seven places across the shift report, orders KPIs, orders list, order detail and supervisor analytics. The two historic yield spellings (`round1((out/in)*100)` and `Math.round((out/in)*1000)/10`) are proven equivalent by test before any call site moves.
+- **`components/shared/FeatureBoundary.tsx`** — the app had **no error boundary anywhere**, so any component that threw during render blanked the whole route. Optional features now render inside one: the feature is replaced by a small notice and the operator's capture screen survives.
+- **`lib/config/flags.ts`** — build-time feature flags, deliberately plain booleans rather than a runtime slot/hook registry, so control flow stays visible to TypeScript.
+- **CI workflow** on PRs to `staging` and `main`, with a deliberate split between hard gates and ratchets. Hard gates: `npm run lint:boundaries` (the architecture rule) and `npm run test`. Ratchets: typecheck and full lint fail only if the error count **rises**. That split exists because the repo does **not** currently typecheck or lint clean — there are **36 type errors and 3,028 lint errors**, and `next.config.js` sets both `DISABLE_ESLINT_PLUGIN=true` and `typescript.ignoreBuildErrors: true`, which is how they accumulated unnoticed. Demanding zero would put CI permanently red and train everyone to ignore it; demanding "no worse than today" stops the backlog growing while it is paid down. None of the errors are in the new code. Baselines are in the workflow and should only ever be lowered.
+- **Schema drift caught:** `prod_bagging_session_bag_uidx` (unique over `session_id, bag_no`) exists in the live databases but in **no migration file**, while the capture save path is written against it — there is a comment in the capture page explaining that `bag_no` is handed out from free numbers precisely because that index rejects duplicates. Migration added so a database rebuilt from migrations alone matches production. **Not yet applied** — it needs the duplicate pre-flight check in the file run first.
+- **`lib/core/serials.ts`** — serialization pulled out as its own core module, since it is a core feature that must generate correctly. It now owns all four formats (`{CODE}-{DDMMYY}-{NNN}`, Sieving, Granule lot-or-GL stem, Blender run/bag, Pasteuriser range) plus the primitives that were duplicated between them — the `ddmmyy` derivation appeared three times and `seqOf` was byte-identical in two. Adds the parser that never existed. 25 tests.
+- **Two real defects found while pinning serial behaviour**, both inherited, both now documented and covered by tests rather than silently fixed:
+  - `seqOf` returns **0** for a five-digit sequence, not the number — the regex requires at most four digits before end-of-string. Because sequence seeding takes a max over that, a stem which ever reached 10000 bags would go invisible to the scan and the next bag would be numbered 001, **colliding with an existing bag**. Unreachable today (a stem is one lot or one section-day, and the scan is capped at `limit(4000)`); reachable the moment a stem's scope widens.
+  - `ddmmyy` only counts hyphen-separated parts without checking they are numeric, so a three-part non-date yields a garbage stem rather than the intended `000000` fallback. Harmless while the date always comes from the session record, not from operator input.
+- **Confirmed the concurrency defect in serial allocation.** Granule and Sieving both seed the next number by reading `bag_tags` with `ilike prefix%`, taking a local max and adding one. Two operators adding a bag in the same moment both read the same max and both mint it — a duplicate serial on two physical bags. The comment on `makeSerial` already said "Upgrade path: DB sequence"; the fix is a `next_bag_serial` function mirroring the `next_job_card_no` RPC already used by the job-card pages.
+- **Playwright set up** with a capture smoke spec across all six sections — asserts the screen loads, its tabs survive, and nothing threw during render, visiting the Overview tab explicitly because that is where the section union is duck-typed. Auth reuses a session state you capture yourself once; SSO is not scripted and no credentials are stored. Specs skip with an explanatory message when that file is absent, which is also why E2E is deliberately **not** wired into CI — with no session it would be a green tick proving nothing.
+- **`e2e/concurrent-save.spec.ts`** reproduces the two-operator save race and is marked `test.fixme` — expected to fail against the current save path. It is the acceptance test for the ledger cutover and must not be deleted to make a run clean.
 
 ---
 
@@ -1487,14 +3391,6 @@ The queue stood at 62. About 20 were the changeover's serial-less twins and Step
 
 ---
 
-## 2026-08-28 — Alyssa (Sieving capture: fix explicit Save/Submit racing autosave and dropping input/output rows)
-
-**Files changed:** `app/(app)/production/capture/[section]/page.tsx`
-
-Reported live on the floor: Sieving Tower operator saw "your data is saved but it did not upload into the input/output rows", console showing `409` conflicts on `prod_debagging`/`prod_bagging` with `23505 duplicate key value violates unique constraint` on `prod_debagging_session_bag_uidx` / `prod_bagging_session_bag_uidx` / `prod_bagging_session_serial_uniq`.
-
-- **Root cause:** `persist()` does delete-then-insert against `prod_debagging`/`prod_bagging` on every save. The debounce/hide-flush/backstop autosave paths were already serialized through `persistChainRef` (added in PR #830) so they couldn't race each other — but `saveDraft()` (the explicit "Save draft" button, and `submitSession()` which calls it) called `persist()` directly, bypassing that queue entirely. If the operator tapped Save/Submit while an autosave was mid-flight, the two delete-then-insert sequences interleaved: one call's insert landed, then the other's insert collided with it, tripping the unique constraints and dropping that save's rows (draft_data still had them; the structured tables didn't).
-- **Fix:** extracted the `persistChainRef` serialization into a shared `queuePersist()` helper and routed `saveDraft()` through it as well, so autosave and explicit Save/Submit can never run `persist()` concurrently for the same session. No schema change; self-healing for already-affected today's sessions since `persist()` rewrites both tables from the browser's current `draft_data` on every successful call.
 ## 2026-08-28 — Alyssa (Capture landing page: fix shift/date going stale on an open tab)
 
 **Files changed:** `app/(app)/production/capture/page.tsx`
@@ -1503,30 +3399,6 @@ Reported: a Capture tab left open overnight still showed "Thursday 27 August · 
 
 - **Root cause:** `date`/`shift` were computed once via `useState(productionShiftNow())` on mount and never recomputed, so the page's data queries (and header text) stayed pinned to whatever shift was current when the tab was opened — a device left running across the 07h00/16h00 changeover never picked up the new shift without a manual reload.
 - **Fix:** added a 60s interval that recomputes `productionShiftNow()` and rolls the state forward the moment the resolved (date, shift) actually changes, which re-triggers the existing data-fetch effect.
-
-## 2026-08-28 — Alyssa (Mass balance formula fix, checks VSD sign-off block, live AI summary)
-
-**Files changed:** `app/(app)/production/orders/[id]/page.tsx`, `components/production/capture/ChecksPanel.tsx`, `lib/production/checks-db.ts`
-
-- **Mass balance: exclude bucket-elevator WIP from output** — total output was `bagsOutputKg + bucketCarryOverKg`, folding the afternoon/night bucket elevator's unprocessed carry-over (left in the tower for tomorrow) into today's output. That's WIP, not finished bagged product, and inflating output with it masked genuine over/under-yield (a run reading +4.2% when the real bagged-vs-input variance was different). Total output is now bagged product only; the carry-over still displays, purely informational. Applied the same real-ledger-rows fix to the per-shift Input/Output/Balance figures, which previously read from the `prod_mass_balance` snapshot — stale under the same conditions the whole-run total used to be before `ec293c8`.
-- **Checks: fix the first VSD reading of a shift silently failing and blocking sign-off** — `ensureCheckRecord()` did a non-atomic SELECT-then-INSERT against `check_records`, which has a real `UNIQUE(section_id,date,shift)` constraint. `HourlyVsdPrompt`'s auto-popup and `ChecksPanel`'s own VSD widget both call this; on the very first reading of a shift (no record exists yet) both can pass the SELECT before either INSERT lands, so the loser hits a `23505` conflict and throws — silently losing that reading. Since `sign()` hard-blocks on any check still "pending" and the VSD check's status is gated on having a saved reading, this is what blocked operator sign-off outright. Now treats `23505` as success: re-selects and returns the row the other caller just created instead of discarding the reading.
-- **Checks: AI summary now live through the shift, not just at sign-off** — was only ever generated once, right after `sign()`. Now also regenerated (best-effort, fire-and-forget) whenever the existing autosave debounce actually writes new check data, so it reflects the shift's actual state throughout instead of only appearing — possibly based on stale/incomplete data — at submission.
-
-## 2026-08-27 — Alyssa (Sieving order page: recover stranded bags/debagging, void-on-delete, mass balance from real rows)
-
-**Files changed:** `lib/production/order-detail.ts`, `app/(app)/production/orders/[id]/page.tsx`, `app/(app)/production/capture/[section]/page.tsx`, `app/(app)/management/page.tsx`, `app/(app)/quality/sieving/page.tsx`, `app/(app)/tags/page.tsx`, `components/count/monthly/MonthlyBatchLedger.tsx`, `components/production/capture/SievingCapture.tsx`, `components/production/capture/RefiningCapture.tsx`, `components/production/capture/GranuleCapture.tsx`, `components/production/capture/BlenderCapture.tsx`, `components/production/capture/OutputPicker.tsx`, `components/shared/BatchReconciliationPanel.tsx`
-
-Investigated a 26 Aug sieving discrepancy: the order page showed fewer bags/inputs than actually captured, and a stale mass balance. Root cause traced to a mid-shift code change (rename of `local_or_export` → `grade`, PR #838) that made `prod_debagging` writes fail silently for a period, plus `bag_tags` rows that never got their `session_id` stamped by `persist()`.
-
-- **`loadOrderDay`: recover stranded output bags** — `bag_tags` rows written with `session_id: null` (when `persist()` never ran or failed) were invisible to the day's `WHERE session_id IN (ids)` query. Now cross-references draft_data output serials against what the query returned, fetches any missing `bag_tags` rows by serial, and attributes them to the correct session.
-- **`loadOrderDay`: draft_data fallback for missing debag rows** — when `prod_debagging` has zero rows for a session (insert failed silently), synthesises debag/spillage/blend-input rows from that session's own `draft_data` so the order page never shows "No inputs recorded" against a valid mass balance.
-- **`loadOrderDay`: draft_data fallback for missing output bags** — when an output bag exists in neither `bag_tags` nor `prod_bagging` (both writes failed), synthesises it from `draft_data.outputs` so the bag count/list stays correct.
-- **Mass balance computed from actual debag/bag rows** (`ec293c8`) — total input was read from the `prod_mass_balance` snapshot, which goes stale when `persist()` fails or the session is submitted. Now computed directly from the loaded debag rows, matching how output is already computed from actual bag data.
-- **Bag delete: void `bag_tags` + clean orphaned `prod_bagging` + fix QC serial leak** (`2eede95`) — deleting an output bag now sets its `bag_tags.status = 'voided'` so it stops counting in mass balance and isn't restored by the self-heal effect on reload. `persist()` also cleans up orphaned `prod_bagging` rows whose serials are no longer in the current draft_data (previously these "held" rows inflated the output total). QC sieving scan events are now gated on `runType==='final'` to stop an In-Process run's stale serial from attaching a QC scan to the wrong bag.
-
-- **Sieving: guard `addOutput()` against overlapping calls dropping a bag** — `addOutput()` awaits a DB round-trip (`nextSievingSerial`) before writing `bag_tags`/`scan_events`, then calls `patch()` with whatever `value.outputs` it started with. Two overlapping calls (e.g. a double-tap before the confirm button had a chance to disable) each wrote their own `bag_tags` row correctly (sequential serials, no collision), but whichever `patch()` landed last replaced `outputs` wholesale from its own stale snapshot — silently dropping the other call's bag from the draft, and permanently orphaning its `bag_tags` row (it never reaches `draft_data` for `persist()` to later stamp a `session_id` onto). This is what happened live on 27 Aug: STFL-270826-001's own `bag_tags` row exists with `session_id` still `null`, while 002 (the call whose `patch()` won) is the only one that made it into the draft. Fixed with a synchronous ref guard so a same-tick second call bails out before ever reaching the network, plus a `submitting` state passed down to `OutputPicker` to disable its confirm button and give visible feedback while a request is in flight. This is the likely mechanism behind STFL-260826-013 too (a real bag whose printed serial didn't match its physical tag, corrected by hand) — same class of bug, not something the display-side recovery above can catch, since a dropped bag never reaches `draft_data` in the first place.
-
-Confirmed against the real 26 Aug sessions (`60bb8536` morning, `c06c7eef` afternoon, both `submitted`, same `run_id`) — draft_data shows 14 Fine Leaf bags in the morning and 10 in the afternoon, matching what was reported; the order page reads both sessions' debagging/bags together since they share one `date`.
 
 ## 2026-08-27 — Alyssa (Production Orders: stop background refresh from wiping in-progress modals; add timestamped notes)
 
@@ -1541,31 +3413,26 @@ Reported: while typing a "Request reopen" message on Production Orders, the page
   - Added `formatSAST()` to `lib/production/shifts.ts` — a shared UTC→SAST date-time formatter for the note timestamps.
 - Migration `20260827_001_po_notes.sql` still needs to be run against the staging (then production) Supabase project before the notes feature will work — see the file's header comment.
 
-## 2026-08-27 — Alyssa (Production fixes: grade rename promote, deploy cache, mass balance recalc)
+## 2026-08-27 — Alyssa (Half-bag top-up: fold added weight into Sieving Tower's own output total and bag cards, and into Overview's mass balance — not just a separate feed)
 
-**Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `components/production/capture/SievingCapture.tsx`, `components/production/capture/ShiftBagLog.tsx`, `lib/production/inventory.ts`, `lib/production/order-detail.ts`, `lib/supabase/database.types.ts`, `lib/production/capture-config.ts`, `.github/workflows/deploy-production.yml`, `.github/workflows/deploy-staging.yml`, `app/(app)/production/orders/[id]/page.tsx`
+**Files changed:** `components/production/capture/SievingCapture.tsx`, `components/production/capture/CaptureOverview.tsx`, `app/(app)/production/capture/[section]/page.tsx`
 
-**PRs:** #838, #839, #840, #841, #844
+Reported (with screenshot): a top-up's weight never showed up in "Total bagged out" or on the topped-up bag's own card on the live Capture tab — it only appeared as a separate line in the "Half-bag top-ups this shift" feed below. Root cause: `HalfBagTopUpModal` deliberately never touches a session's own `draft_data`/`value.outputs` (mass-balance-sensitive, side-channel write by design), so nothing ever pulled the addition back INTO the numbers the operator is actually looking at — the debagged material a top-up came from was counted as input, with nothing added on the output side to balance it. A real, growing mass-balance shortfall, not just a display quirk.
 
-- **Promote `local_or_export` → `grade` to production** (PR #838) — migration `20260826_002` renamed the column on the production DB but the code on `main` was never updated. All seven files updated: `SievingCapture.tsx` (DebagRow interface, self-heal query, draft_data migration effect), `ShiftBagLog.tsx`, `page.tsx` (buildDebag for sieving + blender), `inventory.ts` (debaggedBatches/debaggedBags queries), `order-detail.ts` (OrderDebagRow interface), `database.types.ts`, `capture-config.ts` comment. Root cause of PGRST204 errors on every prod_debagging save on production.
-- **Deploy: clear `.next` cache before build** (PR #839) — production deploy served old compiled code despite `origin/main` having correct source. Root cause: Next.js incremental build cache (`.next/cache`) reused stale compiled chunks. Added `rm -rf .next` before `npm run build` in both staging and production deploy workflows.
-- **prod_debagging: delete-then-insert** (PR #840) — `prod_debagging_session_bag_uidx` enforces unique `(session_id, bag_no)` on production (constraint added outside repo migrations). The insert-then-delete pattern hit a 409 conflict on every save. Switched to delete-then-insert; draft_data is the source of truth and the self-heal effect reconstructs rows if the insert fails.
-- **Order detail: sort debags by time** (PRs #841, #844) — debag rows were interleaved by `bag_no` across shifts. Now sorted by `bagging_time` (falling back to `created_at`), matching how output bags are already sorted. Added `bagging_time` and `created_at` to `OrderDebagRow` interface.
-- **Order detail: match "Farm Bag" product type** (PR #841) — `inputType()` only matched `"500kg Farm Bag"` but `buildDebag()` now writes `"Farm Bag"`. Broadened regex to `/farm\s*bag/i` so both old and new rows display as "Bulk Bag".
-- **Submitted sessions can save** (PR #844) — `flushSave()` blocked all saves for submitted sessions, preventing mass balance recalculation after data corrections. Now only approved sessions are fully locked. Submitted sessions allow saves so debag/bag rows and mass balance update while sign-off status stays unchanged.
+- `sievingTotals()` gained a `topUpKg` parameter, added straight into `outputs` — the single source both the live "Total bagged out" tile and the actual `prod_mass_balance` row saved on submit/sign-off now read from.
+- `SievingCapture`'s own bag cards now show each bag's CURRENT weight (original + top-up), with a violet `(+Xkg top-up)` marker — no more stale weight sitting on screen after a top-up.
+- `persist()` in `page.tsx` now adds the session's own top-up kg into `mbB` before writing `prod_mass_balance` — the number used for the actual mass-balance check and sign-off, not just what's shown live.
+- `CaptureOverview`: same-day top-ups now bump the topped-up bag's own row (and its lot/product totals) instead of only showing as a disconnected sub-row that never counted toward `baggedOnlyKg`/`totalOut`.
+- All three restricted to `mode==='production'` ("from today's production," no source bag) — a `mode==='existing'` (bag-to-bag) transfer moves weight OUT of a source bag already counted as output when THAT bag was first bagged, so adding it again here would double-count it.
+- **Scope**: this fix is Sieving Tower + Overview only, matching the reported screenshot — Refining/Blender/Granule have the identical underlying gap in their own `xTotals()` functions and "Total output" tiles, but each attributes output across multiple named slots (A/B/C/D) rather than one flat total, so replicating this safely needs its own pass per section rather than a blind copy-paste.
 
-## 2026-08-26 — Alyssa (Production Orders: fix hourly VSD prompt retriggering + mobile overflow on order rows/panel headers) [promoted to production]
+**Not promoted to production yet — staging only, pending testing.**
 
-**Files changed:** `components/production/capture/HourlyVsdPrompt.tsx`, `app/(app)/production/capture/[section]/page.tsx`, `app/(app)/production/orders/page.tsx`, `components/production/ui/kit.tsx`
+## 2026-08-26 — Alyssa (Bag tags: fix print button using old CDN-dependent label design)
 
-Reported: on a phone, the hourly VSD (infeed speed) reading prompt on Sieving's capture screen "just opens when the capture screen is open" and never waits the full hour before popping up again for a new reading. Root cause: the capture page only rendered `<HourlyVsdPrompt>` while on the Checks/Overview-adjacent tabs (`{tab !== 'overview' && <HourlyVsdPrompt .../>}`), so it unmounted and remounted every time the operator switched tabs — wiping its "last reading" state back to `null` each time. A freshly-mounted component with `lastVsd === null` is, by design, immediately "due" (no baseline reading yet), so the modal popped up again right away regardless of how recently a reading had actually been logged.
+**Files changed:** `app/(app)/tags/page.tsx`
 
-- `HourlyVsdPrompt` now takes a `visible` prop instead of being conditionally mounted — it stays mounted across tab switches (state, and the hour timer, now survive), and is just hidden while `visible` is false (e.g. the Overview tab).
-- Added a `loaded` flag so "due" isn't judged until the last-reading DB read has actually resolved — previously the very first render (before that fetch returned) always evaluated `lastVsd === null` → due, causing a visible flash-open on slower mobile connections even when a recent reading already existed. Either way, the actual gate is always the true last-recorded timestamp read fresh from `production.check_events` on mount and on a 30s poll — not anything cached client-side — so a reading logged an hour or a minute ago is judged correctly however the page was reached.
-- Production Orders list: an order row's trailing status/balance pills and action icons (reopen, traceability, view order, manage menu) were plain `shrink-0` siblings with no wrap — on phone widths they didn't fit and got squeezed/clipped off-screen. The row now wraps them onto their own line under the record name instead.
-- `PanelHead` (shared by Production Orders, the Supervisor Hub and the Shift Report) now wraps and truncates instead of overflowing when a long title + meta + action badge don't fit on one line at phone widths.
-
-Verified on a phone against staging.
+- **Print button fix** — `printTagLabel()` was still using an old inline HTML template that loaded JsBarcode from cdnjs CDN (which fails when the CDN is blocked or slow). Replaced with `printLabelAuto()` from `lib/production/label-print.ts`, which uses the production label design (100×49.2mm barcode-hero layout) with inline Code128 encoding — no external dependencies. Same function the weight-transfer flow already uses.
 
 ## 2026-08-26 — Alyssa (prod_debagging: insert-then-delete to prevent data loss on failed saves)
 
@@ -1638,7 +3505,34 @@ Cause: `gemini-2.5-flash` (the primary model in the fallback list since the 2026
 
 - `geminiOnce()` now sends `thinkingConfig: { thinkingBudget: 0 }` in `generationConfig`. This is a structured-extraction task with no need for extended reasoning, so thinking is disabled outright rather than padding every per-workflow token budget to cover an unbounded thinking phase.
 
-## 2026-08-26 — Alyssa (Sieving Tower capture: the resort has to run even when nothing is missing) [promoted to production]
+## 2026-08-26 — Alyssa (Half-bag top-up: pre-print a target-weight tag, and give topped-up bags their own black-band label)
+
+**Files changed:** `lib/production/live-types.ts`, `lib/production/scan-utils.ts`, `lib/production/label-print.ts`, `lib/production/label-pplb.ts`, `lib/production/label-zpl.ts`, `components/production/capture/HalfBagTopUpModal.tsx`
+
+Requested: (1) a way to declare a bag's target weight and print a tag showing it *before* any material is actually added, so whoever fills the bag knows the goal; (2) a distinctive label for bags that have been topped up, showing the date/weight of every addition for morning stock count — as its own design, not a reskin of the plain label. Design approved from a true-scale mockup, with one correction: thermal printers are monochrome, so the "distinctive" band is solid black (matching the existing TYPE/GRADE badge treatment), not the app's usual violet — violet stays a screen-only convention (button, Overview's sub-rows, the activity feed).
+
+- `OutputBag` gained three optional fields — `targetWeightKg`, `originalWeightKg`, `topUps` (chronological `{kg, at}` list) — read by all three label builders to switch into the top-up layout; absent, every label renders exactly as before.
+- New `setBagTargetWeight()` in `scan-utils.ts` — a pure side-channel write to `bag_tags.target_weight_kg`, same pattern as every other top-up write here.
+- `HalfBagTopUpModal`'s target step now has a standalone "Pre-print a target-weight tag" panel: enter a target weight, see "+X kg still needed," save it and print immediately — independent of actually adding weight below it. The existing top-up flow now also carries the bag's target (if any) through to its own reprinted label, showing "reached" or "need +X kg more" alongside the addition history.
+- `buildLabelHtml` (browser/preview), `buildLabelPplb` (Argox, the confirmed-working hardware) and `buildLabelZpl` (Zebra) all render a solid black band ("Topped up" / "Target set") plus a history strip (original bagging → every addition → running total → target status) in place of the plain footer, whenever a bag has top-ups and/or a target set. PPLB/ZPL geometry is adapted from the approved browser design but **not yet verified against a physical print** — no printer reachable from this environment; check the first real print of each variant carefully.
+- **Still needed before this is fully live**: the `20260826_001_bag_target_weight.sql` migration (already committed, PR #822) needs to actually be applied to the staging Supabase project if it hasn't been already — `setBagTargetWeight()`'s update will fail until the column exists.
+
+**Not promoted to production yet — staging only, pending testing.**
+
+## 2026-08-26 — Alyssa (Half-bag top-up: fold top-up history into Overview's own bag rows, add the bag_tags.target_weight_kg column)
+
+**Files changed:** `components/production/capture/CaptureOverview.tsx`, `components/production/capture/HalfBagTopUpActivity.tsx`, `lib/production/scan-utils.ts`, `app/(app)/production/capture/[section]/page.tsx`, `supabase/migrations/20260826_001_bag_target_weight.sql`
+
+Requested: Overview should show a top-up as part of the bag it happened to, in that bag's own place in the existing product/lot grouping — not as a separate bolted-on panel.
+
+- Extracted the "is this scan_events row a top-up, and what does it mean" logic (previously only inside `HalfBagTopUpActivity`) into shared `fetchTopUpEventsForSession()`/`fetchTopUpEventsForSerials()` in `scan-utils.ts` — the session-scoped version for the capture page's own live feed, the serial-scoped version for folding into bags Overview already knows about regardless of which session logged the top-up.
+- `CaptureOverview` now fetches top-up events for every bag serial in its own product/lot grouping and renders each one as a violet sub-row directly under that bag — same visual language as the rest of Half-bag Top-up, folded into the existing hierarchy instead of a separate list.
+- Removed the standalone `HalfBagTopUpActivity` panel from the Overview tab (kept as-is on the live capture tab, under the section's own capture UI, where a separate "what just happened" feed still makes sense).
+- New `bag_tags.target_weight_kg` column (nullable, `CHECK > 0` when set) — groundwork for the upcoming "pre-print a target weight" step in Half-bag Top-up; not wired into any UI yet, so this migration is a safe, inert addition on its own.
+
+**Not promoted to production yet — staging only, pending testing.**
+
+## 2026-08-26 — Alyssa (Sieving Tower capture: the resort has to run even when nothing is missing)
 
 **Files changed:** `components/production/capture/SievingCapture.tsx`
 
@@ -1646,7 +3540,7 @@ Bug in the previous fix, caught before it reached the affected session: the sort
 
 - Both self-heal effects now always compute the sorted merge and compare it against the current array (by content length and per-index reference), patching whenever restoring OR re-sorting would actually change something — not only when there's something new to restore.
 
-## 2026-08-26 — Alyssa (Sieving Tower capture: fix scrambled bag numbering from the earlier self-heal, add the same reconciliation for debagging inputs) [promoted to production]
+## 2026-08-26 — Alyssa (Sieving Tower capture: fix scrambled bag numbering from the earlier self-heal, add the same reconciliation for debagging inputs)
 
 **Files changed:** `components/production/capture/SievingCapture.tsx`
 
@@ -1656,7 +3550,7 @@ Follow-up, reported live: after the earlier Bagging-list self-heal ran, "Bag 1"�
 - Added the same reconciliation for debagging inputs (`prod_debagging` vs. this session's `debag` array) — debag rows have no atomic per-row write of their own (`persist()` deletes and reinserts the whole set from the current array every save), so a `debag` array that reverts to a stale, shorter state after a disruption would otherwise get "confirmed" by the very next save, discarding rows `prod_debagging` genuinely still had. Matched on bag-number label + lot + net weight (debag rows have no serial to match on).
 - **Important limitation, confirmed live**: this can only restore what's actually still in the database somewhere. A debag row that was never written to `prod_debagging` at all (no atomic write path exists for it, unlike output bags) can't be recovered by this or any read-side fix — it needs to be re-entered if the operator's browser no longer has it locally.
 
-## 2026-08-26 — Alyssa (Sieving Tower capture: self-heal the Bagging list from bag_tags when it falls behind) [promoted to production]
+## 2026-08-26 — Alyssa (Sieving Tower capture: self-heal the Bagging list from bag_tags when it falls behind)
 
 **Files changed:** `components/production/capture/SievingCapture.tsx`
 
@@ -1666,7 +3560,7 @@ Reported live: production's Bagging list showed only 2 of a session's 8 output b
 - Never removes anything `outputs` already has, and never writes to `bag_tags`/`scan_events` — a pure read-and-backfill of the local display. The existing periodic session autosave then persists the corrected `outputs` back to `draft_data` normally.
 - Self-terminating: once `outputs` and `bag_tags` agree (the normal case, every time), it's a no-op.
 
-## 2026-08-26 — Alyssa (Half-bag top-up: preview the actual label before printing) [promoted to production]
+## 2026-08-26 — Alyssa (Half-bag top-up: preview the actual label before printing)
 
 **Files changed:** `components/production/capture/HalfBagTopUpModal.tsx`, `lib/production/label-print.ts`
 
@@ -1675,7 +3569,17 @@ Requested: see what the reprinted label will actually look like before committin
 - `buildLabelHtml()` exported with an optional `embed` flag (mirrors the existing pattern in `lib/quality/qc-label-print.ts`) — drops the print button, since there's nothing to click inside a preview.
 - Confirm screen now shows a live label preview (an `iframe` with the same HTML `printLabelAuto` will actually send) for the target bag, and for the source bag too when "from another bag" mode reprints it. Built from the exact same bag object submit() uses — never a separate hand-built summary that could drift out of sync with the real print.
 
-## 2026-08-26 — Alyssa (Half-bag top-up: visible on the capture page + Overview, confirm the actual debagged bag, not just a batch string) [promoted to production]
+## 2026-08-26 — Alyssa (Production Orders: fix hourly VSD prompt retriggering + mobile overflow on order rows/panel headers) [promoted to production]
+
+**Files changed:** `components/production/capture/HourlyVsdPrompt.tsx`, `app/(app)/production/capture/[section]/page.tsx`, `app/(app)/production/orders/page.tsx`, `components/production/ui/kit.tsx`
+
+Reported: on a phone, the hourly VSD (infeed speed) reading prompt on Sieving's capture screen "just opens when the capture screen is open" and never waits the full hour before popping up again for a new reading. Root cause: the capture page only rendered `<HourlyVsdPrompt>` while on the Checks/Overview-adjacent tabs (`{tab !== 'overview' && <HourlyVsdPrompt .../>}`), so it unmounted and remounted every time the operator switched tabs — wiping its "last reading" state back to `null` each time. A freshly-mounted component with `lastVsd === null` is, by design, immediately "due" (no baseline reading yet), so the modal popped up again right away regardless of how recently a reading had actually been logged.
+
+- `HourlyVsdPrompt` now takes a `visible` prop instead of being conditionally mounted — it stays mounted across tab switches (state, and the hour timer, now survive), and is just hidden while `visible` is false (e.g. the Overview tab).
+- Added a `loaded` flag so "due" isn't judged until the last-reading DB read has actually resolved — previously the very first render (before that fetch returned) always evaluated `lastVsd === null` → due, causing a visible flash-open on slower mobile connections even when a recent reading already existed.
+- Production Orders list: an order row's trailing status/balance pills and action icons (reopen, traceability, view order, manage menu) were plain `shrink-0` siblings with no wrap — on phone widths they didn't fit and got squeezed/clipped off-screen. The row now wraps them onto their own line under the record name instead.
+- `PanelHead` (shared by Production Orders, the Supervisor Hub and the Shift Report) now wraps and truncates instead of overflowing when a long title + meta + action badge don't fit on one line at phone widths.
+## 2026-08-26 — Alyssa (Half-bag top-up: visible on the capture page + Overview, confirm the actual debagged bag, not just a batch string)
 
 **Files changed:** `components/production/capture/HalfBagTopUpModal.tsx`, `components/production/capture/HalfBagTopUpActivity.tsx` (new), `lib/production/inventory.ts`, `lib/production/scan-utils.ts`, `lib/production/order-detail.ts`, `app/(app)/production/capture/[section]/page.tsx`
 
@@ -1686,8 +3590,7 @@ Feedback after testing the "from today's production" path live:
 - `addFreshWeightToBag()`'s scan_events row now always carries a `HALF_BAG_TOPUP` marker in `notes` (previously only when a batch applied) — the one reliable way to tell "this bagging_out row is a top-up" apart from an ordinary bag's own first-ever row, used by both the new activity list and Production Orders' cross-day detection (regex updated to match).
 
 **Known gap, not fixed here — needs a database view change, not just app code:** Quality's pending-QC queue (`qms.v_pending_bag_qc`) marks a bag "already sampled" by matching `sd_runs.serial_number` against the bag's serial alone, with no regard for whether more material was added *after* that sample was taken. A Fine/Coarse Leaf bag that was QC-sampled when first bagged, then topped up later (either mode), will **not** re-enter the pending queue under the current view logic — the added material never gets its own sampling opportunity through the normal workflow. Fixing this needs `qms.v_bag_qc_status`'s `qc_done` join to also consider whether the sample's `created_at` is after the bag's *latest* weight-changing event, not just whether a sample exists for that serial at all. Deliberately not attempted from here: this repo's migration-push workflow (`db-migrate.yml`) is explicitly disabled ("repo migrations are stale relative to the live databases... an automatic `supabase db push` could harm a database" — see `docs/db-reconciliation-runbook.md`), so a view change needs to go through whatever manual, reconciled process the last several `qms.v_bag_qc_status` migrations went through, not a blind new migration file.
-
-## 2026-08-26 — Alyssa (Half-bag top-up: "from today's production" as the default path, not just bag-to-bag) [promoted to production]
+## 2026-08-26 — Alyssa (Half-bag top-up: "from today's production" as the default path, not just bag-to-bag)
 
 **Files changed:** `components/production/capture/HalfBagTopUpModal.tsx`, `lib/production/scan-utils.ts`, `lib/production/inventory.ts`, `lib/production/order-detail.ts`, `app/(app)/production/orders/[id]/page.tsx`, `app/(app)/production/capture/[section]/page.tsx`
 
@@ -1700,44 +3603,11 @@ Reported confusion: after picking the bag to top up and tapping Next, the operat
 - **Production Orders fix**: a "from today's production" top-up updates a bag whose own `bag_tags.session_id` is whatever day it was *first* bagged, not today — invisible to the existing bag_tags-snapshot sum. `loadOrderDay()` now also sums today's own `bagging_out` scan_events rows for serials not already in today's bag snapshot, folding that kg into `bagsOutputKg` (both per-shift and whole-day), and lists them in a new "Topped up from today's production" panel (`OrderFreshTopUpRow`) so it's visible which older bag received it and from which batch — unlike the existing "Re-bagged in" panel, this kg *is* included in the totals, since it's genuinely new.
 - The confirm screen shows which Production Order (date · shift) this will be counted under, so the operator can see it's right before saving.
 
-## 2026-08-26 — Alyssa (COA generator: enlarge the signature blocks) [promoted to production]
+## 2026-08-26 — Alyssa (COA generator: enlarge the signature blocks)
 
 **Files changed:** `app/(app)/quality/coa/page.tsx`
 
 Requested: the Lab Manager / Quality Manager signatures on the COA (preview, print, and exported PDF) were too small. Increased the base signature size by 40% — on-screen draggable signature `baseH` 40px → 56px (with the signature-block column `maxWidth` 260px → 280px, and the empty-slot placeholder height matched at 56px), and the PDF export's base height 30pt → 42pt (with its image-width cap 150pt → 170pt) to keep the on-screen preview and the exported PDF visually consistent, since the export code converts the on-screen px adjustment to PDF pt via a fixed ratio (`k = 0.75`, i.e. 56px ≈ 42pt). The existing drag-to-reposition / corner-handle resize behaviour is unchanged.
-
-## 2026-08-25 — Alyssa (Sieving Tower capture: lock variant/grade per bulk bag, restrict output batch suggestions to genuinely-debagged lots, show grade on the Bag Tags profile) [promoted to production]
-
-**Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `components/production/capture/SievingCapture.tsx`, `lib/production/capture-config.ts`, `lib/production/inventory.ts`, `app/(app)/tags/page.tsx`
-
-Three reported issues on the Sieving Tower capture pages:
-
-- **Debagging: variant/grade weren't actually locked per bulk bag.** The batch's Variant/Grade `<select>`s stayed live-editable at any point before the whole session was locked, even after a bulk bag had been "Done — locked". Since `buildDebag` reads the *current* `prod.variant`/`.grade` for every debag row at save time (not a per-row snapshot), changing the top-level selects after locking a bag would silently relabel it on save. Fixed by disabling both selects once any bulk bag in the active batch is secured (`sievingHasSecuredDebag`), with the existing "Changeover — switch grade/variant" button as the sanctioned way to change variant/grade mid-shift (it opens a new batch record instead of mutating the locked one).
-- **Bagging: output batch suggestions weren't restricted to what was actually debagged.** The batch-number picker fell back to an unfiltered "recent lots at this section" list (from `bag_tags`, no variant/grade filter) whenever the current session's debag rows were empty — which could suggest a lot that was never fed into this run at all. Added `debaggedBatches()` (`lib/production/inventory.ts`), which queries `prod_debagging` (joined to `prod_sessions` for section scoping) for lots debagged under the *same variant + grade* currently being consumed, even from an earlier session/shift. The Bagging picker's suggestions are now always this session's debagged lots **plus** that cross-session same-variant/grade set — never an unrestricted recent-lots list.
-- **Bag Tracking profile didn't show grade.** `bag_tags.destination` (the field that carries Sieving's A/B/C grade) was never actually written when an output bag was created (`SievingCapture`'s `addOutput()` upsert omitted it), so it always showed as "—" on the `/tags` detail view regardless. Added `destination: grade` to that upsert, and relabelled the Details grid row from "Destination" to "Grade" with a friendly label (Export / Export Blend / Domestic-Local) via the existing `DESTINATION_OPTIONS` map, so a suggested batch's variant+grade can be confirmed on-screen without a database lookup.
-
-Moved the grade-letter → `local_or_export` string mapping (previously a private const duplicated where needed) into a single exported `GRADE_TO_LOCAL_EXPORT` in `capture-config.ts`.
-
-## 2026-08-25 — Alyssa (Capture Overview: stop silently under-counting a shift's total when a mid-shift grade/variant changeover opened a separate batch record) [promoted to production]
-
-**Files changed:** `app/(app)/production/capture/[section]/page.tsx`
-
-Reported: the Sieving Tower Overview screen showed fewer bags/kg for a shift than the Production Order detail page for the exact same run, with a false "still to bag out" mass-balance warning telling the operator to keep bagging material that was already done. Root cause: Overview's totals/mass balance are built from this session's data plus every *other* session for the same section/date/shift, filtered to only sessions running the exact same variant+grade (`productionMatchKey`) — by design, so two genuinely different runs sharing a shift by coincidence never get summed. A mid-shift grade/variant Changeover opens a brand-new session whose bags are real and correctly shown on Production Orders, but were silently excluded from Overview with no indication. Kept the combining rule as-is; added a note when a batch record was excluded, showing its own in/out kg.
-
-## 2026-08-25 — Alyssa (Production Orders: mass balance now reads output − input, flagged past ±1% of input) [promoted to production]
-
-**Files changed:** `app/(app)/production/orders/[id]/page.tsx`
-
-The "Balance" field read as input − output, an ambiguous positive number either way material moved, with no indication of whether it was a real problem. Flipped to output − input, so a shortfall reads as a plain negative number (material lost). Added a tolerance verdict: within ±1% of total input reads green ("within ±1%"), outside it and negative reads red ("material lost, outside ±1% tolerance"), outside it and positive reads amber (more output than input recorded — worth checking the weighing). Applied to both the whole-run balance and each shift's own.
-
-## 2026-08-25 — Alyssa (Re-bag / Tags: let the operator actually reclassify a bag's product type on a cross-product top-up) [promoted to production]
-
-**Files changed:** `app/(app)/tags/page.tsx`, `lib/production/scan-utils.ts`
-
-The "different product to the source" warning shown when topping up a bag from a different product type was a dead end — `transferBagWeight()` never actually touched the target's `product_type`, so nothing was ever reclassified regardless of the warning.
-
-- Added a "Resulting product type" field (free text + a datalist of the source's, the bag's, and the section's own output types) that appears only when a mismatch is detected, and is required before the top-up can be saved.
-- `transferBagWeight()` gained an optional trailing `reclassifyProductType` parameter — set only on a genuine mismatch, so a same-product top-up is completely unaffected.
 
 ## 2026-08-26 — Alyssa (Bagging: automatically leave under-200kg bags open for top-up, instead of a manual tick every time) [promoted to production]
 
@@ -1760,17 +3630,125 @@ Feedback after testing the full re-bagging feature: creating a brand-new bag, an
 - The flow is now a fixed two-step pick: which bag you're topping up, then where the extra material is coming from — followed by amount, a safety-net "resulting product type" field on a cross-SKU mismatch, and a confirm screen showing both bags' current weight, original bagging date/weight, and full history before printing.
 - Added the same browse-by-variant-and-product-type discovery to the "which bag are you topping up" step that the source step already had (previously that step was a bare serial box with no way in if you didn't know the exact serial), plus a smart default: an "Only show open (half) bags" filter, on by default, since that's exactly what a half-bag-from-yesterday is (`is_open`) — with an easy toggle to see everything in stock.
 
+## 2026-08-25 — Alyssa (Re-bag / Tags: let the operator actually reclassify a bag's product type on a cross-product top-up) [promoted to production]
+
+**Files changed:** `app/(app)/tags/page.tsx`, `lib/production/scan-utils.ts`, `components/production/capture/HalfBagTopUpModal.tsx`
+
+The "different product to the source" warning shown when topping up a bag from a different product type was a dead end — `transferBagWeight()` never actually touched the target's `product_type`, so nothing was ever reclassified regardless of the warning. Added a "Resulting product type" field (free text + a datalist) that appears only on a mismatch and is required before the top-up can save; `transferBagWeight()` gained an optional trailing `reclassifyProductType` parameter, set only on a genuine mismatch, so a same-product top-up is unaffected. This had no dedicated changelog entry when it originally shipped on the Tags page and Half-bag Top-up modal — recorded now since it's what's actually live.
+
+## 2026-08-25 — Alyssa (Production Orders: mass balance now reads output − input, flagged past ±1% of input)
+
+**Files changed:** `app/(app)/production/orders/[id]/page.tsx`
+
+Requested: the "Balance" figure (both the whole-run one and each shift's own) read as `input − output`, an ambiguous positive number either way material moved — and there was no indication of whether a given balance was actually a problem or normal process variation.
+
+- Flipped to `output − input`, so a shortfall (the normal case — moisture, dust, spillage) reads as a plain **negative** number instead of an ambiguous positive one either way.
+- Added a tolerance verdict next to the figure: within ±1% of total input shows green ("within ±1%"); outside it and negative shows red ("material lost, outside ±1% tolerance"); outside it and positive (more output than input recorded — a measurement/weighing issue to check) shows amber. Applied to both the whole-run balance and each shift's own.
+- The whole-run balance is computed from the same "reliable ledger" total this page already used (`bagsOutputKg + bucket carry-over`, not the DB's own snapshot) — only the formula/tolerance treatment changed, not what counts as output. The per-shift balance still starts from `prod_mass_balance`'s own stored input/output columns, just displayed output-minus-input instead of the DB's generated `balance_kg` column (input-minus-output) — the underlying generated column itself was left alone, since it also feeds yield views elsewhere.
+
+## 2026-08-25 — Alyssa (Capture Overview: stop silently under-counting a shift's total when a mid-shift grade/variant changeover opened a separate batch record)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`
+
+Reported: the Sieving Tower Overview screen showed fewer bags/kg for a shift than the Production Order detail page for the exact same run (e.g. Overview said "6 bags, 1412.0 kg" of Indent Sticks and no Rolsiev Sticks at all, while Production Orders — which reads live from `bag_tags` — showed 7 bags/1460.0 kg and a Rolsiev Sticks bag Overview never mentioned), with a false "446.0 kg still to bag out" mass-balance warning telling the operator to keep bagging material that was already done.
+
+Root cause: Overview's totals and mass balance are built from `[...productions, ...siblingProductions]` — this session's own in-progress data plus every *other* `prod_sessions` row for the same section/date/shift, but `siblingProductions` is deliberately filtered down to only sessions running the exact same variant+grade (`productionMatchKey`, `app/(app)/production/capture/[section]/page.tsx:100`) — by design, so two genuinely different runs sharing a shift by coincidence never get their mass balances summed together. A mid-shift "Changeover — switch grade/variant" (`startNewProduction()`) opens a brand-new `prod_sessions` row for the new grade/variant; its bags are real, correctly saved to `bag_tags`, and correctly shown on Production Orders (which has no such filter) — but they were **silently** excluded from Overview/mass-balance with no indication anything was left out, since they don't match the currently-open session's variant/grade key.
+
+Fix: kept the balance-combining rule exactly as-is (still never sums different variant/grade balances), but Overview now surfaces a note whenever `shiftOtherProductions` (the unfiltered "everything this shift" set already used for the "Bags this shift" reference log) contains a batch record that `siblingProductions` excluded — showing its own in/out kg and variant/grade under the mass balance, so an excluded batch is visible instead of silently making the shown total look incomplete/wrong.
+
+## 2026-08-25 — Alyssa (Re-bag: ask "add or remove" upfront, so top-ups don't get mis-cast as an over-draw)
+
+**Files changed:** `components/production/capture/RebagModal.tsx`
+
+Reported: topping up a bag would get blocked with "can't move more than the source has" even though the operator wasn't trying to remove anything. Root cause: the modal always asked "where's the material coming from" first — for a genuine top-up, the operator's instinct is to name the bag they want to top up *first* (since that's the one they're actually focused on), which the modal then cast as the **source** — a correct over-draw block, just against the wrong bag.
+
+- The modal now opens by asking what you're doing: **"Add material to a bag"** (picks the bag being topped up first, then where the extra material comes from) or **"Remove material from a bag"** (today's existing order, unchanged — picks the bag it's coming out of first).
+- `source`/`target` still always mean the same physical thing (source = drawn from, target = received into) — only the pick *order* changes with intent, so `transferBagWeight`/`createBagFromTransfer` and all validation are untouched.
+- The amount + "resulting product type" fields now render once both bags are known, on whichever step happens to complete that pair — previously hardcoded into the target step, which broke as soon as target could be picked first.
+
+## 2026-08-25 — Alyssa (Stock Control: add the Quality Lab (Sieving Final QC) Intermec printer to the Printers/Print Health admin pages)
+
+**Files changed:** `lib/production/live-types.ts`, `lib/production/capture-config.ts`, `components/stock-control/PrintersModule.tsx`, `components/stock-control/PrintHealthModule.tsx`
+
+Requested: visibility into the Intermec PD (192.168.0.26) used for Sieving Final QC labels, to help diagnose it apparently needing a warm-up print from Bartender before it'll accept a print from the app again. That printer (`quality_lab` in `SECTION_PRINTER`) already existed in config but wasn't shown on either Stock Control admin page — `SECTION_ORDER`, which both pages iterate, is production capture's own section list (assignment, KPIs, shift reports, capture routing all assume every entry is a real bagging section), so `quality_lab` was deliberately never added there.
+
+- New `PRINTER_SECTIONS` constant (`SECTION_ORDER` + `quality_lab`), used only by the two printer admin pages — `SECTION_ORDER` itself is untouched, so nothing about production capture, assignment, or KPIs changes.
+- Added a `quality_lab` entry to `SECTION_CONFIG` (name/code/colour) so it renders properly, and to `KNOWN_PRINTERS` so it's pickable from the printer dropdown.
+- The Printers tab now shows its IP/port/language and has a working "Test print" button; Print Health shows its last successful print, same as every other section.
+- Possibly related: the print-socket truncation fix above (graceful `socket.end()` instead of an abrupt `destroy()`/RST) may also explain the printer needing a Bartender print to "unstick" it — a bad TCP close could plausibly leave the printer's receive buffer in a stuck state until something else resets it. Worth re-testing now that fix is live.
+
+## 2026-08-25 — Alyssa (Fix networked labels printing with random content missing/cut off — Sieving QC label and every direct-print bag label)
+
+**Files changed:** `lib/production/print-socket.ts`
+
+Reported (with a photo): the Sieving Final QC label printed at the lab's Intermec came out almost blank — just the "OUT OF SPEC" warning band, missing the header, barcode, and metrics grid that should also be on it. Described as happening "randomly," not on a specific field every time — pointing at a transmission problem, not a data bug (the label's actual template/data build looked correct on inspection).
+
+Root cause: `sendToPrinter()` (the shared TCP-socket helper used by every direct-print path — QC labels, production bag labels, and the test-print route) called `socket.destroy()` immediately after `socket.write()`'s callback fired. That callback only confirms the OS accepted the bytes into its own send buffer, not that the printer actually received and processed them — `destroy()` is an abrupt close that can send a TCP RST, cutting the stream off mid-transmission under any network jitter. That explains the "random" part: it depends on timing, so it doesn't reproduce the same way twice.
+
+- Now calls `socket.end()` (a graceful half-close/FIN, sent only once everything queued has actually gone out) instead of `destroy()`, and resolves the promise on the socket's `'close'` event rather than immediately after the write callback — so the connection isn't torn down until the transfer has genuinely finished.
+- The 5s timeout and error handling are unchanged; this only changes when a *successful* send is considered done.
+- This is a shared low-level fix — it should also apply to any other direct-print section (Refining/Granule/Blender/Pasteuriser bag labels) that has seen occasional print corruption, not just Sieving.
+
+## 2026-08-25 — Alyssa (Quality Granule: allow more than one re-test attempt on a failing sample, keep the full history)
+
+**Files changed:** `app/(app)/quality/granule/page.tsx`, `supabase/migrations/20260825_001_granule_recheck_attempts.sql`
+
+Follow-up to the moisture-ceiling fix above. Reported: after a re-check also failed, the panel dead-ended at "✗ FAIL — add new sample" — there was no way to log a second or third re-test against the same failing sample, even though that's QC's actual workflow (keep re-testing the dryer's output until moisture is back in spec, could take 2/3/4 tries).
+
+- Added `qms.granule_samples.recheck_attempts` (jsonb array — `{n, time, moisture, dryer_temp, pass}` per attempt), migration `20260825_001_granule_recheck_attempts.sql`. **Needs to be applied to the Supabase project (staging, then production) — this session has no direct DB access to run it.**
+- The re-check panel now shows every past attempt and, as long as the latest one hasn't passed, offers "Re-test #N" to log the next one — it no longer stops after a single attempt.
+- The existing single-slot columns (`recheck_done`/`recheck_moisture`/`recheck_dryer_temp`/`recheck_time`/`recheck_pass`) are kept in sync as a mirror of the latest attempt, so the run's Pass/Fail status still resolves correctly once any attempt passes (via the previous fix), and any other code reading those columns directly keeps working unchanged.
+
+## 2026-08-25 — Alyssa (Re-bag: grade only required for Leaf, a post-registration next-step screen, browse existing stock by variant)
+
+**Files changed:** `components/production/capture/RebagModal.tsx`, `lib/production/inventory.ts`
+
+- **Grade no longer mandatory for everything**: Indent Sticks, Blocks, Dust etc. don't necessarily have a grade the way Fine/Coarse Leaf do. Registering an untracked bag now only requires Grade when the picked product is Fine or Coarse Leaf (reuses the same `LEAF` set `OutputPicker` already uses for batch tracking, now exported) — otherwise just Variant + current weight.
+- **New step after registering a bag**: instead of jumping straight into "pick a target," it now shows the bag's identity (serial, variant, grade, weight, batch) and asks what's next — "Remove material" (continues into the existing flow, this bag as source) or "Add material to this bag" (pre-fills it as the target and returns to source selection, so topping it up from something else doesn't require leaving the modal and starting over).
+- **"From existing stock" can now be browsed, not just typed**: it was a blank serial box with no way to see what's actually in stock. Added a variant filter (+ optional product-type text filter) that shows a live preview list of matching in-stock bags — serial, product, weight, date added — tap one to fill the serial field, or still type/scan directly if the serial's already known.
+- **Also closes the gap flagged in the Sieving Tower fix below**: Re-bag's own `batchHints` restriction (yesterday, PR #794) only ever checked this session's own debag rows. Swapped it for the same `debaggedBatches()` helper Sieving now uses, so a new re-bagged output's batch is restricted to this session's debagged lots plus any other session's lots under the exact same variant+grade — no longer a same-session-only carve-out.
+
+## 2026-08-25 — Alyssa (Sieving Tower capture: lock variant/grade per bulk bag, restrict output batch suggestions to genuinely-debagged lots, show grade on the Bag Tags profile)
+
+**Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `components/production/capture/SievingCapture.tsx`, `lib/production/capture-config.ts`, `lib/production/inventory.ts`, `app/(app)/tags/page.tsx`
+
+Three reported issues on the Sieving Tower capture pages:
+
+- **Debagging: variant/grade weren't actually locked per bulk bag.** The batch's Variant/Grade `<select>`s stayed live-editable at any point before the whole session was locked, even after a bulk bag had been "Done — locked". Since `buildDebag` reads the *current* `prod.variant`/`.grade` for every debag row at save time (not a per-row snapshot), changing the top-level selects after locking a bag would silently relabel it on save. Fixed by disabling both selects once any bulk bag in the active batch is secured (`sievingHasSecuredDebag`), with the existing "Changeover — switch grade/variant" button as the sanctioned way to change variant/grade mid-shift (it opens a new batch record instead of mutating the locked one).
+- **Bagging: output batch suggestions weren't restricted to what was actually debagged.** The batch-number picker fell back to an unfiltered "recent lots at this section" list (from `bag_tags`, no variant/grade filter) whenever the current session's debag rows were empty — which could suggest a lot that was never fed into this run at all. Added `debaggedBatches()` (`lib/production/inventory.ts`), which queries `prod_debagging` (joined to `prod_sessions` for section scoping) for lots debagged under the *same variant + grade* currently being consumed, even from an earlier session/shift. The Bagging picker's suggestions are now always this session's debagged lots **plus** that cross-session same-variant/grade set — never an unrestricted recent-lots list.
+- **Bag Tracking profile didn't show grade.** `bag_tags.destination` (the field that carries Sieving's A/B/C grade) was never actually written when an output bag was created (`SievingCapture`'s `addOutput()` upsert omitted it), so it always showed as "—" on the `/tags` detail view regardless. Added `destination: grade` to that upsert, and relabelled the Details grid row from "Destination" to "Grade" with a friendly label (Export / Export Blend / Domestic-Local) via the existing `DESTINATION_OPTIONS` map, so a suggested batch's variant+grade can be confirmed on-screen without a database lookup.
+
+Moved the grade-letter → `local_or_export` string mapping (previously a private const duplicated where needed) into a single exported `GRADE_TO_LOCAL_EXPORT` in `capture-config.ts`. Note: Re-bag's own separate `batchHints` restriction (added just below, same day) doesn't yet have the same-variant/grade carve-out either — a follow-up if that gap matters in practice.
+
+## 2026-08-25 — Alyssa (Re-bag: fix misleading "Add & print label" button — nothing prints until the bag's actually registered)
+
+**Files changed:** `components/production/capture/OutputPicker.tsx`, `components/production/capture/RebagModal.tsx`
+
+Reported: Re-bag's item-picker step showed `OutputPicker`'s own button, which always reads "Add & print label" (or "Complete bag") — accurate for normal bagging, where tapping it really does create the bag and print. In Re-bag it doesn't: the pick is only staged, and the real create/print happens on a later screen (after grade/variant/weight, or after Confirm) — so the button was claiming to print a bag that had no grade, variant, or weight recorded yet.
+
+- `OutputPicker` gains an optional `confirmLabel` prop that overrides the button's text/icon; every existing caller (`SievingCapture`) leaves it unset and is unaffected.
+- Both of Re-bag's `OutputPicker` uses now pass `confirmLabel={<>Next <ArrowRight /></>}` — accurately describing that picking an item just advances to the next step, not a final print.
+
+## 2026-08-25 — Alyssa (Re-bag: restore the "batch must have actually been debagged" rule for new re-bagged output)
+
+**Files changed:** `components/production/capture/RebagModal.tsx`
+
+Reported gap: normal bagging (`SievingCapture`) restricts a Fine/Coarse Leaf output's batch number to a lot actually debagged this session (`OutputPicker`'s `batchHints`/`restrictBatch`) — Re-bag's own `OutputPicker` calls never passed that, so a brand-new re-bagged target bag could be tagged with any typed batch number, bypassing the rule.
+
+- Fixed for the "new target" path only: loads this session's actual `prod_debagging.lot_number` rows and passes them as `batchHints`, so a genuinely new re-bagged output is held to the same rule as any other bag created today.
+- Deliberately **not** applied to registering an untracked source bag ("Not on the system yet") — that material predates this session by definition, so it can never match something debagged today; restricting it there would make onboarding legacy Leaf stock impossible.
+
 ## 2026-08-25 — Alyssa (Quality Granule: a genuinely failing moisture reading can now be saved and re-checked, instead of being blocked outright) [promoted to production]
 
 **Files changed:** `app/(app)/quality/granule/page.tsx`
 
-Follow-up to the granule time-order fix below. Reported: when a real dryer fault pushes moisture over 10%, QC's normal workflow — save the failing sample, then re-test until it passes — was impossible, because the save form treated *any* moisture above 10% as "almost always a typo" and hard-blocked it with no way to override. The sample never made it into the database at all, so there was nothing to re-check against.
+Follow-up to the granule time-order fix above. Reported: when a real dryer fault pushes moisture over 10%, QC's normal workflow — save the failing sample, then re-test until it passes — was impossible, because the save form treated *any* moisture above 10% as "almost always a typo" and hard-blocked it with no way to override. The sample never made it into the database at all, so there was nothing to re-check against.
 
 - 10–100% moisture is now a confirm-to-save warning (same "Yes, these values are correct" pattern already used for statistical outliers), not an unbypassable error — only above 100% (physically impossible) still hard-blocks as a typo.
 - The existing per-sample re-check panel (`recheck_done`/`recheck_moisture`/`recheck_pass`) could already record a passing re-test, but the run's `overall_status` was never recomputed afterward, so a resolved failure stayed flagged "Fail" forever. `handleRecheckSample` now clears the sample's moisture violation and flips the run back to "Pass" once a re-check genuinely passes (other violation types, e.g. sieve fractions, are left untouched).
 - Note: this fixes the pass/fail status at the data layer (which does feed `qms.granule_runs.overall_status` → the `granule_all_passed` batch-quality rollup). The COA document itself doesn't currently read granule data at all — it sources its Moisture figure from the Pasteuriser stage — so wiring a granule re-check result directly onto a COA would be a separate, further piece of work if needed.
 
-## 2026-08-25 — Alyssa (Quality Granule: fix false "time is wrong" warning on saves crossing midnight/a day boundary) [promoted to production]
+## 2026-08-25 — Alyssa (Quality Granule: fix false "time is wrong" warning on saves crossing midnight/a day boundary)
 
 **Files changed:** `app/(app)/quality/granule/page.tsx`
 
@@ -1779,6 +3757,16 @@ Reported: QC couldn't tell whether a granule sample save was actually blocked or
 - The time-order check now compares full `sample_date + sample_time` (same key shape `sortSamples()` already uses), so an overnight or cross-day sample correctly reads as later.
 - The separate "QC Name required after 16:00 shift change" check had the same class of bug (`hh >= 16` alone missed the shift's `00:00–00:59` tail) — now also treats that hour as still "after shift change."
 - Client-side validation/warning logic only — no database writes, migrations, or changes to previously saved sample times/dates.
+
+## 2026-08-25 — Alyssa (Re-bag: simplify registering an untracked bag — own grade/variant, no backdated history)
+
+**Files changed:** `components/production/capture/RebagModal.tsx`
+
+Follow-up simplification: the previous version asked for an original date/weight plus any number of backdated weight-change entries, trying to reconstruct a bag's full pre-tracking history. Reconsidered — that's more than needed and nobody can verify those dates anyway.
+
+- The system now generates the serial and stamps the record with now() (when it entered tracking, not a claim about when it was physically made).
+- The operator supplies what actually describes the bag right now: its own **grade and variant** (mandatory — no longer silently inherited from whatever the capture session currently has open, since the untracked material is very likely something else entirely), its **current weight**, and whatever **serial/batch it's currently carrying** (a supplier tag, a handwritten note, or nothing).
+- That's enough to create it in stock at today's weight. Drawing from it or adding to it happens afterward as its own ordinary, separate top-up/re-bag — same as any other bag — not bundled into the same action.
 
 ## 2026-08-25 — Alyssa (Production capture: live cross-session refresh, fixing the UI-vs-DB lag on Capture/Overview)
 
@@ -1891,6 +3879,16 @@ Reported from Sieving: the red *"Your weights are saved, but the input/output ro
 - **The banner now quotes Postgres' `details` and error code**, not just `message`. `message` names the constraint but `details` names the offending key (`Key (session_id, bag_no)=(…, 3) already exists`) — without it a duplicate-key report can't be traced to the row that caused it.
 - **Known, not fixed here:** a removed (voided) bag's `prod_bagging` row is excluded from the production order (`order-detail.ts` filters voided serials) but *not* from `shift-report-builder.ts` or the dashboard row/supply routes, so its kg still counts there.
 
+## 2026-08-21 — Gustav (COA: fix signature resize distortion, screen/print layout mismatch, and add a "Ready to print" queue + Lab Manager notification)
+
+**Files changed:** `app/(app)/quality/coa/page.tsx`, `app/api/quality/coa-signoff/route.ts`
+
+Three separate reports on the COA generator:
+
+1. **Signature resize handle only made signatures taller, not wider.** `DraggableSignature` set an explicit `height` and `width: 'auto'` with a fixed `maxWidth: 260` on the `<img>`. Past the scale where the aspect-correct width would exceed 260px, the browser clamped width there but kept growing the explicit height — a silent squash, not a stop, so dragging the resize handle further only stretched the signature taller. Fixed by measuring the image's real width:height ratio on load and deriving both dimensions from `baseH * scale`, so there is no separate width ceiling left to hit — both directions scale together by construction.
+2. **The on-screen preview cut content off that printed/exported fine.** Root cause: `app/(app)/layout.tsx`'s `<main>` is `overflow-x-hidden` app-wide (deliberate, so no page can put a stray scrollbar on the whole shell) — anything in the COA preview wider than the sidebar-shrunk viewport was silently clipped with no scrollbar to reveal it. Printing was unaffected because the print stylesheet takes `.coa-print` out of flow (`position: absolute`), escaping the shell's clipping entirely; the on-screen version had no such escape. Fixed by wrapping the preview in its own `overflow-x: auto` container with a `minWidth: 720` matching the real PDF content box (A4 minus margins, ~687px) — a descendant's own overflow handling isn't overridden by an ancestor's `overflow-x: hidden`, so the preview now either fits or scrolls, never clips invisibly, and can't differ from the print/PDF layout by being squeezed narrower than the export ever uses.
+3. **No signal when a COA was fully signed and ready to print.** The lab → QA hand-off already notified the QA manager when the lab manager signed (`notifyQaManager`); signing the other direction had no equivalent. Added `notifyLabManager()` (mirrors the existing function) fired when the QA manager signs, and a new **"🖨 Ready to print"** tab next to the existing "Awaiting QA sign-off" one, listing every `coa_signoffs` row with a QA signature that has no `coa_generated` entry (the existing Print/Export log, unchanged) logged after that signature — i.e. genuinely not yet printed/exported since being signed. No new table: derived from what Print/Export already writes to `qms.coa_generated` for History. Printing or exporting a batch drops it off this list immediately (`logGeneration()` now also refreshes the queue), not on next reload.
+
 ## 2026-08-21 — Gustav (Lab Results upload: explain billing / key / permission failures instead of dumping JSON)
 
 **Files changed:** `app/api/upload/route.ts`
@@ -1929,6 +3927,20 @@ Why it wasn't already possible: the Capture tab only ever renders the batch reco
 - **`startNewProduction()` now hands the closing record to the bag log** before clearing local state. Without it, submitting a batch and starting the next one dropped "Bags this shift" to zero until a page reload, since sibling session rows are only re-read on load. It is deliberately *not* added to the mass-balance set, for the reason above.
 
 Verified: renders and totals correct against representative sieving data across two batch records on different grades (in 4 bags/1997.4 kg excluding the 120 kg elevator figure, out 4 bags/781.3 kg), SAST times correct from UTC instants, single-row header on tablet and a wrapped two-row header on a phone with no horizontal overflow, no console errors. Typecheck and lint clean on both files.
+## 2026-08-20 — Alyssa (Local warm standby: run production off the local server when the VPS is down)
+
+**Files changed:** `docs/ops/local-standby.md` (new), `scripts/local-standby.sh` (new)
+
+Docs + tooling only; nothing in the app changes.
+
+The VPS runs **both** apps (`154.65.97.200` — production on :3001, staging on :3000), so it is a single point of failure for the whole platform. The databases are not on it: production data is the Supabase cloud project `sxzjjcyuzyfneesnsjna`. That makes a standby unusually cheap — the local server only has to run the app and be reachable, with no replication and no split-brain, because both hosts write to the same Supabase project (so there is also no merge step on failback).
+
+- **Scope, stated honestly in the runbook:** covers the VPS being dead / rebuilt / crash-looping after a bad deploy. Does **not** cover the factory internet being down (the app still has to reach Supabase) or Supabase itself being down. "The floor keeps capturing with no internet" is a separate, much larger project — local Postgres, offline-first capture, reconciliation of shared identifiers — and the runbook says so rather than implying it's handled.
+- **Access is Tailscale-only** (internal), by choice: no public URL, no certificate, no inbound ports on the factory network.
+- **`scripts/local-standby.sh`** — `sync` / `start` / `stop` / `status`. Never touches the VPS: it reads `main` from GitHub and builds on the local machine, so keeping the standby warm costs nothing on the shared box.
+- **Two guards, both for mistakes that would be worse than an outage.** The env file is a required argument and is rejected if it points at the staging project — a standby on staging keys is an app that looks like production and writes real capture into the staging database. And the build goes into `.next-standby`, swapped in only once a `BUILD_ID` exists (same pattern as `scripts/production-deploy.sh`), so a failed sync leaves the last working standby intact — which is what you need when you're syncing *because* the VPS is already down.
+- **Pre-outage wiring is called out up front:** the standby origin has to be in the Supabase Auth redirect allowlist and the Azure app registration *before* an outage, or staff SSO login fails and it can't be fixed from a dead VPS. Floor PIN login is a plain database lookup, so capture works either way — the floor can capture even when office sign-in can't.
+- Verified on the local machine: Node v24.19.0 present, Tailscale installed but logged out, pm2 not installed (all three recorded in the runbook's prerequisites table). Script syntax-checked and all four subcommands exercised; the staging-env guard and the missing-file guard both fire correctly, and `status` correctly reported production answering 200.
 
 ## 2026-08-20 — Alyssa (Production orders showed "No inputs recorded" while the mass balance was correct)
 
@@ -2150,6 +4162,23 @@ Requested: raw-material leaf shade (from `qms.leaf_shade_predictions`, graded at
 - `leaf_shade` keeps meaning exactly what it always has: the QC's own final entry. Nothing about validation or the save flow changed.
 - The edit-run save path is untouched, so editing a run never overwrites the raw-material snapshot captured at creation.
 
+## 2026-08-19 — Gustav (Note Books: tabbed capture UI, weighbridge weight field, per-site Warehousing tabs — STAGING ONLY)
+
+**Files changed:** `supabase/migrations/20260819_002_notebooks_weighbridge_weight.sql` (new, applied to **staging only**), `lib/notebooks/types.ts`, `lib/notebooks/server.ts`, `components/notebooks/note-draft.ts`, `components/notebooks/NoteFields.tsx`, `components/notebooks/NotePaper.tsx`, `components/notebooks/NotesTable.tsx` (new), `app/(app)/notebooks/page.tsx`, `app/(app)/notebooks/site/[code]/page.tsx` (new), `components/layout/Sidebar.tsx`
+
+Reworked the GRN/DN capture flow off the back of feedback on the first cut: fill in like a form, not like the paper — the paper look is what you get at the end (preview, print, send), not what you type into.
+
+- **Capture is now an actual tabbed form** (`NoteFields.tsx`, `@radix-ui/react-tabs`) — Weighbridge → Supplier & Goods → Traceability → Certification → Comments — instead of one long scrolling page. `NotePaper` (the print/preview/e-sign view) is unchanged in spirit: it's still the only thing that looks like the physical book, and only appears once there's something to look at.
+- **New "Weight (from weighbridge)" field** (`notebooks.documents.weighbridge_weight_kg`) — the load crosses the weighbridge first, and that reading is what the rest of the note gets built around, not something derived from the goods description. No weighbridge system integration exists yet, so it's entered by hand for now; the column and the API route are exactly where a real feed would write once that integration exists — deliberately not building a fake one against an unknown protocol.
+- **"Date received" is now automated, not typed.** `doc_date` was already defaulted server-side to today (Africa/Johannesburg) on create; it's now also removed from the client payload entirely (`EDITABLE_HEADER_FIELDS`, `toHeaderPayload`) so there is no path — accidental or otherwise — for a note to be backdated or postdated. The form shows it read-only.
+- **Signature blocks renamed to Deliverer / Receiver** on both books (was "Received by / Transporter" on a GRN, "Delivered by / Received by (recipient)" on a DN) — same two esign-backed blocks, same declaration text per book type, just consistent wording end to end.
+- **"Farmer / tea court" → Field name, "Season" → Plant year** — cosmetic label change only (`farmer_name`/`season_year` columns unchanged) to match the wording used at the gate.
+- **Warehousing sidebar group** replaces the single "Note Books (GRN / DN)" entry: an All Sites overview (the existing filterable list, now framed as a lookup tool) plus one tab per site — Blackheath, Graafwater Depot, Graafwater Tea Court, Vanrhynsdorp Depot, Vanrhynsdorp Tea Court — each landing on `/notebooks/site/<code>`, itself GRN/DN as two more tabs with its own "New GRN"/"New Delivery Note" button. Writing a note is now "pick your site's tab, pick GRN or DN, fill it in" — no location/type dropdowns to get wrong.
+  - The request's location list named Graafwater and Vanrhynsdorp's depot/tea-court split but not Blackheath by name; Blackheath is included as its own tab regardless — it's one of the three sites the request explicitly says raw material is received at, and dropping it would silently orphan its existing `BH` book.
+- Row rendering shared between the All Sites list and each site's tabs via new `NotesTable.tsx`, so a column added to one can't quietly drift from the other.
+- `public.notebook_documents`'s `SELECT * FROM notebooks.documents` view had to be `CREATE OR REPLACE`'d to pick up the new column — Postgres freezes a view's column list at CREATE time, so the plain `ALTER TABLE ADD COLUMN` alone left PostgREST still serving the old shape. Documented in the migration for the next column added to this table.
+- `npm run build` clean (placeholder Supabase env). Verified interactively: all five capture tabs render and switch correctly, the printed note shows Weighbridge no./Weight side by side and Field name/Plant year, and the auth guard on `/notebooks/site/[code]` behaves identically to the rest of the app (redirects unauthenticated).
+
 ## 2026-08-19 — Gustav (Sieving: fix false "already sampled" alert on Sample now)
 
 **Files changed:** `app/(app)/quality/sieving/page.tsx`
@@ -2184,69 +4213,39 @@ Reported: on the Fine Leaf and Coarse Leaf tabs, a QC fills in an In-Process run
 - **A blocked save can never be invisible again.** A summary banner now renders directly above the Save button listing every reason the save was refused, whatever the field. This is the backstop for the whole class of bug: it also covers `errors.runType`, which `validate()` can set but which has had no inline renderer at all since the in-form Run Type picker was removed (#661), and it helps when the offending field is simply scrolled off screen.
 - Final QC is deliberately unchanged and still strict — verified that an invalid or missing leaf shade, and a missing or negative bulk density, all still block a Final QC save (those fields *are* visible there), and that missing lot number / QC name / incomplete mesh / negative needle count all still block an In-Process save. The inline row editor needed no change: it reports every rejection through `alert()`, so it was never silent.
 - Verified by simulating the real `validate()` + render-gating logic across both affected products, all four products' In-Process paths, five leaf-shade values (including 0, 12 and non-numeric), and six Final-QC cases. `npx tsc --noEmit` clean.
-## 2026-08-19 — Alyssa (Production Orders: full production-day run report — both shifts consolidated, grouped totals, AI checks, handover & timesheet)
 
-**Files changed:** `lib/production/order-detail.ts`, `app/(app)/production/orders/[id]/page.tsx`, `app/globals.css`, `app/(app)/production/capture/[section]/page.tsx`, `.gitignore`, removed the accidentally-committed `.claude/worktrees/agent-*` gitlinks
+## 2026-08-19 — Gustav (New module: GRN / Delivery Note books, per site, numbered chronologically, printable and e-signable — STAGING ONLY)
 
-The production order is now **one report per production day** — the morning (07h00–16h00) and afternoon/night (16h00–01h00) shifts roll up into the full 07h00–01h00 run, matching the "one continuous run" model. `loadOrderDay()` consolidates every shift session sharing a (section, date): output bags merged across the whole day from the reliable `bag_tags` ledger (shift-tagged, voided excluded), inputs concatenated, per-shift blocks each carrying that shift's mass balance, sign-off, AI machine-checks summary and timesheet; whole-run mass balance is the honest sum of the per-shift balances.
+**Files changed:** `supabase/migrations/20260819_001_notebooks_grn_dn.sql` (new, applied to **staging only**), `lib/notebooks/types.ts`, `lib/notebooks/server.ts` (both new), `app/api/notebooks/locations/route.ts`, `app/api/notebooks/documents/route.ts`, `app/api/notebooks/documents/[id]/route.ts`, `app/api/notebooks/documents/[id]/issue/route.ts`, `app/api/notebooks/documents/[id]/void/route.ts` (all new), `app/(app)/notebooks/page.tsx`, `app/(app)/notebooks/new/page.tsx`, `app/(app)/notebooks/[id]/page.tsx` (all new), `components/notebooks/NotePaper.tsx`, `components/notebooks/NoteFields.tsx`, `components/notebooks/note-draft.ts`, `components/notebooks/StatusBadge.tsx` (all new), `lib/esign/subjects.ts`, `lib/auth/permissions.ts`, `lib/auth/permission-registry.ts`, `components/layout/Sidebar.tsx`, `app/(app)/layout.tsx`
 
-- **Header** (bold): Date, Shift(s), **Variant & grade**, Operators, Supervisor, Production order **code + description** (resolved from Master Inventory), Submitted.
-- **Mass balance** reconciles: Total output = bagged bags (ledger) **+ bucket-elevator carry-over**, which is stated explicitly (the afternoon shift leaves it in the tower — an output, not an input), so the header total and the bagging list always agree.
-- **Inputs** and **outputs** are each grouped by type with their own count + kg totals; debag columns trimmed to Farm bag (the farm's bag number) / Lot / kg — no gross, delivery or org-conv; "500kg Farm Bag" reads as "Bulk Bag"; **machine spillage** now stored distinct from the bucket elevator.
-- **AI checks summary**, **handover & operator notes**, and the **timesheet** (hours worked per operator) print on the report's later pages.
-- Read **live** across all the day's sessions (realtime + poll).
-- Repo cleanup: `.claude/worktrees/` is now git-ignored and the two stray committed worktree gitlinks removed.
+Requested: a digital version of the physical Goods Received Note and Delivery Note books, one pair per site, filtered by site first and book second, with numbers running chronologically inside each book, a tickable certification stamp, printing, and electronic signature. Built against the **staging** database only — nothing was applied to production.
 
-## 2026-08-19 — Alyssa (Capture: self-heal bag_tags so a captured bag can't stay missing from the ledger/UI — promoted to production)
+- **New `notebooks` schema** (`locations`, `counters`, `documents`, `document_lines`). Each site keeps its own GRN and DN book: `BH` Blackheath, `GD` Graafwater Depot, `GT` Graafwater Teeverwerkers, `VD` Vanrhynsdorp Depot, `VT` Vanrhynsdorp Teeverwerkers — numbers run `<PREFIX>-<GRN|DN>-0000001` … `-9999999`.
+- **The spec listed both Vanrhynsdorp sites as `VD`.** Two books cannot share a prefix — `VD-GRN-0000001` would be ambiguous between the depot and the teeverwerkers — so Vanrhynsdorp Teeverwerkers is seeded as **`VT`**, mirroring the Graafwater depot/teeverwerkers pair. Prefixes live in `notebooks.locations`, so it is one `UPDATE` to change, but it must be changed **before** the first VT note is written: issued numbers are immutable.
+- **Numbering is atomic and gapless.** `notebooks.next_doc_no()` takes the number via `INSERT … ON CONFLICT DO UPDATE` on a per-book counter row, so two people opening a page at the same moment can never land on the same number. The number is allocated when the note is created (like tearing off the next paper leaf) and is fixed for life — a DB trigger rejects any attempt to renumber a note or move it to another book, and a voided note keeps its number rather than releasing it, so the gap in the sequence is the audit trail.
+- **Lifecycle:** draft (editable) → issued (the record; printable and signable) → void (with a required reason; cannot be reopened). Correcting an issued note is a void plus a new note, never an edit.
+- **The note itself** (`NotePaper`) is laid out like the paper book — letterhead and red note number across the top, the ruled QTY / WEIGHT / DESCRIPTION table, the certification stamp beside it, and the two acknowledgement panels along the bottom. The same component renders on screen and prints (everything else on the page is `.no-print`), so there is no separate print template to drift.
+- **Certification stamp** is five tickable rows — NOP, JAS, EU, Rainforest Alliance, Fairtrade — plus the Control Union and EU organic codes, stored as discrete indexed boolean columns rather than jsonb so "every organic load received at GFW this season" is a plain query. Ticking nothing prints no stamp, matching conventional loads.
+- **Signatures reuse the existing esign platform** (`20260729_008`) rather than adding a second signing mechanism: new `notebook_document` subject, with each acknowledgement block signing under its own subject id (`<note id>:received` / `<note id>:transporter`) so esign's one-pending-request-per-subject rule holds per block. Staff sign in-app with their on-file signature; a driver or recipient gets a one-time external link (72h, scoped to that one block) that they can sign on their own device, and the captured signature then prints on the note.
+- **Capture fields** cover the paper note plus what it will need later: purchase order no., weighbridge no. (the hook for the weighbridge slip), lot / batch / producer lot / farmer / season for the farmer-traceability link, and per-line lot and batch numbers. Kept as free text deliberately — a hard FK would block capture at the gate when the code isn't in the system yet.
+- **Access** is by permission, not department (`can_access_notebooks`, `can_create_notebook_doc`, `can_sign_notebook_doc`, `can_void_notebook_doc`), since the books are written at the gate and the store but read by Quality, Production and Management. Defaults granted to store supervisor, warehouse supervisor, stock controller and production supervisor; management gets read-only.
+- **The tables sit in `notebooks` but are reached through auto-updatable `public.notebook_*` views** (`security_invoker = true`, so base-table RLS still applies). PostgREST only serves schemas listed in the project's "Exposed schemas" dashboard setting, which a deploy cannot change — the views mean the module works on staging with no manual dashboard step. All writes go through `app/api/notebooks/*` on the service-role client, where the permission checks live; `authenticated` gets SELECT only.
+- Verified on staging: numbering runs 1, 2, 3 per book and GRN/DN number independently; writes through the views work; renumbering and reopening a voided note are both rejected by the trigger; a voided number is never reissued. Test rows were deleted afterwards, so the books open empty. Supabase security advisors clean for the new objects apart from the deliberate no-policy `notebooks.counters` (nothing but the `SECURITY DEFINER` numbering function may touch it).
 
-**Files changed:** `app/(app)/production/capture/[section]/page.tsx`
+## 2026-08-19 — Alyssa (Production Orders reads output bags live from the bag_tags ledger, so nothing captured on the floor goes missing)
 
-Live incident 2026-08-19: today's Sieving morning shift bagged 24 output bags — all present in `draft_data` and `prod_bagging` — but only 17 were in `bag_tags`. The 7 early-morning bags (STFL-190826-001–004, STCL-190826-001–003) were never in the ledger that Quality's QC queue and the Orders report read, so they didn't show on any monitoring screen even though they were on the operators' tablet. (Those 7 were backfilled by hand to restore today's data.)
+**Files changed:** `lib/production/order-detail.ts`, `app/(app)/production/orders/[id]/page.tsx`, `app/(app)/production/orders/page.tsx`
 
-Root cause: each output bag is registered in `bag_tags` by its own atomic write at bag-add time, but that single write can fail silently (a network blip — the failure is swallowed in the capture components' `addOutput`) and was **never** recovered. `persist()` rebuilds `prod_bagging` from `draft_data` on every save but never touched `bag_tags`, so a bag whose atomic write failed stayed missing from the ledger forever.
+Reported: output bags that were genuinely bagged (and show correctly in Quality) were missing from Production Orders — the 17th's Fine Leaf bag 12, the 18th's Fine Leaf bag 9 — throwing the reported numbers off. Quality reads `bag_tags` (present); Orders read `prod_bagging`/`draft_data` (missing).
 
-Fix: `persist()` now **self-heals `bag_tags`** — on every save it backfills any output serial that isn't in `bag_tags` yet. INSERT-only (`ON CONFLICT DO NOTHING`), so an existing bag's QC / consumed / status / location is never overwritten; only the missing rows are created. Since `persist()` runs every few seconds, a failed atomic write now self-corrects within a tick, and the ledger (and the already-live Orders detail that reads it) can no longer fall behind what the operators actually captured. Pasteuriser keeps its own range-expanded `bag_tags` write.
+Root cause: `bag_tags` is written atomically — one row per physical bag, the instant it's tagged — and is the ledger Quality's QC queue reads. `prod_bagging` and the session `draft_data` snapshot are instead rewritten wholesale on every save (`persist()` delete + reinsert-all), so a save that races a rapid bag-add intermittently drops bags. Measured live on production: a Blender session with 11 real bags had **1** row in `prod_bagging`; a Sieving session with 24 had **2**. In every session checked, `bag_tags` was complete.
 
-## 2026-08-14 — Alyssa (Camera barcode scanning for bag tracking — works on any phone/tablet, not just USB scanners — promoted to production)
+- **Order detail** (`order-detail.ts` / `[id]/page.tsx`) now builds the output-bag list as the union of `bag_tags` (active, non-voided — the authoritative spine) and `prod_bagging` (used only to enrich each bag with its output group / recorded time). A bag in `prod_bagging` but not `bag_tags` (no-serial by-products, Pasteuriser range rows) is still included; voided bags are excluded everywhere. Verified against the real broken sessions: Blender 1→11, Sieving 2→24, and the reported missing bags now present.
+- The detail view is now an **independent live read** — it reloads straight from the database via a realtime subscription on this order's bag/bagging/session rows (20s poll backstop), so a bag captured on the floor appears within a tick **without opening the capture page**. Output bags are grouped per product type with their own count + weight ("14 bags of Fine Leaf · 4,200 kg"), which also reads far better on a phone than the old wide flat table.
+- **Orders list** counts + output weight now come from the same reliable ledger union (not `prod_bagging`/`prod_mass_balance`), and the list auto-refreshes every 30s so it stays live during a shift.
+- No schema change — `bag_tags`/`prod_bagging` are already realtime-enabled. (`persist()`'s own write race is a separate, deeper fix; this makes the reporting side correct and resilient regardless.)
 
-**Files changed:** `components/shared/BarcodeScanner.tsx` (new), `components/shared/ScanCameraButton.tsx` (new), `components/production/capture/BagScanIn.tsx`, `components/production/capture/GranuleCapture.tsx`, `components/production/capture/BlenderCapture.tsx`, `components/production/live/ScanInput.tsx`, `components/logistics/ScanInput.tsx`, `app/(app)/logistics/receiving/from-production/page.tsx`, `app/(app)/tags/page.tsx`, `package.json`
-
-Until now, bag scanning only worked with a hardware USB/Bluetooth keyboard-wedge scanner — a phone or tablet with no such scanner attached had no way to scan a bag at all (the only real camera-decoder in the app, `PartScanner.tsx`, is scoped to spare parts and only supports Chrome/Android's native `BarcodeDetector`, so it silently does nothing on iOS Safari anyway).
-
-- New **`BarcodeScanner`** modal: native `BarcodeDetector` on Chrome/Android/Edge, lazy-loaded **`@zxing/browser`** decoder as a fallback on iOS Safari/Firefox (no native API there), and a manual type-in fallback if the camera itself fails to start. Chrome/Android users never download the zxing bundle since it's only imported when the native API is absent.
-- New **`ScanCameraButton`**: a small feature-detected trigger (renders nothing if `getUserMedia` doesn't exist) that opens the modal and returns the decoded code via a callback — a one-line drop-in next to any existing scan input.
-- Wired in **additively** everywhere a bag is scanned today — the existing hardware-scanner text inputs are untouched, this just adds a camera option beside them: Refining + Pasteuriser debagging (shared `ScanBox` in `BagScanIn.tsx`), Granule dust-input rows, Blender's add-bag modal, the `production/live` capture scan input, the logistics scan input (dispatch, warehouse units), receive-from-production, and the `/tags` quick lookup.
-- Not wired into GRN receiving (`logistics/receiving/[id]/page.tsx`) — that screen picks a location from a dropdown rather than scanning a barcode, so there's no text input to sit alongside.
-- iOS decoder-attach failures are reported separately from camera-acquisition failures (fixed same day — the camera can open fine while only the zxing fallback fails to start), so a decoder problem doesn't show a misleading "could not start the camera" message; the live preview stays up with a manual-entry fallback.
-
-## 2026-08-19 — Alyssa (Production Orders: independent live per-order detail + reliable bag counts from the bag_tags ledger — promoted to production)
-
-**Files changed:** `lib/production/order-detail.ts` (new), `app/(app)/production/orders/[id]/page.tsx` (new), `app/(app)/production/orders/page.tsx`
-
-Promotes the Production Order detail view (staging #551) to production **together with** the live-ledger read fix (#717), so the reporting side is correct from the moment it lands. Code-only: `prod_bagging.bagging_time` is already `timestamptz` on production and `bag_tags`/`prod_bagging` are already realtime-enabled — no migration.
-
-Reported: output bags that were genuinely bagged (and show in Quality) were missing from Production Orders — the 17th's Fine Leaf bag 12, the 18th's bag 9 — throwing reported numbers off. Root cause: `bag_tags` is written atomically, one row per physical bag; `prod_bagging`/`draft_data` are rewritten wholesale by `persist()` on every save, so a save racing a rapid bag-add intermittently drops bags (measured live: Blender 11 bags → 1 row; Sieving 24 → 2). This mirrors the same union `qms.v_bag_events` uses (prod_bagging + bag_tags fallback) — the ledger Quality reads — so Orders and bag tracking now reflect the same bags.
-
-- **New order detail** reads output bags as the union of `bag_tags` (active, non-voided — authoritative) and `prod_bagging` (enrich only); nothing bagged is ever missing, voided bags excluded, Pasteuriser/by-product rows still covered. Independent **live** read (realtime subscription on this order's rows + 20s poll), so a floor bagging appears within a tick **without opening the capture page**. Output bags grouped per product type with their own count + weight ("14 bags of Fine Leaf · 4,200 kg") — also mobile-friendly.
-- **Orders list** counts + output weight now come from the same reliable ledger union (not `prod_bagging`/`prod_mass_balance`), auto-refreshing every 30s; and the list now surfaces who signed off + a link to the full record (staging #550/#551).
-
-## 2026-08-18 — Alyssa (Refining + Granule: Print label / Write on tag choice, matching the other sections — promoted to production)
-
-**Files changed:** `components/production/capture/RefiningCapture.tsx`, `components/production/capture/GranuleCapture.tsx`
-
-Follow-up to enabling label printing: Sieving, Pasteuriser and Blender already gave the operator an explicit per-bag choice — Print label or Write on tag — with a status badge once tagged. Refining and Granule instead called `printLabelAuto()` silently the instant a bag was added, with no button, no write-on-tag fallback, and no on-screen sign that a label was ever attempted or reached the printer.
-
-- Both sections now start a bag untagged; the operator picks **Print label** (same `printLabelAuto` network-print-with-browser-fallback path as before) or **Write on tag** (records the choice, no print attempt), and the row shows a printed/handwritten badge afterward — identical pattern to Blender/Pasteuriser.
-- Also writes `tag_method` on the bag's `bag_tags` row when tagged, matching Blender/Pasteuriser's DB behaviour.
-- Out of scope: Granule's end-of-shift dust by-product bags — never wired to print at all, separate follow-up if that's wanted.
-
-## 2026-08-18 — Alyssa (Refining 1/2 overview: group debagging inputs by product type, not lot — promoted to production)
-
-**Files changed:** `components/production/capture/CaptureOverview.tsx`
-
-Reported: on the Refining 1/2 Overview step, the "Debagging — in" list showed one row per bag (each labelled with whatever date/lot happened to be on that bag's tag, e.g. `12-08-05`, `14-08-26`) instead of a collapsible summary — the grouping key was lot/serial, but Refining's input bags each carry a unique lot (often just the delivery date), so every group ended up with exactly one bag and the collapsing was pointless. Sieving's tower groups meaningfully because its bags actually share a lot. Fixed by grouping Refining's debag inputs by `productType` (Coarse Leaf, Fine Leaf, Sticks, etc.) instead — the same key the Capture tab already groups by — so the Overview now shows one collapsible card per input type with its bags' serials, weights, and original lot/delivery date nested underneath.
-
-## 2026-08-18 — Alyssa (Bag top-ups now require a named source bag — every top-up is a traceable transfer, not a loose number — promoted to production)
+## 2026-08-18 — Alyssa (Bag top-ups now require a named source bag — every top-up is a traceable transfer, not a loose number)
 
 **Files changed:** `supabase/migrations/20260818_004_bag_weight_transfer_provenance.sql` (new), `lib/production/scan-utils.ts`, `app/(app)/tags/page.tsx`, `lib/dashboard/data.tsx`, `components/dashboard/CommandCentre.tsx`, `components/layout/OperationalTrends.tsx`, `components/management/OperationalTrends.tsx`, `components/count/monthly/{MonthlyBatchLedger,MonthlyReconciliation}.tsx`
 
@@ -2258,7 +4257,7 @@ Reported requirement: a top-up must always say which bag the weight is physicall
 - **Reporting correctness fix, driven by this change**: because every top-up now has a source, it is *never* new production — it's kg that was already counted the day its source bag was first bagged. Dashboard tiles, `OperationalTrends`, and the monthly ledgers were summing `'bagging_out' + 'topped_up'`; reverted to `'bagging_out'` only, or every top-up would have double-counted the same kg (once on the day it was produced, again on the day it moved between containers).
 - **Also fixes a real bug found in the process**: the previous migration's `scan_events.action` constraint update silently dropped `'qc_check'` (added by the void-status migration that landed just ahead of it) — the fix for that was made during a merge but never `git add`ed before the commit, so it didn't ship. Restored here.
 
-## 2026-08-18 — Alyssa (Bag Tags: make "Add weight" + forced reprint available on any bag, not just ones flagged open — promoted to production)
+## 2026-08-18 — Alyssa (Bag Tags: make "Add weight" + forced reprint available on any bag, not just ones flagged open)
 
 **Files changed:** `app/(app)/tags/page.tsx`
 
@@ -2267,7 +4266,18 @@ The Add-weight/forced-reprint flow (from the earlier half-bag top-up feature) on
 - The "Add weight" button in the bag detail modal (`app/(app)/tags/page.tsx`) now shows for every bag, open or not — scan any bag, add weight, get forced back to a fresh printed label, same as before.
 - The "This completes the bag — mark it no longer open" checkbox still only shows when the bag is currently open (nothing to "complete" on an already-closed bag); adjusting a closed bag leaves its open/closed state untouched.
 
-## 2026-08-18 — Alyssa (Capture screens: block implausible weight typos, e.g. 1000kg instead of 100kg — promoted to production)
+## 2026-08-18 — Alyssa (Sieving bucket elevator: track carry-over as a real ledger, stop double-counting shifts on Overview)
+
+**Files changed:** `supabase/migrations/20260818_003_bucket_elevator_carryover.sql` (new), `lib/production/bucket-elevator.ts` (new), `components/production/capture/SievingCapture.tsx`, `components/production/capture/CaptureOverview.tsx`, `app/(app)/production/capture/[section]/page.tsx`
+
+Reported: the bucket elevator holds material that physically carries across the production day — the afternoon shift leaves it in the elevator for tomorrow (an output), and the following morning shift consumes it (an input). Two problems: (1) the Overview screen showed today's morning consumption and today's afternoon carry-over added together into one "Debagging — in" figure, when they're two different physical quantities a day apart; (2) there was no actual link between what one shift left and what the next consumed — just a free-typed kg on each shift's own screen.
+
+- New append-only `production.bucket_elevator_log` (mirrors the existing Granule dust-carryover ledger): a `'generated'` row when the afternoon shift locks its figure, a `'consumed'` row when the following morning shift locks its own. Outstanding balance = generated − consumed, tracked per **variant family** (conventional or organic — RA-Conventional shares Conventional's pool, RA-Organic shares Organic's, the two families never mix), via `variantFamily()`/`isOrganicVariant()`.
+- `SievingCapture`: the morning shift's bucket-elevator field now prefills with the outstanding balance for its own variant family (still fully editable) and shows an info line explaining the figure — or, if the *other* family has an outstanding balance instead, explains that it's sitting there unusable for this shift. Both existing lock paths (the explicit "Done — lock" button and the auto-lock when leaving the Debagging tab) route through one `bucketLockPatch()` that writes the ledger entry exactly once per session, so re-opening/editing an already-locked figure never double-writes it.
+- `CaptureOverview`: `Production` gained an optional `shift` field so its debag-grouping can tell which physical direction a Sieving production's bucket-elevator figure is (this was the actual bug — the grouping function had no way to know). The page now tags each production with its shift when assembling the combined list for Overview. Debagging-in totals only include the *morning's* bucket figure; a new "Bucket elevator — left for tomorrow" line in the Bagging-out card carries the *afternoon's* figure as an output instead.
+- Migration needs applying to **staging** Supabase before this ships (SQL Editor, `20260818_003_bucket_elevator_carryover.sql`), same as any other new-table migration in this repo.
+
+## 2026-08-18 — Alyssa (Capture screens: block implausible weight typos, e.g. 1000kg instead of 100kg)
 
 **Files changed:** `lib/production/capture-config.ts`, `components/production/capture/{OutputPicker,SievingCapture,RefiningCapture,GranuleCapture,BlenderCapture,PasteuriserCapture}.tsx`
 
@@ -2279,7 +4289,23 @@ Reported: nothing stopped an operator from fat-fingering an extra zero into a we
 - Along the way, fixed a latent bug in 3 files (Refining, Granule, Blender): each had a *second*, separate "is this row complete" function driving the auto-lock-on-next-row behaviour, distinct from the one gating the visible "Done" button — only the visible one had ever been kept in sync with new validation rules, so a row could silently auto-lock with an invalid value even while its own button correctly stayed disabled. Sieving didn't have this bug (both call sites already shared one function).
 - Also fixed a cosmetic bug in the same 3 files' "still needed" helper text: when the only remaining problem was an over-limit weight (not a missing field), the old code produced an empty "&nbsp;still needed." string instead of just showing nothing (the dedicated red error below the field already explains it).
 
-## 2026-08-18 — Alyssa (Half-filled bag top-ups: track a bag left open across shift boundaries, forced reprint on every weight change — promoted to production)
+## 2026-08-18 — Alyssa (Refining 1/2 overview: group debagging inputs by product type, not lot)
+
+**Files changed:** `components/production/capture/CaptureOverview.tsx`
+
+Reported: on the Refining 1/2 Overview step, the "Debagging — in" list showed one row per bag (each labelled with whatever date/lot happened to be on that bag's tag, e.g. `12-08-05`, `14-08-26`) instead of a collapsible summary — the grouping key was lot/serial, but Refining's input bags each carry a unique lot (often just the delivery date), so every group ended up with exactly one bag and the collapsing was pointless. Sieving's tower groups meaningfully because its bags actually share a lot. Fixed by grouping Refining's debag inputs by `productType` (Coarse Leaf, Fine Leaf, Sticks, etc.) instead — the same key the Capture tab already groups by — so the Overview now shows one collapsible card per input type with its bags' serials, weights, and original lot/delivery date nested underneath.
+
+## 2026-08-18 — Alyssa (Void the bag_tags row when an output bag is removed from a capture record)
+
+**Files changed:** `supabase/migrations/20260818_001_bag_tags_void_status.sql` (new), `lib/production/scan-utils.ts`, `components/production/capture/SievingCapture.tsx`, `GranuleCapture.tsx`, `BlenderCapture.tsx`, `RefiningCapture.tsx`
+
+Reported live on production: two bags removed from a reopened 2026-08-17 Sieving morning session (one intentionally, `STBD-170826-001`; one not, `STFL-170826-012`, restored by hand into that session's `draft_data`) stayed `status='in_stock'` in `bag_tags` after being deleted from the capture record — looking like real, available inventory to every other screen (Quality's pending-QC queue, Stock Control, Orders) even though the record they came from said they didn't exist.
+
+Every "remove output bag" button (Sieving, Granule, Blender, Refining) only ever filtered the bag out of local capture state — the `bag_tags` row, written immediately when the bag was added, was never touched. Added `voidBagTag()` (`lib/production/scan-utils.ts`), called from all four sections' remove functions: flips `bag_tags.status` to `'voided'` (new allowed value) and logs a `'void'` `scan_events` row. Never hard-deletes — `scan_events.serial_number` has an `ON DELETE CASCADE` FK to `bag_tags`, so deleting the row would silently erase its own audit trail. Every existing status-filtered "active" query elsewhere naturally excludes a voided bag without needing any changes there.
+
+Migration also widens `scan_events.action` to include `'qc_check'` — discovered mid-deploy that this value was already live on staging (`app/(app)/quality/sieving/page.tsx`) but missing from the original migration's constraint; included here without touching that Quality code at all, so as not to break it.
+
+## 2026-08-18 — Alyssa (Half-filled bag top-ups: track a bag left open across shift boundaries, forced reprint on every weight change)
 
 **Files changed:** `supabase/migrations/20260818_002_bag_weight_topup_tracking.sql` (new), `lib/production/scan-utils.ts`, `lib/production/capture-config.ts`, `components/production/capture/OutputPicker.tsx`, `components/production/capture/{SievingCapture,RefiningCapture,GranuleCapture,BlenderCapture,PasteuriserCapture}.tsx`, `app/(app)/tags/page.tsx`, `lib/dashboard/data.tsx`, `components/dashboard/CommandCentre.tsx`, `components/layout/OperationalTrends.tsx`, `components/management/OperationalTrends.tsx`, `components/count/monthly/{MonthlyBatchLedger,MonthlyReconciliation}.tsx`
 
@@ -2290,27 +4316,35 @@ Reported: operators sometimes weigh and print a bag's label before it's physical
 - Sieving, Refining 1/2, Granule, and Blender capture screens get a "Leave bag open" choice when adding an output bag (integrated against the Print label / Write on tag choice UI that landed on Refining/Granule in the meantime — the weight-entry step itself was unaffected by that change). Pasteuriser is deliberately out of scope — it has no per-bag records today (output is range-based), so open-bag tracking there needs its own project first.
 - `app/(app)/tags/page.tsx` (the existing scan/lookup screen) gets a new "Open" tab, a third status badge, and an "Add weight" flow: enter the amount added, soft-confirm if the new total looks unusually heavy for that product (`expectedBagWeightFor()`, generalised from `OutputPicker`'s old `standardWeight()`), hard-block at 500kg, then write the top-up and unconditionally reprint the physical label via the existing `printLabelAuto`.
 - Daily/monthly production reporting (dashboard tiles, `OperationalTrends`, `MonthlyBatchLedger`/`MonthlyReconciliation`) now sums `scan_events.weight_kg` by the date it was actually scanned, instead of `bag_tags.weight_kg` by the bag's original `created_at` — so a bag topped up on a later day attributes only that day's delta to that day's totals, never retroactively re-summed. (Along the way, fixed two dashboard queries silently querying the wrong schema/a nonexistent `tag_date` column — they were returning empty results already, unrelated to this feature.)
-- Note: this feature was built and promoted against staging's post-print-choice-UI capture screens (Refining/Granule's explicit Print label / Write on tag step, PR #701/#702), which had not yet been promoted to `main` at the time of this promotion — reconciled here to apply against `main`'s still-immediate-print `addOutputBag` flow instead, without pulling that unrelated UI change in.
+- `scan_events.action`'s allowed values also needed to carry forward `'qc_check'` (added by the void-status migration that landed just ahead of this one) alongside the new `'topped_up'` value.
 
-## 2026-08-18 — Alyssa (Sieving bucket elevator: track carry-over as a real ledger, stop double-counting shifts on Overview — promoted to production)
+## 2026-08-18 — Alyssa (Refining + Granule: Print label / Write on tag choice, matching the other sections)
 
-**Files changed:** `supabase/migrations/20260818_003_bucket_elevator_carryover.sql` (new), `lib/production/bucket-elevator.ts` (new), `components/production/capture/SievingCapture.tsx`, `components/production/capture/CaptureOverview.tsx`, `app/(app)/production/capture/[section]/page.tsx`
+**Files changed:** `components/production/capture/RefiningCapture.tsx`, `components/production/capture/GranuleCapture.tsx`
 
-Reported: the bucket elevator holds material that physically carries across the production day — the afternoon shift leaves it in the elevator for tomorrow (an output), and the following morning shift consumes it (an input). Two problems: (1) the Overview screen showed today's morning consumption and today's afternoon carry-over added together into one "Debagging — in" figure, when they're two different physical quantities a day apart; (2) there was no actual link between what one shift left and what the next consumed — just a free-typed kg on each shift's own screen.
+Follow-up to enabling label printing (PR #699): Sieving, Pasteuriser and Blender already gave the operator an explicit per-bag choice — Print label or Write on tag — with a status badge once tagged. Refining and Granule instead called `printLabelAuto()` silently the instant a bag was added, with no button, no write-on-tag fallback, and no on-screen sign that a label was ever attempted or reached the printer.
 
-- New append-only `production.bucket_elevator_log` (mirrors the existing Granule dust-carryover ledger): a `'generated'` row when the afternoon shift locks its figure, a `'consumed'` row when the following morning shift locks its own. Outstanding balance = generated − consumed, tracked per **variant family** (conventional or organic — RA-Conventional shares Conventional's pool, RA-Organic shares Organic's, the two families never mix), via `variantFamily()`/`isOrganicVariant()`.
-- `SievingCapture`: the morning shift's bucket-elevator field now prefills with the outstanding balance for its own variant family (still fully editable) and shows an info line explaining the figure — or, if the *other* family has an outstanding balance instead, explains that it's sitting there unusable for this shift. Both existing lock paths (the explicit "Done — lock" button and the auto-lock when leaving the Debagging tab) route through one `bucketLockPatch()` that writes the ledger entry exactly once per session, so re-opening/editing an already-locked figure never double-writes it.
-- `CaptureOverview`: `Production` gained an optional `shift` field so its debag-grouping can tell which physical direction a Sieving production's bucket-elevator figure is (this was the actual bug — the grouping function had no way to know). The page now tags each production with its shift when assembling the combined list for Overview. Debagging-in totals only include the *morning's* bucket figure; a new "Bucket elevator — left for tomorrow" line in the Bagging-out card carries the *afternoon's* figure as an output instead.
-- Migration needs applying to **production** Supabase before this is usable there (SQL Editor, `20260818_003_bucket_elevator_carryover.sql`) — already applied to staging.
+- Both sections now start a bag untagged; the operator picks **Print label** (same `printLabelAuto` network-print-with-browser-fallback path as before) or **Write on tag** (records the choice, no print attempt), and the row shows a printed/handwritten badge afterward — identical pattern to Blender/Pasteuriser.
+- Also writes `tag_method` on the bag's `bag_tags` row when tagged, matching Blender/Pasteuriser's DB behaviour.
+- Out of scope: Granule's end-of-shift dust by-product bags — never wired to print at all, separate follow-up if that's wanted.
 
-## 2026-08-18 — Alyssa (Sieving: stop serial reset across the midnight tail; flush pending capture before the 16h00 changeover blocks the screen — promoted to production)
+## 2026-08-18 — Alyssa (Granule: fix trailing-space lot mismatch; Blender: scan-to-categorise debagging)
 
-**Files changed:** `components/production/capture/SievingCapture.tsx`, `app/(app)/production/capture/[section]/page.tsx`
+**Files changed:** `components/production/capture/GranuleCapture.tsx`, `components/production/capture/BlenderCapture.tsx`
 
-Reported: a production run spans one continuous shift-day (07h00-01h00 next morning), so bag serials should keep counting across the whole window; also a bag added near 4pm had a massive delay before showing up. Confirmed live on production: 9 Sieving Tower bags from the 2026-08-17 afternoon shift, all bagged 22:00-22:48 UTC (00:00-00:48 SAST, i.e. right at the midnight rollover), got stamped with the next day's date code and a sequence restarting at 001 — corrected by hand directly in `bag_tags`/`prod_bagging`/`scan_events` (an FK from `scan_events.serial_number` to `bag_tags.serial_number` meant this needed insert-new/repoint/delete-old rather than a plain rename); physical relabelling of those 9 bags still needs doing on-site.
+- **Granule — fix immediately requested:** the shift's lot number (`assignment.lot_number`) was used raw everywhere except the serial generator, which trimmed its own copy. A stray leading/trailing space on the assignment (a supervisor typo, or older un-normalised data) meant `bag_tags.lot_number` was silently saved with the space while the serial's lot stem was clean — an exact-match mismatch between what's stored and what's embedded in the serial, breaking anything comparing them literally (Batch Reconciliation's `.eq('lot_number', ...)`, per-lot serial numbering). Fixed at the single source: `const lot = (assignment?.lot_number ?? '').trim()`, so every downstream use (serial, all three `bag_tags` writes, on-screen confirm) is guaranteed clean regardless of what's in the assignment record.
+- **Blender — scan-to-categorise debagging:** added the same top-level **"Scan a bag to debag"** box used on Refining/Pasteuriser. Previously the operator had to pick an ingredient group *first*, then scan into it (and the scan only validated a match) — if you scanned before picking a group, or the field wasn't inside the modal, nothing happened. Now scanning alone is enough — the bag's own product type decides which ingredient group it belongs to: matched against the blend's declared ingredients, or a new "not in recipe" group is created automatically for it (the same mechanism as the existing "Add Other" search, just driven by the scan instead of a manual Master Inventory search). The confirmation popup shows the bag's record and which group it will land in before consuming. Picking a group manually (via "+ Add debagging bag") and "Add Other" both remain available.
 
-- `nextSievingSerial()` derived its daily date stem from `new Date()` instead of the session's own pinned date — invisible for most of the shift, but past midnight (still the same continuous afternoon/night shift) the wall clock rolls to tomorrow while the session/mass-balance/everything else stays on yesterday's date, silently resetting the per-type sequence. Fixed to take the session's `date`. (The identical bug in `nextGranuleSerial` had already been independently fixed on staging — confirmed via diff, no further change needed there.)
-- The 16h00 PIN-required `ChangeoverModal` is a full-screen overlay that can land mid-gesture any time in the 30s after 16:00:00 on a still-open morning session. It doesn't block the debounced autosave, but a bag just added to local state could still be sitting on the 2.5s/20s save timer when the modal suddenly covers the screen. The changeover check now flushes any pending save immediately the moment it decides to show the modal.
+## 2026-08-14 — Alyssa (Camera scanner: iOS decoder failure was reported as a camera failure)
+
+**Files changed:** `components/shared/BarcodeScanner.tsx`
+
+Reported (Android worked, iOS showed "Could not open camera" despite the camera visibly already being open): the zxing-browser decode step — the fallback path only iOS Safari/Firefox take, since Chrome/Android use the native `BarcodeDetector` — shared one try/catch with the `getUserMedia` camera call, so a decoder-attach failure surfaced as a camera error even though the camera had genuinely started.
+
+- Split camera acquisition and decoder startup into separate try/catches. A decoder-only failure now keeps the live preview visible and shows an accurate "couldn't read barcodes automatically here" message with manual entry, instead of the misleading camera error.
+- Switched from `decodeFromVideoElement` to `decodeFromStream`, which owns attaching/playing the stream itself with its own timing handling, instead of racing this component's own `video.play()` — the likely source of the iOS-only failure.
+- Added a "Starting camera…" loading state on open, so the sheet no longer flashes the scan hint before anything has actually started (requested alongside the bug report).
+- Note: this and the original camera-scanner PR (#649) did not actually reach the live staging site until a separate CI fix (#653, deploy script was silently succeeding on failed builds) landed the same day — see that entry further down for why.
 
 ## 2026-08-17 — Gustav (Sieving Final QC: remind (not block) when an earlier bag still needs its QC)
 
@@ -2563,6 +4597,14 @@ Plotting every Bulk Density/Leaf Shade sample across a multi-week From/To range 
 - Picking a day switches that one panel to every sample captured on that day, plotted by hour (0–23h) instead of by date+time — the "hourly samples of a day" view. A ✕ button clears it back to the shared-range view.
 
 
+## 2026-08-14 — Alyssa (Production outage + fix: add `scripts/production-deploy.sh`, matching the existing staging one)
+
+**Files changed:** `scripts/production-deploy.sh` (new), `docs/environments-architecture.md`
+
+While manually promoting the Sieving Tower checks/VSD/AI-summary fix (PR #662) to production, the deploy command from `docs/environments-architecture.md` (`git pull; npm run build; pm2 restart`, plain `;`/newline-chained) got interrupted mid-build by VPS resource contention (the live server + a heavy build + concurrent SSH diagnostic sessions competing for a small box). Because the commands aren't `&&`-chained, `pm2 restart` ran anyway straight after the killed build, restarting `cntp-production` into a half-written `.next` directory — it crash-looped (513 restarts) on a missing `.next/prerender-manifest.json`, taking production down (504 → 502) for several minutes until a clean rebuild completed.
+
+`scripts/staging-deploy.sh` already exists specifically to prevent this exact failure mode (builds into a side `.next-build` dir, atomically swaps only once complete, HTTP-verifies, rolls back on failure) — it just never got a production counterpart. Added `scripts/production-deploy.sh`, an exact mirror pointed at `main`/`cntp-production`/the production URL, and updated the production deploy instructions to use it instead of the raw manual commands.
+
 ## 2026-08-14 — Gustav (Sieving: qms.sd_runs.run_timestamp was never actually written by the app)
 
 **Files changed:** `app/(app)/quality/sieving/page.tsx`
@@ -2595,6 +4637,18 @@ Requested: every quality capture form should survive a dropped connection or clo
 - Deliberately left untouched: pages/forms that are single-field instant-save edits or read-only (Lab Manager, Maintenance QC, inline cell editors) — nothing there is at risk of losing meaningful in-progress work.
 - Recovery is banner-based, not silent auto-restore: on next load, a small amber banner offers Restore/Discard rather than reopening a form unprompted. The draft is deleted on a confirmed DB insert and on explicit Cancel/Close (deliberate abandonment), not just left to go stale.
 
+Format: date · developer · files changed · description of code changes.
+
+## 2026-08-14 — Alyssa (Sieving Tower capture: checks now autosave, VSD logging gated to running/pre-submit, AI summary write verified)
+
+**Files changed:** `components/production/capture/ChecksPanel.tsx`, `lib/production/checks-db.ts`, `app/(app)/production/capture/[section]/page.tsx`
+
+Reported: Sieving Tower checks get filled out but aren't saved; the hourly VSD reading isn't tracked properly; the AI summary isn't saved/readable for the life of the record.
+
+- **Checks not saved**: confirm/number/text/scale checks only ever reached the DB in one all-or-nothing write at PIN sign-off — held only in React state until then. If the operator never finished signing, or a supervisor approved the session before sign-off (which locks the panel for good), everything typed in was lost with no trace. Confirmed live on staging: sieving `check_records` for 2026-08-03, 08-04 and 08-13 are stuck `in_progress` with none of that shift's checks saved. `ChecksPanel` now autosaves each changed check continuously (debounced ~2.5s after a change, flushed on tab-hide/pagehide, and a 20s backstop interval) with `source:'auto'`, independent of whether `sign()` ever runs; `sign()` still writes its own `'sign'`-sourced confirmation of the final values on top, so the PIN-verified audit trail is unchanged.
+- **VSD reading not tracked properly**: the inline "Log reading" button inside the Checks tab had no running/submitted gating at all — unlike the existing page-level hourly popup (`HourlyVsdPrompt`), which already only nags while production is running and stops once the shift is submitted/approved. A reading could be logged before any material was captured, or any time after submission as long as the panel wasn't yet locked. The inline button now shares the same `running && active` gate, with a note explaining why it's hidden when unavailable.
+- **AI summary not durable**: `generateAiSummary`'s write to `check_records.ai_summary` never checked its own error response — a failed save could still flip the UI to "generated" for that page load and then silently vanish (unsaved) the next time anyone opened the record. The summary is now only shown once its write is confirmed to have succeeded; a failed save keeps the "not generated yet" + Generate retry control visible instead.
+- Hardened `checks-db.ts`'s `ensureCheckRecord`/`appendCheckEvent` to throw on a DB error instead of silently swallowing it — that silent-failure shape (mirrors the `qms.sieving_spec_overrides` bug fixed earlier today) is what let all three symptoms look like nothing was wrong until checked against the live data.
 
 ## 2026-08-14 — Gustav (Sieving: charts still overlapping on wide ranges + drop the now-redundant Run Type picker)
 
@@ -2636,6 +4690,16 @@ Feedback on today's slicer (PR #652): it didn't look good and the developer aske
 - Restored the original clickable nav — By Hour/By Week/By Month tabs, ◀/▶ step buttons, and a "Today" reset — now living in the Mesh Trend/Outliers chart's header as before.
 - Kept the one improvement from #652 worth keeping: the chart and the records table still share the exact same window (moving the nav also refilters the table), rather than reverting to two independent date controls. State (view + a separate offset per view, so switching tabs doesn't lose your place) now lives in the page component and is passed down as props instead of living inside the chart.
 
+## 2026-08-14 — Gustav (Staging deploys have been silently failing since the camera-scanning PR — fixed the CI script)
+
+**Files changed:** `.github/workflows/deploy-staging.yml`
+
+Reported: today's sieving layout changes (PR #652, merged and reported "success") weren't showing up on the live staging site — it was still running the pre-slicer layout. Traced it to the deploy script, not the merge.
+
+- **`deploy-staging.yml` ran `npm run build 2>&1 | tail -20` with no `set -e`.** In bash, a pipeline's exit status is the *last* command's — `tail` always exits 0, so a failed `npm run build` was invisible to the script. It kept going, restarted `pm2` (with whatever `.next` was already on disk), and printed "✅ Deployed successfully" regardless. The GitHub Actions job showed green the whole time.
+- **The build has actually been failing since PR #649** (camera barcode scanning): it added `@zxing/browser`/`@zxing/library` to `package.json`, but the deploy script never ran `npm install` at all — only `git pull` then straight to `npm run build`. Confirmed locally: `npm run build` fails outright with `Module not found: Can't resolve '@zxing/browser'` on a tree that has the dependency declared but not installed. Every deploy since #649 — including #650, #651, and today's sieving work (#652) — very likely built against the same stale, pre-#649 `.next`, silently.
+- **Fix**: added `npm install --legacy-peer-deps` before the build step, and `set -eo pipefail` at the top of the script so any failing command — including inside a pipe — stops the deploy immediately instead of limping forward on a broken build. A future build failure will now show up as a red, failed Action run, not a lying green one.
+- Scoped to staging only for now; `deploy-production.yml` has the identical bug and is a separate decision.
 
 ## 2026-08-14 — Gustav (Sieving: fixed Edit Specs never actually saving; reworked layout; chart+table now share one date-range slicer; capped to last 3 months)
 
@@ -2672,50 +4736,25 @@ Two requests: stop In-Process auto-filling (and requiring) a serial number acros
 - **Fix**: new `normProdVariant()` maps the production spellings to the `SD_VARIANTS` codes (case-insensitively; already-short values pass through unchanged), applied at both copy sites plus defensively in the lot-number auto-fill (so a historical bad row can't keep circulating forward when its lot is reused).
 - **Data correction**: 19 existing `qms.sd_runs` rows on production and 2 on staging had `variant = 'Conventional'` — updated to `'CON'` directly (no other full-word variants were present in either database).
 
+## 2026-08-14 — Alyssa (Camera barcode scanning for bag tracking — works on any phone/tablet, not just USB scanners)
 
-## 2026-08-14 — Alyssa (Production outage + fix: add `scripts/production-deploy.sh`, matching the existing staging one)
+**Files changed:** `components/shared/BarcodeScanner.tsx` (new), `components/shared/ScanCameraButton.tsx` (new), `components/production/capture/BagScanIn.tsx`, `components/production/capture/GranuleCapture.tsx`, `components/production/capture/BlenderCapture.tsx`, `components/production/live/ScanInput.tsx`, `components/logistics/ScanInput.tsx`, `app/(app)/logistics/receiving/from-production/page.tsx`, `app/(app)/tags/page.tsx`, `package.json`
 
-**Files changed:** `scripts/production-deploy.sh` (new), `docs/environments-architecture.md`
+Until now, bag scanning only worked with a hardware USB/Bluetooth keyboard-wedge scanner — a phone or tablet with no such scanner attached had no way to scan a bag at all (the only real camera-decoder in the app, `PartScanner.tsx`, is scoped to spare parts and only supports Chrome/Android's native `BarcodeDetector`, so it silently does nothing on iOS Safari anyway).
 
-While manually promoting the Sieving Tower checks/VSD/AI-summary fix (PR #662) to production, the deploy command from `docs/environments-architecture.md` (`git pull; npm run build; pm2 restart`, plain `;`/newline-chained) got interrupted mid-build by VPS resource contention (the live server + a heavy build + concurrent SSH diagnostic sessions competing for a small box). Because the commands aren't `&&`-chained, `pm2 restart` ran anyway straight after the killed build, restarting `cntp-production` into a half-written `.next` directory — it crash-looped (513 restarts) on a missing `.next/prerender-manifest.json`, taking production down (504 → 502) for several minutes until a clean rebuild completed.
+- New **`BarcodeScanner`** modal: native `BarcodeDetector` on Chrome/Android/Edge, lazy-loaded **`@zxing/browser`** decoder as a fallback on iOS Safari/Firefox (no native API there), and a manual type-in fallback if the camera itself fails to start. Chrome/Android users never download the zxing bundle since it's only imported when the native API is absent.
+- New **`ScanCameraButton`**: a small feature-detected trigger (renders nothing if `getUserMedia` doesn't exist) that opens the modal and returns the decoded code via a callback — a one-line drop-in next to any existing scan input.
+- Wired in **additively** everywhere a bag is scanned today — the existing hardware-scanner text inputs are untouched, this just adds a camera option beside them: Refining + Pasteuriser debagging (shared `ScanBox` in `BagScanIn.tsx`), Granule dust-input rows, Blender's add-bag modal, the `production/live` capture scan input, the logistics scan input (dispatch, warehouse units), receive-from-production, and the `/tags` quick lookup.
+- Not wired into GRN receiving (`logistics/receiving/[id]/page.tsx`) — that screen picks a location from a dropdown rather than scanning a barcode, so there's no text input to sit alongside.
 
-`scripts/staging-deploy.sh` already exists specifically to prevent this exact failure mode (builds into a side `.next-build` dir, atomically swaps only once complete, HTTP-verifies, rolls back on failure) — it just never got a production counterpart. Added `scripts/production-deploy.sh`, an exact mirror pointed at `main`/`cntp-production`/the production URL, and updated the production deploy instructions to use it instead of the raw manual commands.
+## 2026-08-14 — Alyssa (Scan-first debagging rolled out: shared component + Pasteuriser popup + Blender auto-fill)
 
-## 2026-08-14 — Alyssa (Sieving Tower capture: checks now autosave, VSD logging gated to running/pre-submit, AI summary write verified — promoted to production)
+**Files changed:** `components/production/capture/BagScanIn.tsx` (new), `RefiningCapture.tsx`, `PasteuriserCapture.tsx`, `BlenderCapture.tsx`
 
-**Files changed:** `components/production/capture/ChecksPanel.tsx`, `lib/production/checks-db.ts`, `app/(app)/production/capture/[section]/page.tsx`
-
-Reported: Sieving Tower checks get filled out but aren't saved; the hourly VSD reading isn't tracked properly; the AI summary isn't saved/readable for the life of the record.
-
-- **Checks not saved**: confirm/number/text/scale checks only ever reached the DB in one all-or-nothing write at PIN sign-off — held only in React state until then. If the operator never finished signing, or a supervisor approved the session before sign-off (which locks the panel for good), everything typed in was lost with no trace. Confirmed live on staging: sieving `check_records` for 2026-08-03, 08-04 and 08-13 are stuck `in_progress` with none of that shift's checks saved. `ChecksPanel` now autosaves each changed check continuously (debounced ~2.5s after a change, flushed on tab-hide/pagehide, and a 20s backstop interval) with `source:'auto'`, independent of whether `sign()` ever runs; `sign()` still writes its own `'sign'`-sourced confirmation of the final values on top, so the PIN-verified audit trail is unchanged.
-- **VSD reading not tracked properly**: the inline "Log reading" button inside the Checks tab had no running/submitted gating at all — unlike the existing page-level hourly popup (`HourlyVsdPrompt`), which already only nags while production is running and stops once the shift is submitted/approved. A reading could be logged before any material was captured, or any time after submission as long as the panel wasn't yet locked. The inline button now shares the same `running && active` gate, with a note explaining why it's hidden when unavailable.
-- **AI summary not durable**: `generateAiSummary`'s write to `check_records.ai_summary` never checked its own error response — a failed save could still flip the UI to "generated" for that page load and then silently vanish (unsaved) the next time anyone opened the record. The summary is now only shown once its write is confirmed to have succeeded; a failed save keeps the "not generated yet" + Generate retry control visible instead.
-- Hardened `checks-db.ts`'s `ensureCheckRecord`/`appendCheckEvent` to throw on a DB error instead of silently swallowing it — that silent-failure shape (mirrors the `qms.sieving_spec_overrides` bug fixed earlier today) is what let all three symptoms look like nothing was wrong until checked against the live data.
-
-## 2026-08-14 — Alyssa (Production: scan-first debagging on Refining/Pasteuriser/Blender/Granule — promoted to production)
-
-**Files changed:** `components/production/capture/BagScanIn.tsx` (new), `RefiningCapture.tsx`, `PasteuriserCapture.tsx`, `BlenderCapture.tsx`, `GranuleCapture.tsx`
-
-Promotes the scan-first debagging work (staging #603/#613/#645) to production. Scanning a bag now looks it up automatically (no Enter/"Look up" tap) across all four debagging lines:
-
-- **Refining 1/2** — scan a bag → popup shows its `bag_tags` record (product, weight, variant, lot, where it was made) + a validity line → "Consume into Refining" registers it debagged-in. Pick-from-system / manual kept as side options. (Shared `BagScanIn` component: `ScanBox` + `BagScanModal`, powered by `validateBagScan`.)
-- **Pasteuriser** — same scan-first popup; one field auto-routes the bag (granule output → post-sieve stream, else main debagging) and shows the target before consuming.
-- **Blender** — its debagging modal now auto-fires the lookup on scan, so fields fill on their own once the ingredient is picked.
-- **Granule** — auto-fills on scan.
-
-Code-only; no DB migration (relies on the already-promoted `validateBagScan` column fix). Blender full popup + per-BOM-slot routing and Granule per-blend popup are follow-ups, along with defining each section's accepted inputs.
-
-## 2026-08-14 — Gustav (Final QC runs were filed under the bag's bagging date instead of the QC date, so they buried themselves in the table)
-
-**Files changed:** `app/(app)/quality/sieving/page.tsx`
-
-Reported: `STFL-130826-012` was captured as a Final QC and is in the database, but could not be found in the sieving runs table.
-
-- **What happened.** The run is in the table — it had sorted itself dozens of rows down. `applyBagToForm()` set the run's **Date** from `bag.bag_date` (when *production bagged* the bag) while the **Time** beside it is always stamped at the moment of capture. The bag was made on 13 Aug and sampled at 07:33 on the morning of the 14th, so the run was stored as `date = 2026-08-13, time = 07:33` — an instant that never happened. The table sorts on `date + time`, so instead of appearing at the top it filed itself near the *bottom* of the 13 August block, below every run from that day's shift.
-- **Fix.** A Final QC run's Date is now the date the QC was performed, matching the capture-stamped Time next to it. The bag's own bagging moment isn't lost — it stays attached to the bag through the serial / `bagging_id` link, and is now shown explicitly in the green confirmation line ("Bagged 2026-08-13 15:33") when a bag is picked. The Date field stays editable, so a night shift can still back-date a run deliberately.
-- **Also fixed a latent midnight bug in the same area:** `blankForm()` seeded the date with `new Date().toISOString().slice(0,10)` — raw UTC. Between 00:00 and 01:59 SAST that is still *yesterday*, so any run captured in that window was filed against the wrong day. Now uses the same `sastDateStr()` (Africa/Johannesburg) helper. One record on production (`16-07-18`, captured 00:37) shows exactly this signature.
-- **Note on the duplicate:** `STFL-130826-012` has **two** Final QC rows (07:33 and 07:35, both 340 / shade 5). The guard that blocks a second Final QC on one serial is merged to staging but is sitting in PR #641 awaiting approval for `main`, so it was not yet protecting the live site when these were captured.
-- Historical records were **not** bulk-rewritten: of 10 rows since 1 Aug where the stored date differs from the capture date, several are legitimate night-shift back-dating (time typed as 23:30, captured 00:12), which this change deliberately still allows.
+- New shared **`BagScanIn.tsx`** (`ScanBox` auto-fires ~350 ms after the serial settles; `BagScanModal` shows the bag's `bag_tags` record + validity via `validateBagScan`), extracted from Refining so every section shares one implementation. Refining imports it (no behaviour change).
+- **Pasteuriser** — full scan-first popup; one field routes the bag (granule output → post-sieve stream E, else main debagging D) and the popup shows the target before consuming. Pick-from-system / manual stay on each stream.
+- **Blender** — debagging modal now auto-fires the lookup on scan (was Enter/"Look up" only). Full popup + BOM-slot auto-routing to follow once each blend's accepted ingredients are defined.
+- **Granule** already auto-fills on scan. Per-section input-acceptance rules are the next refinement.
 
 ## 2026-08-14 — Gustav (Final QC runs were filed under the bag's bagging date instead of the QC date, so they buried themselves in the table)
 
@@ -2831,14 +4870,6 @@ Each output bag now records its producing line directly on `prod_bagging` — `S
 - **`bagging_id` is now `md5(serial_number)::uuid`** — deterministic, unique and permanent, since `bag_tags`' PK is the serial (text) while `sd_runs.bagging_id` is `uuid` and the UI keys the dropdown on it. Final QC runs linked under the old `prod_bagging` uuid still resolve through the serial-number fallback in `v_bag_qc_status`, so **no existing sign-off was lost** — verified on production: `STCL-130826-001` and `STFL-130826-001` still correctly show `qc_done` against Portia's runs.
 - **In-Process serial is now pre-filled from production** instead of typed: it auto-fills with the most recent bag for the sieve currently open (and its lot, if blank), and offers the same product-filtered bag list to pick a different one. Only fills a blank field, so a deliberate choice is never overwritten. *(This reverses the earlier "in-process carries no serial" decision, per the latest request.)*
 - The row-editor Serial No. dropdown was already filtered to the active product, so it now lists the correct Coarse Leaf serials automatically once the view is fixed.
-## 2026-08-13 — Alyssa (prod_bagging: bagging_time → timestamptz + new work_centre column — promoted to production)
-
-**Files changed:** `app/(app)/production/capture/[section]/page.tsx`, `lib/supabase/database.types.ts`, `supabase/migrations/20260813_001_bagging_time_timestamptz.sql`, `supabase/migrations/20260813_002_prod_bagging_work_centre.sql`
-
-Promotes to production the two `prod_bagging` changes already on staging:
-
-- **`bagging_time` → `timestamptz`.** `buildBag()`'s five output sections now write each bag's immutable `logged_at` instant (the moment it was secured) instead of an `HH:MM` string; the `bagLoggedAtToTime()` helper is removed. The column type was converted on the production DB (migration `20260813_001`). NB: on prod the QC views are Gustav's `bag_tags`-based ones (#627) — the view section of `20260813_001` is superseded by `20260813_003` and must not overwrite it.
-- **New `work_centre` column.** Each bag records its producing line (`Sieving Tower` / `Refining 1` / `Refining 2` / `Granule Line` / `Blender` / `Small Blender` / `Pasteuriser`); `buildBag()` stamps `meta.name`. Migration `20260813_002` adds the column and backfills from `prod_sessions.section_id`.
 
 ## 2026-08-13 — Gustav (Sieving: fix stale "bag ready for QC" pop-ups)
 
@@ -2948,23 +4979,17 @@ Type codes (matched on the product name, so they work whether the operator picks
 - Empty state now says which product has no bags awaiting QC, and correctly notes that Rooibos Blocks / Indent Sticks never require a QC stamp instead of showing a generic "no bags" message.
 - Serial number continues to be pulled straight from the bag's own record (`production.prod_bagging.bag_serial_no`) rather than typed — so once the new bag serial format is in place, this form picks it up automatically with no further change needed here.
 
-## 2026-08-12 — Alyssa (Sieving output serials now encode the output type)
-
-**Files changed:** `components/production/capture/SievingCapture.tsx`
-
-Sieving output serials went from `ST-DDMMYY-NNN` (one shared daily counter) to **`ST{TYPE}-DDMMYY-NNN`** with a per-type daily sequence, e.g. Fine Leaf → `STFL-120826-003`, so bag counts per output type are readable off the serial/barcode. Type codes (name-matched): FL, CL, RS, IS, RB, BD, PD, WD, BE; two-letter fallback otherwise. Existing `ST-…` bags stay findable; no DB change.
-
 ## 2026-08-12 — Alyssa (Fix capture save 400: stop writing phantom columns to prod_debagging/prod_bagging)
 
 **Files changed:** `app/(app)/production/capture/[section]/page.tsx`
 
-Saving a capture session returned `400 (Bad Request)` on the `prod_debagging`/`prod_bagging` insert, so sessions weren't persisting. Root cause: the save wrote two columns the tables don't have — `grade` (Sieving debag row; the table uses `org_or_conv`, no migration ever added `grade`) and `production_ref` (Blender/Pasteuriser debag + bag rows). Both are write-only — never read back anywhere (the blend/lot reference is already in `lot_number`/`acumatica_id`). Removed all five write sites; no DB migration.
+Saving a capture session was returning `400 (Bad Request)` on the `prod_debagging` (and `prod_bagging`) insert, so sessions weren't persisting — which then made scan-testing meaningless (a bag that never saved correctly reads as "not found"). Root cause: the save wrote two columns the tables don't have:
 
-## 2026-08-07 — Gustav (COA history: IT/full admins can also delete a generated COA)
+- **`grade`** — the Sieving farm-bag debagging row inserted `grade`, but `prod_debagging` has no `grade` column (it uses `org_or_conv`); no migration ever added it. Pure phantom write.
+- **`production_ref`** — the Blender/Pasteuriser debagging and bagging rows inserted `production_ref`, which is absent from the staging tables.
 
-**Files changed:** `app/(app)/quality/coa/page.tsx`
+Confirmed via the live staging `information_schema` column list, and confirmed both columns are **never read back anywhere** in the app (the blend/production reference is already carried by `lot_number`/`acumatica_id`). So the fix is simply to stop inserting them — no database migration, and it corrects the save on both staging and production. Removed all five write sites (Sieving `grade`; Blender + Pasteuriser `production_ref` in both `buildDebag` and `buildBag`).
 
-- Extended the COA history **🗑 Delete** button visibility to full admins (`isFullAdmin` — the `senior_developer` role, which already bypasses all other permission checks in this app), so IT admins (e.g. Alyssa, Jan) see it too, in addition to the Lab Manager and Quality Manager. Same confirmation popup and delete behaviour, no schema change.
 ## 2026-08-11 — Alyssa (Pasteuriser: register each finished bag in bag_tags so it's scannable)
 
 **Files changed:** `app/(app)/production/capture/[section]/page.tsx`
@@ -3021,7 +5046,6 @@ Removed the ability to add, edit or delete Master Inventory items and BOMs (incl
 - **Master Inventory** (`/production/inventory`): dropped the "Add item" form, inline cell editing, and the Active/Inactive checkbox toggle. Now a plain read-only table (search + active-only filter still work).
 - **BOMs** (`/production/blends`): dropped "Add" (new BOM), "Add component" on an existing BOM, inline component editing (ingredient column, qty%), and both delete affordances (component and whole BOM). The Blender-only "editable work centre" distinction is gone too — every work centre is now browse-only, consistently. Search, work-centre filter, the unresolved-item-link flag, the parent-blend panel, and "Generate job card" from a Pasteuriser BOM are all unchanged.
 - **Removed the now-dead permissions** `can_edit_inventory`, `can_delete_inventory`, `can_edit_blends`, `can_delete_blends` from `PermissionKey`, `ALL_PERMISSION_KEYS`, `PERMISSION_GROUPS`, role defaults, and the `PERMISSION_MATRIX` (which now shows both modules as read-only) — nothing in the app checked them anymore once the UI came out, so leaving them would just be confusing dead toggles on the Users & Roles page. `can_view_inventory`/`can_view_blends` are untouched; viewing still works exactly as before.
-- Promoted to production from staging PR #581.
 
 ## 2026-08-11 — Alyssa (Bag label design: confirmed final layout, PPLB + browser preview)
 
@@ -3056,28 +5080,6 @@ Second real course in the LMS (after Sieving Tower), for production supervisors 
 - **Charts weren't interactable.** `PivotChart` (Floor/Quality/Machine) and `SolarChart` now put a native `<title>` tooltip on every point/bar — the date-mode line charts previously only marked the single last point per line, so hovering anywhere else on the line showed nothing.
 - **PO reference codes were unreadable without memorizing them.** There's no real Acumatica production-order sync in this codebase (`prod_sessions.production_orders` is an operator-typed label, not a synced order), so `dashboard-supply` now derives a **Product** column from what was actually bagged under that PO reference (`prod_bagging.product_type`) — the honest signal actually available. Added a matching `SupplyChart` trend chart (daily output for the top 8 PO references by volume), since the Supply & demand tab previously had no chart at all.
 - **Quality → production connection now surfaces who/when.** `dashboard-rows` adds `checkOperator`/`checkSupervisor`/`lastCheckedAt`/`lastCheckActor` (machine checks, from `check_records`/`check_events`) and `qcName`/`qcCheckedAt` (quality runs, from `qms.sd_runs`/`granule_runs`/`granule_samples`/`quality_records`). New **"Quality checks — who & when"** detail table on the Quality tab lists every QC-tracked line-shift with its reading, pass/fail result, and who recorded it, out-of-spec rows highlighted. The Needs Action panel's flag text for QC fails and machine check failures now includes the same who/when detail instead of just the metric.
-
----
-
-## 2026-08-09 — Gustav (Maintenance: mobile layout fixes for the checklists and shift summary)
-
-**Files changed:** `app/(app)/maintenance/scheduled/page.tsx`, `app/(app)/maintenance/job-cards/page.tsx`
-
-- **Weekly / monthly checklist cards were unreadable on a phone.** The card header put the text and the controls (allocate dropdown + print + status badge) in one row with the controls fixed at `w-44` and `shrink-0`, which starved the text column down to a few characters — so `QM-FM-033/0 · 8 tasks` wrapped to one token per line and the "Last completed…" line ran underneath the dropdown. The header now **stacks on mobile** (text full-width on top, controls on their own row below) and sits side-by-side from `sm:` up. The allocate dropdown flexes to the available width on mobile instead of forcing 176px, the doc-ref line truncates with an ellipsis instead of wrapping, and the status badge no longer splits across two lines.
-- **Shift summary buttons were clipped** — "Evening 16:00–01:00" ran off the right edge. The controls now wrap, and on mobile the two buttons show just **Day** / **Evening** (splitting the row evenly) with the time ranges appearing from `sm:` up.
-- Checklist task rows now wrap, so the notes field drops to its own line instead of being crushed when the "→ Job card" fault button appears.
-- Annual / calibration search box is full-width on mobile instead of a fixed 220px.
-
----
-
-## 2026-08-07 — Gustav (Maintenance: removed the IT "view as" switcher; oversight roles see every screen)
-
-**Files changed:** `lib/maintenance/roles.ts`, `app/(app)/maintenance/job-cards/page.tsx`, `app/(app)/maintenance/scheduled/page.tsx`, `app/(app)/maintenance/page.tsx`
-
-- **Removed the "IT — VIEW AS" tab strip.** IT / full admin no longer have to switch between Maintenance Manager / Technician / QC / Raiser to preview each profile — they now see **every panel at once**: the manager board, the QC queue, and their own raised job cards.
-- **Added a `seesAll` oversight flag** to `deriveMaintRole()` covering IT, full admin, Management, the maintenance manager and (new) the **production manager**. This is a **view-only** concern — what a user may *do* inside a job card is still governed by `canManage` / `isTech` / `isQc`, so the allocate → QC → originator → **maintenance manager sign-off** chain is unchanged and no one else can sign off a card.
-- **Production manager can now view all the maintenance screens.** Previously they could open the maintenance module but only ever saw the limited "Raiser" dashboard, and on the Scheduled tab saw **no checklists at all** (the list was filtered to `manager or assigned-to-me`). They now see the full job-card board, the QC queue and every weekly/monthly checklist — read-only, with no allocate/verify/sign-off buttons.
-- Scoped deliberately to the **production_manager role**, not the whole Production department, so operators don't inherit manager-level visibility.
 
 ---
 
@@ -3174,7 +5176,12 @@ Asked why Bag Tracking (`/tags`) wasn't on the Users & Roles permissions page: i
 - **Fixed the `/tags` route guard** to include `Quality` (previously `Production` only), matching what the Sidebar already showed.
 - **Search moved from the Sidebar to the Topbar**, centered between the page title and the right-side status indicators — a more prominent, "always there" spot regardless of sidebar collapse state, matching where modern apps (Linear, Notion, GitHub) put global search.
 - **Search now finds pages, not just batch/lot records.** Added a client-side, instant "Pages" section to the command palette (Cmd/Ctrl+K) that fuzzy-matches the same nav items the Sidebar shows — filtered through the exact same permission/department predicate (extracted into an exported `getVisibleNavItems()` in `Sidebar.tsx`) so search never surfaces a page a user would then get bounced from. The existing batch/lot/bag/signal record search (server-side, `/api/search/batch`) is unchanged and still runs alongside it.
-- Promoted to production from staging PR #558.
+
+## 2026-08-07 — Gustav (COA history: IT/full admins can also delete a generated COA)
+
+**Files changed:** `app/(app)/quality/coa/page.tsx`
+
+- Extended the COA history **🗑 Delete** button visibility to full admins (`isFullAdmin` — the `senior_developer` role, which already bypasses all other permission checks in this app), so IT admins (e.g. Alyssa, Jan) see it too, in addition to the Lab Manager and Quality Manager. Same confirmation popup and delete behaviour, no schema change.
 
 ## 2026-08-07 — Alyssa (Hide the Logistics module — not in use yet)
 
@@ -3184,7 +5191,6 @@ Asked why Bag Tracking (`/tags`) wasn't on the Users & Roles permissions page: i
 - Blocked direct URL access to `/logistics/*` too: added a `disabled` flag to `ROUTE_GUARDS` so anyone but the full admin gets redirected to `/home` if they try to reach it directly, instead of relying on the nav link alone.
 - Removed the **Open GRNs** KPI tile from the Command Centre dashboard (and its `logistics.grns` count fetch), since it linked into the now-hidden module.
 - Nothing was deleted — the Logistics pages, `lib/logistics/*`, and the `can_access_logistics` permission are untouched. To bring it back: drop `disabled: true` from the `/logistics` route guard and uncomment the Sidebar entries.
-- Promoted to production from staging PR #555.
 
 ## 2026-08-06 — Gustav (COA screen: removed the example template)
 
@@ -3364,7 +5370,7 @@ No schema change — this reuses `prodTotals()` and the `productions` array alre
 
 ---
 
-## 2026-07-30 — Alyssa (PRODUCTION: Fix: roster rotation now keeps pins (and per-person days))
+## 2026-07-30 — Alyssa (Fix: roster rotation now keeps pins (and per-person days))
 
 **Files changed:** `lib/production/roster-rotate.ts`, `app/api/production/roster/cron/route.ts`
 
@@ -3569,8 +5575,6 @@ Requires migrations `20260730_001` and `20260730_002` (see manual steps at the e
 2. Run `supabase/migrations/20260730_002_roster_daily_changes.sql` on staging (adds the `changes_pending` status and `production.roster_change_log`). Until it is applied, the roster still saves and submits — it just won't record the itemised change history.
 3. Both migrations need applying to the **production** project separately when this is promoted.
 
----
-
 ## 2026-07-30 — Alyssa (Staff Directory: edit a person from their profile; one action per list row)
 
 **Files changed:** `components/production/EmployeeModal.tsx` (new, shared), `app/(app)/production/staff/page.tsx`, `app/(app)/production/staff/[id]/page.tsx`
@@ -3637,8 +5641,6 @@ New polymorphic `esign` schema (`signature_requests` + append-only `signatures`)
 - **New `InventoryPickerModal`** — a full search + filter modal (item class, group, grade, variant, plus free text) showing every match in a scrollable table with a "showing X of Y" count, instead of the old 30-result-capped, empty-until-you-type 224px dropdown. The lightweight `ItemPicker` used during live production capture is untouched — its quick single-lookup UX is fine there.
 - **"Add blend"** now supports adding every initial component in one sitting (repeatable rows) instead of only a first component.
 - **New "Unresolved item links" quick filter** — click the existing stat tile to filter the list to BOMs with an item that doesn't resolve in Master Inventory.
-
----
 
 ## 2026-07-29 — Alyssa (Job card: resumable drafts — there was previously no way back into a saved draft)
 
