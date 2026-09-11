@@ -2,6 +2,48 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-11 — Alyssa (The changeover follows the submit, and reaches every line)
+
+**Files changed:** `lib/core/changeover.ts` + test, `features/changeover/ChangeoverDialog.tsx`, `features/changeover/changeover-ui.test.tsx`, `app/(app)/production/capture/[section]/page.tsx`
+
+Three changes asked for from the floor, and they turn out to be one change.
+
+### They were always the same act
+
+A changeover and "start a new batch record" both called `startNewProduction()`. The difference was never what they did — it was *when*. The changeover ran mid-draft and carried the accounting; the bare button ran after submit and carried none.
+
+The floor rule settles it: **a changeover follows the submit.** Once the operator has closed the record off, there is one moment and one act, so there is now one control. `planChangeover()` gained `recordStatus` and refuses anything that is not `submitted` or `approved`.
+
+`approved` counts as well as `submitted`, deliberately. A supervisor who signs off before opening the next record has done more than the rule asks, and refusing them would be the silent-latch shape — a control that disappears exactly when everything is in order.
+
+This also removes what made the old version dangerous. Closing a live draft meant snapshotting a balance that was still moving and flushing half-typed edits. Against a submitted record there is nothing in flight to lose.
+
+### Every line, not just Sieving
+
+The trigger mounted under `sectionId === 'sieving'`. That is gone: it now sits in the submitted/locked panel, which every section already had. Refining, Granule and both Blenders get it.
+
+**Carrying leftover material does not extend with it.** Sieving writes `production.bucket_elevator_log`, keyed on variant family. Refining and the Blender have no equivalent, and Granule's `dust_carryover_log` is keyed per dust type rather than per run, so a changeover has no single figure to put in it. `planChangeover()` takes `carrySupported` and returns a new `no-ledger` refusal — checked *before* the balance, because "nothing left to carry" on a line that could never carry anything reads as a statement about this record's balance, and it is not one. The material is not lost either way: it is bagged out under the new record, which is what happens on almost every changeover regardless.
+
+### Supervisor only
+
+Unchanged in the rule, but worth stating because it now applies where it did not before: the operator could previously start the next record themselves. They no longer can. The trigger tells them which step is outstanding — submit it, or fetch someone who can open the next one — rather than disappearing.
+
+### Serial numbers do not change across a changeover
+
+Asked and settled. The 11 September Sieving run shows `STFL-110926-006` as the last Organic bag and `-007` as the first Conventional one, and that is correct:
+
+- The **printed tag already carries the variant** — a filled black badge reading `{VARIANT} - {GRADE}`. Putting it in the serial too is the same figure in two places.
+- Grade is not in the serial either. The serial is the bag's identity and counting scope; the badge and the record carry its attributes.
+- Restarting per record would mint **duplicate serials on the same day**, and the serial is a URL path segment and a scan key.
+- Splitting the counter by variant makes two thinner counters — more independent races, which §5 warns about for per-type sequencing.
+- Segregation is enforced where it bites: `validateBagScan` refuses a cross-family bag by reading `bag_tags.variant`.
+
+### Not in this change
+
+The production order still comes from the roster row and is copied whole to every record (`page.tsx`, `production_orders: assignment?.production_orders`), which is why 11 September's Organic morning run reports under a Conventional code. Wiring the supply-chain plan through to per-record orders is deferred by decision.
+
+**Gates:** tests 1016 (7 new) · boundaries clean · hooks clean · typecheck 28, at baseline · lint 3011, five **under** baseline · `next build` exit 0.
+
 ## 2026-09-11 — Alyssa (Write and delete join read: three module grants, derived the same way)
 
 **Files changed:** `lib/auth/permissions.ts` + test, `lib/auth/permission-registry.ts`, `app/(app)/users/page.tsx`

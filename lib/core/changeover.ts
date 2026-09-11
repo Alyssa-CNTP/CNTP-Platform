@@ -55,9 +55,39 @@ export interface ChangeoverContext {
    * counts as a supervisor is an auth question, not a production one.
    */
   isSupervisor: boolean
+  /**
+   * The status of the record being closed off.
+   *
+   * A changeover waits for the operator to SUBMIT. That is a floor decision
+   * (2026-09-11), and it is the one that collapses two controls into one: a
+   * changeover and "start a new batch record" were always the same act — open
+   * the next record — and the only thing separating them was whether the
+   * current one was still a draft. Once submitting comes first, there is one
+   * act and one control.
+   *
+   * It also removes the reason the old version was dangerous. Closing a live
+   * draft early meant snapshotting a balance that was still moving and
+   * flushing half-typed edits; against a submitted record there is nothing
+   * in flight to lose.
+   */
+  recordStatus: string | null | undefined
+  /**
+   * Does this section have a ledger that can hold carried-over material?
+   *
+   * Sieving has `production.bucket_elevator_log`, keyed on variant family.
+   * Nothing equivalent exists for Refining or the Blender, and the Granule
+   * line's `dust_carryover_log` is keyed per dust type rather than per run, so
+   * a changeover has no single figure to write to it.
+   *
+   * Passed in rather than decided here: which ledger a section owns is a fact
+   * about the database, and core performs no I/O (ARCHITECTURE.md §2). Where
+   * there is no ledger the material is not lost — it is bagged out under the
+   * new record, which is what happens on almost every changeover anyway.
+   */
+  carrySupported: boolean
 }
 
-export type CarryRefusal = 'organic' | 'unknown-variant' | 'nothing-left'
+export type CarryRefusal = 'organic' | 'unknown-variant' | 'nothing-left' | 'no-ledger'
 
 export interface ChangeoverPlan {
   /** May a changeover be started at all? */
@@ -101,20 +131,36 @@ export function changeoverLeftoverKg(totalIn: number, totalOut: number): number 
 export function planChangeover(ctx: ChangeoverContext): ChangeoverPlan {
   const leftoverKg = changeoverLeftoverKg(ctx.totalIn, ctx.totalOut)
 
+  const shut = (blockedReason: string): ChangeoverPlan => ({
+    allowed: false,
+    blockedReason,
+    leftoverKg,
+    mayCarry: false,
+    carryFamily: null,
+    // Permission and timing are not facts about the MATERIAL, so they stay off
+    // this axis — `blockedReason` carries them. Two axes, deliberately.
+    carryRefusal: null,
+    carryRefusalReason: null,
+  })
+
+  // Order matters: say the most useful thing. An operator standing at the
+  // machine needs to hear "submit it first", not "ask a supervisor" — the
+  // submit is theirs to do and is the step that actually unblocks this.
+  if (!SUBMITTED_STATUSES.has(String(ctx.recordStatus ?? ''))) {
+    return shut('Submit this record first — a changeover opens the next one, and this one has to be closed off before it can.')
+  }
+
   if (!ctx.isSupervisor) {
-    return {
-      allowed: false,
-      blockedReason: 'To switch grade or variant, ask a supervisor.',
-      leftoverKg,
-      mayCarry: false,
-      carryFamily: null,
-      carryRefusal: null,
-      carryRefusalReason: null,
-    }
+    return shut('This record is submitted. A supervisor opens the next one.')
   }
 
   let carryRefusal: CarryRefusal | null = null
-  if (isOrganicVariant(ctx.variant)) carryRefusal = 'organic'
+  // Checked FIRST. Where there is no ledger, whether the material could
+  // otherwise have been carried is not a question worth answering, and
+  // reporting "nothing left to carry" on a section that could never carry
+  // anything reads as a balance statement rather than a capability one.
+  if (!ctx.carrySupported) carryRefusal = 'no-ledger'
+  else if (isOrganicVariant(ctx.variant)) carryRefusal = 'organic'
   else if (!mayPoolMaterial(ctx.variant)) carryRefusal = 'unknown-variant'
   else if (leftoverKg <= 0) carryRefusal = 'nothing-left'
 
@@ -142,7 +188,20 @@ const CARRY_REFUSAL_TEXT: Record<CarryRefusal, string> = {
     'or organic. Set the variant on the batch record first.',
   'nothing-left':
     'There is nothing left to carry — the record balances.',
+  'no-ledger':
+    'This line has no carry-over ledger, so leftover material is bagged out under ' +
+    'the new record rather than carried across as material in.',
 }
+
+/**
+ * The statuses a changeover may follow.
+ *
+ * `approved` as well as `submitted`: a supervisor who signs off before opening
+ * the next record has done MORE than the rule asks, and refusing them would be
+ * the silent-latch shape — a control that disappears exactly when everything is
+ * in order. `draft` and `new` are the ones that mean "not closed off yet".
+ */
+const SUBMITTED_STATUSES: ReadonlySet<string> = new Set(['submitted', 'approved'])
 
 /**
  * Is the 16h00 shift hand-over due?

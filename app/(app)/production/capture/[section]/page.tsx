@@ -1135,11 +1135,25 @@ function CaptureScreen() {
   // read this same object, so the button cannot offer something the handler will
   // refuse — the defect class in ARCHITECTURE.md §4. Rules in
   // lib/core/changeover.ts; nothing about them lives on this page any more.
+  /**
+   * Which lines can hold carried-over material.
+   *
+   * Sieving writes production.bucket_elevator_log, keyed on variant family.
+   * Nothing equivalent exists for Refining or the Blender, and Granule's
+   * dust_carryover_log is keyed per dust type rather than per run, so a
+   * changeover has no single figure to put in it. Everywhere else the leftover
+   * is bagged out under the new record, which is what happens on almost every
+   * changeover regardless.
+   */
+  const carrySupported = sectionId === 'sieving'
+
   const changeoverPlan = planChangeover({
     variant: active?.variant,
     totalIn:  active ? prodTotals(active).totalIn  : 0,
     totalOut: active ? prodTotals(active).totalOut : 0,
     isSupervisor: canApprove,
+    recordStatus: status,
+    carrySupported,
   })
 
   const rowCtx = { kind, workCentre: meta.name, dustProductType }
@@ -1819,6 +1833,8 @@ function CaptureScreen() {
         totalIn:  active ? prodTotals(active).totalIn  : 0,
         totalOut: active ? prodTotals(active).totalOut : 0,
         isSupervisor: canApprove,
+        recordStatus: status,
+        carrySupported,
       })
       if (!plan.allowed) { setError(plan.blockedReason); return }
       await snapshotChangeoverBalance()
@@ -2130,24 +2146,54 @@ function CaptureScreen() {
           )}
           {tab === 'production' && active && (
             <>
-              {locked && (
-                <div className="bg-ok/5 border border-ok/30 rounded-2xl p-4 space-y-3">
-                  <div className="flex items-center gap-2 text-[14px] font-medium text-ok"><Lock size={16} /> This batch record is signed off &amp; locked.</div>
-                  <p className="text-[12px] text-text-muted">To capture a different variant or grade on this line, create a <strong>new batch record</strong> — same steps as before. The locked record above stays saved.</p>
-                  <button onClick={startNewProduction}
-                    className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-brand text-white font-medium text-[14px] hover:bg-brand-mid transition-colors">
-                    <Plus size={16} /> Create new batch record
-                  </button>
+              {/* ── The next record ──────────────────────────────────────────
+                  One control, on every section, in both post-submit states.
+
+                  There used to be two: a bare "start new batch record" button
+                  here, and a Changeover on Sieving only, mid-draft. They called
+                  the same function. The difference was never what they did —
+                  it was when, and the mid-draft one carried the accounting.
+
+                  Now the changeover follows the submit, so there is one moment
+                  and one act. The trigger still refuses rather than hides, and
+                  says which step is outstanding: submit it, or fetch someone
+                  who can open the next one. A control that silently does
+                  nothing gets tapped repeatedly and then reported as broken. */}
+              {flags.changeover && (locked || status === 'submitted') && (
+                <div className={`rounded-2xl p-4 space-y-3 border ${locked ? 'bg-ok/5 border-ok/30' : 'bg-info/5 border-info/30'}`}>
+                  {locked ? (
+                    <div className="flex items-center gap-2 text-[14px] font-medium text-ok"><Lock size={16} /> This batch record is signed off &amp; locked.</div>
+                  ) : (
+                    <div className="flex items-center gap-2 text-[14px] font-medium text-info"><CheckCircle2 size={16} /> Submitted — awaiting supervisor sign-off.</div>
+                  )}
+                  <p className="text-[12px] text-text-muted">
+                    Switching grade or variant on this line opens a <strong>new batch record</strong> with its own mass balance. This one stays exactly as it is.
+                  </p>
+                  <FeatureBoundary name="Changeover">
+                    <ChangeoverTrigger
+                      plan={changeoverPlan}
+                      busy={changeoverBusy}
+                      onOpen={() => setGradeChangeover(true)}
+                    />
+                  </FeatureBoundary>
                 </div>
               )}
 
-              {status === 'submitted' && !locked && (
-                <div className="bg-info/5 border border-info/30 rounded-2xl p-4 space-y-3">
-                  <div className="flex items-center gap-2 text-[14px] font-medium text-info"><CheckCircle2 size={16} /> Submitted — awaiting supervisor sign-off.</div>
-                  <p className="text-[12px] text-text-muted">You don't need to wait. Start capturing the next production order now — the supervisor can approve this one from their dashboard.</p>
+              {/* The flag exists for the promotion to production, where this
+                  button was pulled. With it off, the old operator-available
+                  path stays — removing both at once would leave no way to open
+                  the next record at all. */}
+              {!flags.changeover && (locked || status === 'submitted') && (
+                <div className={`rounded-2xl p-4 space-y-3 border ${locked ? 'bg-ok/5 border-ok/30' : 'bg-info/5 border-info/30'}`}>
+                  {locked ? (
+                    <div className="flex items-center gap-2 text-[14px] font-medium text-ok"><Lock size={16} /> This batch record is signed off &amp; locked.</div>
+                  ) : (
+                    <div className="flex items-center gap-2 text-[14px] font-medium text-info"><CheckCircle2 size={16} /> Submitted — awaiting supervisor sign-off.</div>
+                  )}
+                  <p className="text-[12px] text-text-muted">To capture a different variant or grade on this line, create a <strong>new batch record</strong>. This one stays saved.</p>
                   <button onClick={startNewProduction}
-                    className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-info text-white font-medium text-[14px] hover:opacity-90 transition-opacity">
-                    <Plus size={16} /> Start new batch record
+                    className={`w-full flex items-center justify-center gap-2 py-3 rounded-xl text-white font-medium text-[14px] transition-colors ${locked ? 'bg-brand hover:bg-brand-mid' : 'bg-info hover:opacity-90'}`}>
+                    <Plus size={16} /> {locked ? 'Create new batch record' : 'Start new batch record'}
                   </button>
                 </div>
               )}
@@ -2243,22 +2289,11 @@ function CaptureScreen() {
                     (canApprove = supervisor / IT / admin). An operator sees why
                     it is unavailable instead of a dead button, because a control
                     that silently does nothing gets tapped repeatedly. */}
-                {flags.changeover && sectionId === 'sieving' && !locked && active.variant && (
-                  <div className="pt-3 border-t border-stone-100">
-                    {/* NOT `silent`. A changeover button that vanishes on error
-                        is reported as "the changeover is gone", which sends a
-                        supervisor looking for the wrong bug. The default notice
-                        names it, and its reassurance — capture is unaffected —
-                        is true here: this control does not touch the save path. */}
-                    <FeatureBoundary name="Changeover">
-                      <ChangeoverTrigger
-                        plan={changeoverPlan}
-                        busy={changeoverBusy}
-                        onOpen={() => setGradeChangeover(true)}
-                      />
-                    </FeatureBoundary>
-                  </div>
-                )}
+                {/* The changeover used to mount HERE — mid-draft, Sieving only.
+                    Both of those changed on 2026-09-11. It now follows the
+                    submit and lives in the submitted/locked panels below, on
+                    every section, because a changeover and "start a new batch
+                    record" were always the same act: open the next record. */}
               </div>
 
               {variantMismatch && (
