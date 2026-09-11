@@ -106,13 +106,17 @@ export const PERMISSION_MATRIX: ModuleDef[] = [
         manage: [{ key: 'can_approve_reopen_request', label: 'Decide a supervisor’s reopen request (Supervisor Hub)' }] },
       { key: 'production.live', label: 'Live capture',
         read: 'can_view_live_history', write: 'can_start_live_session',
+        // can_delete_bag_tag was filed under `manage`, so it never appeared in
+        // the Delete column and a module-wide delete grant would have skipped
+        // it. It is a plain delete of a bag_tags row — the canonical per-bag
+        // record — so it belongs here.
+        delete: 'can_delete_bag_tag',
         manage: [
           { key: 'can_scan_inputs', label: 'Scan bags in' },
           { key: 'can_add_outputs', label: 'Add output bags & labels' },
           { key: 'can_approve_session', label: 'Approve & lock session' },
           { key: 'can_reset_operator_pin', label: 'Reset operator PIN' },
           { key: 'can_edit_bag_tag', label: 'Edit bag tag records' },
-          { key: 'can_delete_bag_tag', label: 'Delete bag tag records' },
         ] },
       { key: 'production.inventory', label: 'Master Inventory',
         read: 'can_view_inventory',
@@ -198,7 +202,10 @@ export const PERMISSION_MATRIX: ModuleDef[] = [
       { key: 'logistics.access', label: 'Logistics module', read: 'can_access_logistics',
         note: 'Grant Read to give a non-Production/Quality/Management user the module.' },
       { key: 'logistics.dispatch_signing', label: 'Dispatch document signing',
-        write: 'can_sign_dispatch_doc',
+        // Reading a dispatch document is reading the Logistics module — same key
+        // as the row above. Stated rather than left blank: an empty Read cell
+        // reads as "no way to view this", which was never true.
+        read: 'can_access_logistics', write: 'can_sign_dispatch_doc',
         manage: [
           { key: 'can_request_external_signature', label: 'Send external signing link to driver/customer' },
           { key: 'can_verify_dispatch_doc', label: 'Verify a signed document' },
@@ -235,8 +242,10 @@ export const PERMISSION_MATRIX: ModuleDef[] = [
   {
     module: 'Workspace', slug: 'workspace',
     resources: [
-      { key: 'workspace.board', label: 'Personal workspace', read: 'can_access_workspace' },
+      { key: 'workspace.board', label: 'Personal workspace', read: 'can_access_workspace',
+        note: 'Write/delete are intentionally absent: the board only ever holds the viewer’s own cards, so /api/workspace/items gates on module access alone. There is no other person’s data here to permission.' },
       { key: 'workspace.ticketing', label: 'Ticketing',
+        read: 'can_access_workspace',
         manage: [{ key: 'can_assign_tickets', label: 'Assign tickets to users' }] },
     ],
   },
@@ -244,14 +253,22 @@ export const PERMISSION_MATRIX: ModuleDef[] = [
     // Cross-department — no single department owns this. Staff Directory is
     // just people + how they sign in — competency/SOP records live under
     // Training below (that's the qualification home).
-    module: 'Staff Directory', slug: 'staff',
+    module: 'Staff Directory', slug: 'staff_directory',
+    // NOT slug 'staff': that would build the module grant key
+    // `can_delete_staff`, which is already this module's own per-resource
+    // delete key (the one /api/staff/[id] DELETE checks). One string would
+    // then mean both "delete any staff record" and "delete across the Staff
+    // Directory module", and the grant would be its own grantee. A test now
+    // fails the build if any slug produces a key that already exists.
     resources: [
       { key: 'staff.access', label: 'Staff Directory section',
         read: 'can_access_hr',
         note: 'Grant Read to give someone the Staff Directory at all — the resources below control what they see once inside.' },
       { key: 'staff.directory', label: 'Staff directory & profiles',
         read: 'can_view_staff', write: 'can_edit_staff_profiles',
-        manage: [{ key: 'can_delete_staff', label: 'Delete staff records' }] },
+        // Also moved out of `manage`: /api/staff/[id] DELETE gates on exactly
+        // this key, so it is a delete in every sense except where it was filed.
+        delete: 'can_delete_staff' },
     ],
   },
   {
@@ -340,57 +357,123 @@ export const MATRIX_KEYS: PermissionKey[] = Array.from(new Set(
   ].filter(Boolean) as PermissionKey[]))
 ))
 
-// ─── Read-only access, derived from the matrix ────────────────────────────────
+// ─── Module grants, derived from the matrix ───────────────────────────────────
 //
-// "Give this person read-only access to <module>" is not a hand-written list of
-// keys — it is exactly the `read` slots this file already declares. Deriving it
-// means a module added below is covered the day it is added, and a resource with
-// no `read` (an authoring tool, an admin action) is never swept in by accident.
+// "Give this person read / write / delete across <module>" is not a hand-written
+// list of keys — it is exactly the `read`, `write` and `delete` slots this file
+// already declares. Deriving it means a module added below is covered the day it
+// is added, and a resource with no slot of that kind is never swept in by
+// accident.
 //
-// The grant is ADDITIVE ONLY. It turns read keys on; it never turns anything
-// off, so it cannot quietly strip a write a role already grants. And it is
-// checked LAST in resolvePermission(), after overrides, so an explicit `false`
-// on one key still wins over a blanket grant.
+// Three axes and no more. `manage` is deliberately NOT a grant: approving a run,
+// signing off a shift report, approving a job card and allocating a technician
+// are AUTHORITY, not editing. The sign-off chains exist precisely so one person
+// cannot hold both sides of them, and a switch that handed over all 62 manage
+// keys per module would undo that quietly. They stay per-key.
+//
+// Every grant is ADDITIVE ONLY — it turns keys on, never off, so it cannot
+// strip a write a role already gives. All of them are checked LAST in
+// resolvePermission(), after overrides, so an explicit `false` on one key still
+// wins over a module-wide grant.
+//
+// There is deliberately no can_write_all_modules / can_delete_all_modules. Read
+// is the only axis with a blanket key: "view the whole platform" is a real job
+// (a director, an auditor), whereas "delete anything anywhere" is
+// senior_developer by another name, and this repo has lost production data to
+// bulk deletes before (ARCHITECTURE.md §1B). Write and delete are granted one
+// module at a time, on purpose. A test asserts the blanket keys do not exist.
 
-/** `can_read_<slug>` for a module — the key that grants read across it. */
-export function moduleReadKey(slug: string): PermissionKey {
-  return `can_read_${slug}` as PermissionKey
+export type GrantAxis = 'read' | 'write' | 'delete'
+
+/** `can_read_<slug>` / `can_write_<slug>` / `can_delete_<slug>` for a module. */
+export function moduleGrantKey(axis: GrantAxis, slug: string): PermissionKey {
+  return `can_${axis}_${slug}` as PermissionKey
+}
+export const moduleReadKey   = (slug: string) => moduleGrantKey('read', slug)
+export const moduleWriteKey  = (slug: string) => moduleGrantKey('write', slug)
+export const moduleDeleteKey = (slug: string) => moduleGrantKey('delete', slug)
+
+export interface ModuleGrant {
+  slug:   string
+  module: string
+  read:   PermissionKey
+  write:  PermissionKey
+  delete: PermissionKey
+  /** How many resources actually declare a slot of each kind. 0 = no switch to show. */
+  counts: Record<GrantAxis, number>
 }
 
-/** Every module that participates in the read-only grant, in matrix order. */
-export const READ_GRANT_MODULES: { slug: string; module: string; key: PermissionKey }[] =
-  PERMISSION_MATRIX
-    .filter(m => m.readGrant !== false)
-    .map(m => ({ slug: m.slug, module: m.module, key: moduleReadKey(m.slug) }))
+/**
+ * Every module that participates in the grants, in matrix order. All three keys
+ * exist for every module even where the count is 0, so a module that gains its
+ * first delete later needs no new key — only `counts` changes, and the UI starts
+ * rendering the switch. `counts` is what stops a dead switch being drawn today.
+ */
+export const MODULE_GRANTS: ModuleGrant[] = PERMISSION_MATRIX
+  .filter(m => m.readGrant !== false)
+  .map(m => ({
+    slug: m.slug,
+    module: m.module,
+    read:   moduleReadKey(m.slug),
+    write:  moduleWriteKey(m.slug),
+    delete: moduleDeleteKey(m.slug),
+    counts: {
+      read:   new Set(m.resources.map(r => r.read).filter(r => !!r && r !== 'dept')).size,
+      write:  new Set(m.resources.map(r => r.write).filter(Boolean)).size,
+      delete: new Set(m.resources.map(r => r.delete).filter(Boolean)).size,
+    },
+  }))
 
-/** Module read key → the read keys it grants. Excludes 'dept' (not a key). */
+/** Module grant key → the permission keys it grants. */
+export const KEYS_BY_MODULE_GRANT: Record<string, PermissionKey[]> = (() => {
+  const out: Record<string, PermissionKey[]> = {}
+  for (const m of PERMISSION_MATRIX) {
+    if (m.readGrant === false) continue
+    const slot = (axis: GrantAxis) => Array.from(new Set(
+      m.resources
+        .map(r => r[axis])
+        .filter((k): k is PermissionKey => !!k && k !== 'dept')
+    ))
+    out[moduleReadKey(m.slug)]   = slot('read')
+    out[moduleWriteKey(m.slug)]  = slot('write')
+    out[moduleDeleteKey(m.slug)] = slot('delete')
+  }
+  return out
+})()
+
+/** Kept as the read-only view of the above — the read axis on its own. */
 export const READ_KEYS_BY_MODULE: Record<string, PermissionKey[]> = Object.fromEntries(
-  PERMISSION_MATRIX
-    .filter(m => m.readGrant !== false)
-    .map(m => [
-      moduleReadKey(m.slug),
-      Array.from(new Set(
-        m.resources
-          .map(r => r.read)
-          .filter((r): r is PermissionKey => !!r && r !== 'dept')
-      )),
-    ])
+  MODULE_GRANTS.map(m => [m.read, KEYS_BY_MODULE_GRANT[m.read]])
 )
 
-/** The set of per-module read keys, for the can_read_all_modules implication. */
-export const MODULE_READ_KEYS: Set<PermissionKey> = new Set(READ_GRANT_MODULES.map(m => m.key))
+/** The per-module grant keys, by axis — used for the implications below. */
+export const MODULE_READ_KEYS:   Set<PermissionKey> = new Set(MODULE_GRANTS.map(m => m.read))
+export const MODULE_WRITE_KEYS:  Set<PermissionKey> = new Set(MODULE_GRANTS.map(m => m.write))
+export const MODULE_DELETE_KEYS: Set<PermissionKey> = new Set(MODULE_GRANTS.map(m => m.delete))
+
+/** Module read key → that module's write and delete keys (the read implication). */
+export const READ_KEY_IMPLIED_BY: Map<PermissionKey, PermissionKey[]> = new Map(
+  MODULE_GRANTS.map(m => [m.read, [m.write, m.delete]])
+)
 
 /**
- * Read key → the module read keys that grant it. A Map, not a Record, because
- * one read key can belong to two modules (can_access_maintenance is the read
+ * Permission key → the module grant keys that grant it. A Map, not a Record,
+ * because one key can belong to two modules (can_access_maintenance is the read
  * for both Maintenance resources; can_view_staff for Training's and Staff's).
  */
-export const READ_KEY_GRANTORS: Map<PermissionKey, PermissionKey[]> = (() => {
+function grantorsFor(axes: GrantAxis[]): Map<PermissionKey, PermissionKey[]> {
   const m = new Map<PermissionKey, PermissionKey[]>()
-  for (const [moduleKey, readKeys] of Object.entries(READ_KEYS_BY_MODULE)) {
-    for (const rk of readKeys) {
-      m.set(rk, [...(m.get(rk) ?? []), moduleKey as PermissionKey])
+  for (const mod of MODULE_GRANTS) {
+    for (const axis of axes) {
+      const grantKey = mod[axis]
+      for (const k of KEYS_BY_MODULE_GRANT[grantKey] ?? []) {
+        m.set(k, [...(m.get(k) ?? []), grantKey])
+      }
     }
   }
   return m
-})()
+}
+
+export const READ_KEY_GRANTORS:   Map<PermissionKey, PermissionKey[]> = grantorsFor(['read'])
+export const WRITE_KEY_GRANTORS:  Map<PermissionKey, PermissionKey[]> = grantorsFor(['write'])
+export const DELETE_KEY_GRANTORS: Map<PermissionKey, PermissionKey[]> = grantorsFor(['delete'])
