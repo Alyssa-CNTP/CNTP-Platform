@@ -6,7 +6,7 @@ import {
   PRINT_SIGN_OFFS, SIGN_OFF_LABEL, printGate,
   type PrintSignOffRole, type SignOff, type TemplateStatus,
 } from '@/lib/core/labels'
-import type { PermissionKey } from '@/lib/auth/permissions'
+import { SIGN_OFF_PERMISSION } from '@/lib/production/label-sign-offs'
 
 /**
  * POST /api/pasteuriser/job-cards/[id]/sign-off
@@ -29,10 +29,7 @@ import type { PermissionKey } from '@/lib/auth/permissions'
  * unable to go first.
  */
 
-const REQUIRES: Readonly<Record<PrintSignOffRole, PermissionKey>> = {
-  sales_lead:         'can_approve_labels',
-  quality_supervisor: 'can_quality_sign_labels',
-}
+// SIGN_OFF_PERMISSION covers both scopes; see lib/production/label-sign-offs.ts.
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
@@ -48,7 +45,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       error: `Unknown sign-off role '${role}'. Expected one of: ${PRINT_SIGN_OFFS.join(', ')}.`,
     }, { status: 400 })
   }
-  if (!caller.can(REQUIRES[role])) {
+  if (!caller.can(SIGN_OFF_PERMISSION[role])) {
     return NextResponse.json({
       error: `You do not have permission to sign as ${SIGN_OFF_LABEL[role]}.`,
     }, { status: 403 })

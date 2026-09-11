@@ -2,6 +2,50 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-11 — Alyssa (The sign-off chain gets a UI, the gates get wired, and the Pasteuriser registers its output)
+
+**Files changed:** `lib/production/label-sign-offs.ts` + test, `lib/production/bag-tag-write.ts` + test, `features/pasteuriser-labels/components/SignOffChain.tsx`, `features/pasteuriser-labels/index.ts`, `app/(app)/pasteuriser/labels/[id]/page.tsx`, `app/(app)/pasteuriser/run/page.tsx`, `app/api/pasteuriser/print/route.ts`, `app/api/pasteuriser/labels/[id]/sign-off/route.ts`, `app/api/pasteuriser/job-cards/[id]/sign-off/route.ts`, `app/api/production/job-cards/[id]/decide/route.ts`, `components/production/capture/PasteuriserCapture.tsx`
+
+Four defects along one workflow, found by walking the Pasteuriser path end to end — sales order, job card, capture, output tag, printed label.
+
+### The approve button was dead
+
+`#949` removed `approve` from the label transition route, correctly: a template is approved when all four of Sales, Quality, the customer and Control Union have signed, and leaving a one-press approval beside that chain is a way for one person to approve artwork Quality never saw. The route returns **410 Gone** and points at `/sign-off`.
+
+Nothing called `/sign-off`. Grepping every `.tsx` on staging, the only importers of `printGate`, `jobCardGate` and `TEMPLATE_SIGN_OFFS` were the two API routes and the test file. So the button on the label page still posted `approve`, still got a 410, and a new label could reach `pending_approval` and go no further — the only exit was Reject. The core, the routes and the migration all existed; the half a person touches did not.
+
+`SignOffChain` is that half. One component for both gates, because they share a shape — a fixed role list, last signature per role wins, one button per outstanding role — and two copies is where "last wins" quietly becomes "first". The scope picks the role list, the endpoint and the wording; nothing else differs.
+
+The template chain shows from the moment a proof goes out and **stays visible once approved**, which is not an oversight. A label approved before the chain existed carries only the old single approval, so Quality, the customer and the certifier have to be recordable against it without re-issuing the proof. The route already allowed exactly that (`SIGNABLE` includes `approved`); now there is a way to do it.
+
+### Two gates that enforced nothing
+
+`printGate()` was computed in the job-card sign-off route and returned as `printReady`. **`/api/pasteuriser/print` never called it.** The only thing between an operator and a printed customer label was the job card's own status — so a run could print on a chain that was never completed. `printReady` was advice; a rule that lives only in the screen that reports it is not a rule.
+
+`jobCardGate()` was worse: imported by nothing outside its own tests.
+
+Both are wired now, server-side, from a fresh read:
+
+- **print** — `printGate()` before any serial is allocated, so a refusal does not burn sequence numbers.
+- **job card approval** — `jobCardGate()` in the decide route. That is the chokepoint that matters, because printing requires an approved card. Only where a customer label is attached: a card with no `label_assignment_id` is the ordinary internal job card that has run for months, and gating it on a chain it never had would stop the line for a rule that does not apply to it. **Rejection is deliberately not gated** — a supervisor must always be able to send a card back, or an unsigned label traps the card in `sent_for_approval` with no way out, which is the same dead end the one-way COA chain produced last week.
+
+### The Pasteuriser never registered its output
+
+`bag_tags` held **zero** pasteuriser rows. The only write on that screen was the manual debagging path — the input side. A pallet line got a serial, was printed onto a tag, and lived nowhere but the session's own JSON: a serial on a bag in the warehouse that the system could not find, invisible to scanning, to Bag Tracking and to QC.
+
+The same defect the Blender carried for weeks, so it is fixed the same way. A pallet line now registers before it saves, refuses the line if registration fails, and says so. One row per pallet line, not per bag — a line is a bag-number range and its serial identifies the range, which is what is minted, printed and read back; a row per bag would invent serials nothing has printed. The weight is bags × kg/bag, exactly what the printed tag already carries, so the tag and the record cannot disagree.
+
+`lib/production/bag-tag-write.ts` is that write, shared, because the third section to need it should not invent a third field list. It also puts the untyped edge in one place: `database.types.ts` does not carry the full column set of `bag_tags`, so every call site reached for `as any`. The payload type is now checked and a misspelled column fails to compile.
+
+### Three copies of who may sign
+
+The permission map was written once per sign-off route and was about to appear a third time in the component. Three lists of who may sign a certification document is three chances for one of them to grant Sales the Quality signature — which is the one thing the four roles exist to prevent. One `SIGN_OFF_PERMISSION` in `lib/production/label-sign-offs.ts` now, read by both routes and the UI.
+
+Every read of the register fails **shut**: an unreadable signature table means no signatures, which means every role outstanding, which means the gate is closed. A label that cannot prove it was signed does not print.
+
+**Gates:** tests 951 (26 new) · boundaries clean · hooks clean · typecheck 28, at baseline · lint 3016, at baseline, zero added · `next build` exit 0.
+
+**Not runtime-verified:** the app signs in through Microsoft SSO, which cannot be scripted. Worth walking on staging — particularly that `NOP-EU-ORG v1`, which reads approved but carries only the backfilled `sales` signature, now shows three outstanding and holds the job-card gate shut until they are recorded.
 ## 2026-09-11 — Gustav (Leaf Shade moved to production-only — staging and prod share one VPS and can't both own the container)
 
 **Files changed:** `.github/workflows/deploy-staging.yml`, `.github/workflows/deploy-production.yml`, `ml/leafshade/README.md`

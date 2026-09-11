@@ -4,11 +4,17 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { ExternalLink, Printer, TriangleAlert } from 'lucide-react'
 import {
-  LabelPreview, fetchPrints, liveSerials, openAndPrintLabel, pplbFidelity, toTemplate,
+  LabelPreview, SignOffChain, fetchPrints, liveSerials, openAndPrintLabel, pplbFidelity, toTemplate,
   type LabelPrintRow, type LabelPoAssignmentRow, type LabelTemplateRow,
   publicDb, errMessage,
 } from '@/features/pasteuriser-labels'
-import { resolveLabel, type LabelBinding } from '@/lib/core/labels'
+import {
+  printGate, resolveLabel,
+  type LabelBinding, type SignOffRole, type TemplateStatus,
+} from '@/lib/core/labels'
+import {
+  SIGN_OFF_PERMISSION, readSignOffs, splitSignOffs, type SignOffRow,
+} from '@/lib/production/label-sign-offs'
 import { getSupabaseClient } from '@/lib/supabase/client'
 import { useAuth } from '@/lib/auth/context'
 import FeatureBoundary from '@/components/shared/FeatureBoundary'
@@ -40,6 +46,9 @@ export default function PasteuriserRunPage() {
   const router = useRouter()
   const { p: perm, isFullAdmin } = useAuth()
   const canPrint = isFullAdmin || perm('can_print_labels')
+  // Display only — every signature is authorised again by the route that
+  // records it, and the print gate is re-decided server-side on print.
+  const canSign = (role: SignOffRole) => isFullAdmin || perm(SIGN_OFF_PERMISSION[role])
 
   const [cards, setCards] = useState<Card[]>([])
   const [loading, setLoading] = useState(true)
@@ -90,7 +99,7 @@ export default function PasteuriserRunPage() {
         // the supervisor printing the other three.
         cards.map(c => (
           <FeatureBoundary key={c.id} name={`Job card ${c.job_card_no ?? ''}`}>
-            <JobCardPanel card={c} canPrint={canPrint} router={router} />
+            <JobCardPanel card={c} canPrint={canPrint} canSign={canSign} router={router} />
           </FeatureBoundary>
         ))
       )}
@@ -98,24 +107,52 @@ export default function PasteuriserRunPage() {
   )
 }
 
-function JobCardPanel({ card, canPrint, router }: {
+function JobCardPanel({ card, canPrint, canSign, router }: {
   card: Card
   canPrint: boolean
+  canSign: (role: SignOffRole) => boolean
   router: ReturnType<typeof useRouter>
 }) {
   const [prints, setPrints] = useState<LabelPrintRow[]>([])
+  const [signOffs, setSignOffs] = useState<SignOffRow[]>([])
   const [count, setCount] = useState(1)
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
 
+  const templateId = card.assignment?.template?.id ?? null
   const load = useCallback(async () => {
     try { setPrints(await fetchPrints(card.id)) } catch { /* the panel still works without history */ }
-  }, [card.id])
+    // Reads as the signed-in user, so it shows what THEY may see. The gate
+    // below is advisory for the same reason every client-side gate is: the
+    // print route re-decides it from the admin client on every press.
+    if (templateId) setSignOffs(await readSignOffs(publicDb(), templateId))
+  }, [card.id, templateId])
   useEffect(() => { void load() }, [load])
 
   const template = card.assignment?.template ? toTemplate(card.assignment.template) : null
   const done = useMemo(() => liveSerials(prints).length, [prints])
   const ordered = card.assignment?.ordered_bags ?? null
+
+  /**
+   * Why this card can or cannot print — the same core function the route runs,
+   * so the screen and the server cannot disagree about the reason.
+   *
+   * It is shown, not merely used to disable a button. A supervisor standing at
+   * the machine needs to know it is waiting on the quality supervisor's
+   * signature, not just that Print is greyed out.
+   */
+  const gate = useMemo(() => {
+    const row = card.assignment?.template
+    if (!row) return null
+    const scoped = splitSignOffs(signOffs, card.id)
+    return printGate({
+      status: row.status as TemplateStatus,
+      templateVersion: Number(row.version),
+      signOffs: scoped.template,
+      poAssigned: !!card.assignment,
+      printSignOffs: scoped.print,
+    })
+  }, [card.assignment, card.id, signOffs])
 
   // Marks cannot be drawn by a PPLB stream, so a certified label prints through
   // the browser. Decided here, once, and shown to the operator — a silently
@@ -199,6 +236,34 @@ function JobCardPanel({ card, canPrint, router }: {
         </div>
       )}
 
+      {/* The pre-print check on THIS run. Two names, and core refuses the same
+          person twice — the route reports that back rather than this hiding it. */}
+      {card.assignment?.template && (
+        <div className="border-t border-surface-rule pt-3">
+          <SignOffChain
+            scope="print"
+            templateId={card.assignment.template.id}
+            templateVersion={Number(card.assignment.template.version)}
+            jobCardId={card.id}
+            canSign={canSign}
+            rows={signOffs}
+            onSigned={load}
+          />
+        </div>
+      )}
+
+      {gate && !gate.open && (
+        <div className="flex items-start gap-2 text-[11px] text-amber-800 bg-amber-50 rounded-lg p-2.5">
+          <TriangleAlert size={13} className="mt-0.5 flex-shrink-0" />
+          <div className="leading-relaxed">
+            <p className="font-medium">Not ready to print.</p>
+            <ul className="mt-1 space-y-0.5">
+              {gate.blockedBy.map(b => <li key={b.key}>· {b.reason}</li>)}
+            </ul>
+          </div>
+        </div>
+      )}
+
       {err && <p className="text-xs text-red-700 whitespace-pre-line">{err}</p>}
 
       {canPrint && (
@@ -207,7 +272,8 @@ function JobCardPanel({ card, canPrint, router }: {
           <input type="number" min={1} max={50} value={count}
             onChange={e => setCount(Math.max(1, Math.min(50, Number(e.target.value) || 1)))}
             className="w-20 px-2 py-1.5 rounded-lg border border-surface-rule bg-surface text-sm text-text" />
-          <button onClick={print} disabled={busy || !template}
+          <button onClick={print} disabled={busy || !template || !gate?.open}
+            title={gate && !gate.open ? 'The approval chain is not complete' : undefined}
             className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-brand text-white hover:bg-brand-mid transition-colors text-sm font-medium disabled:opacity-50">
             <Printer size={15} /> {busy ? 'Printing…' : 'Print'}
           </button>

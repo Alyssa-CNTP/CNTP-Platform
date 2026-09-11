@@ -53,5 +53,6 @@ export {
   type TemplateEventRow,
 } from './db'
 
+export { SignOffChain, type SignOffChainProps } from './components/SignOffChain'
 export { LabelPreview } from './components/LabelPreview'
 export { TemplateEditor } from './components/TemplateEditor'

@@ -2,14 +2,15 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
-import { ArrowLeft, Copy, Download, Save, Send, ThumbsDown, ThumbsUp } from 'lucide-react'
+import { ArrowLeft, Copy, Download, Save, Send, ThumbsDown } from 'lucide-react'
 import {
-  LabelPreview, TemplateEditor,
+  LabelPreview, SignOffChain, TemplateEditor,
   buildLabelDocument, fetchTemplate, fetchTemplateEvents, fetchKnownCustomers, saveDraft, toTemplate,
   type LabelTemplateRow, type TemplateEventRow,
   errMessage,
 } from '@/features/pasteuriser-labels'
-import { canRequestApproval, resolveLabel, type LabelTemplate } from '@/lib/core/labels'
+import { canRequestApproval, resolveLabel, type LabelTemplate, type SignOffRole } from '@/lib/core/labels'
+import { SIGN_OFF_PERMISSION } from '@/lib/production/label-sign-offs'
 import { useAuth } from '@/lib/auth/context'
 import { customerOptions } from '@/lib/core/labels/library'
 import { ActionDialog, type DialogField } from '@/features/pasteuriser-labels/components/ActionDialog'
@@ -40,14 +41,6 @@ const PROOF_FIELDS: DialogField[] = [
     hint: 'Recorded on the history so it is clear who was asked.' },
 ]
 
-const APPROVE_FIELDS: DialogField[] = [
-  { key: 'externalRef', label: 'Control Union reference',
-    placeholder: 'Letter or email reference',
-    hint: 'Their sign-off reference, so the approval can be traced back to it.' },
-  { key: 'customerRef', label: 'Customer approval reference',
-    placeholder: 'Their PO, email or approval number' },
-]
-
 const REJECT_FIELDS: DialogField[] = [
   { key: 'note', label: 'What came back?', required: true, multiline: true,
     placeholder: 'What has to change before this can be approved' },
@@ -76,7 +69,7 @@ export default function LabelTemplatePage() {
    * `pending` holds which step is open; the dialog collects every value for
    * that step at once so a reference can be reviewed before it is committed.
    */
-  const [pending, setPending] = useState<null | 'issue_proof' | 'approve' | 'reject'>(null)
+  const [pending, setPending] = useState<null | 'issue_proof' | 'reject'>(null)
   const [events, setEvents] = useState<TemplateEventRow[]>([])
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
@@ -272,13 +265,15 @@ export default function LabelTemplatePage() {
               primary icon={<Send size={15} />} label="Send for approval" />
           )}
 
+          {/* There is no "Mark approved" button, and its absence is the point.
+              A template approves itself when the fourth signature lands, in the
+              sign-off panel below; the transition route refuses `approve` with
+              a 410 for the same reason. One person pressing one button could
+              approve artwork Quality never saw, which is the hole the chain
+              closes — so it cannot stay open beside it. */}
           {row.status === 'pending_approval' && can('can_approve_labels') && (
-            <>
-              <Btn onClick={() => setPending('approve')} disabled={busy}
-                primary icon={<ThumbsUp size={15} />} label="Mark approved" />
-              <Btn onClick={() => setPending('reject')} disabled={busy}
-                icon={<ThumbsDown size={15} />} label="Reject" />
-            </>
+            <Btn onClick={() => setPending('reject')} disabled={busy}
+              icon={<ThumbsDown size={15} />} label="Reject" />
           )}
 
           {row.status === 'rejected' && can('can_design_labels') && (
@@ -314,25 +309,6 @@ export default function LabelTemplatePage() {
         />
       )}
 
-      {pending === 'approve' && (
-        <ActionDialog
-          key="approve" open
-          title="Record the approval"
-          message="Both references are optional, and both are what a certifier asks for later. Record whichever came back."
-          confirmLabel="Mark approved"
-          busy={busy}
-          fields={APPROVE_FIELDS}
-          onCancel={() => setPending(null)}
-          onConfirm={v => {
-            setPending(null)
-            void transition('approve', {
-              externalRef: v.externalRef || undefined,
-              customerRef: v.customerRef || undefined,
-            })
-          }}
-        />
-      )}
-
       {pending === 'reject' && (
         <ActionDialog
           key="reject" open
@@ -344,6 +320,28 @@ export default function LabelTemplatePage() {
           onCancel={() => setPending(null)}
           onConfirm={v => { setPending(null); void transition('reject', { note: v.note }) }}
         />
+      )}
+
+      {/* The approval chain. Shown from the moment a proof goes out, and still
+          shown once approved — a template approved before the chain existed
+          carries only the old single approval, and Quality, the customer and
+          the certifier have to be recordable against it without re-issuing the
+          proof. The route allows exactly that (SIGNABLE includes 'approved').
+
+          Its own boundary: a crash reading the register must not take down the
+          designer or the PO panel underneath it. */}
+      {(row.status === 'pending_approval' || row.status === 'approved') && (
+        <FeatureBoundary name="Approval chain">
+          <div className="card p-4">
+            <SignOffChain
+              scope="template"
+              templateId={row.id}
+              templateVersion={row.version}
+              canSign={(role: SignOffRole) => can(SIGN_OFF_PERMISSION[role])}
+              onSigned={load}
+            />
+          </div>
+        </FeatureBoundary>
       )}
 
       {row.status === 'approved' && (

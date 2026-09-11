@@ -36,6 +36,7 @@ import {
   AlertTriangle, Printer, PenLine, FileText, Boxes, Tag, Gauge,
 } from 'lucide-react'
 import { getDb } from '@/lib/supabase/db'
+import { registerBagTag, appendScanEvent } from '@/lib/production/bag-tag-write'
 import { printLabelAuto } from '@/lib/production/label-print'
 import { variantToShort, massBalanceToleranceKg, withinMassBalanceTolerance, isImplausibleWeight } from '@/lib/production/capture-config'
 import { variantFamily } from '@/lib/production/bucket-elevator'
@@ -584,6 +585,9 @@ export function PasteuriserCapture({
   const [scanModal, setScanModal] = useState<{ stream: 'main' | 'postsieve'; serial: string; result: ScanValidationResult } | null>(null)
   const sectionLabel = SECTION_CONFIG[sectionId]?.name ?? 'Pasteuriser'
   const [editLine, setEditLine] = useState<PastOutputLine | null>(null)
+  // Surfaced next to the output list. A failed registration must be visible;
+  // the whole point of the change is that it is no longer silent.
+  const [outputError, setOutputError] = useState<string | null>(null)
   const [items, setItems] = useState<InventoryItem[]>([])
   const [jobCards, setJobCards] = useState<any[]>([])
   const [todaysJobCards, setTodaysJobCards] = useState<any[]>([])
@@ -717,9 +721,66 @@ export function PasteuriserCapture({
     }
     setEditLine(line)
   }
-  function saveLine(line: PastOutputLine) {
+  /**
+   * Commit a pallet line, and REGISTER IT.
+   *
+   * ── The gap this closes ────────────────────────────────────────────────────
+   *
+   * Until now the only bag_tags write on this screen was the manual debagging
+   * path — the INPUT side. A pallet line got a serial from genSerial(), was
+   * printed onto a tag, and was never recorded anywhere but this session's own
+   * JSON. So the Pasteuriser's finished product was invisible to scanning, to
+   * Bag Tracking and to QC: a serial on a bag in the warehouse that the system
+   * could not find. `bag_tags` held zero pasteuriser rows.
+   *
+   * That is the same defect the Blender carried for weeks (its output bags
+   * often reached prod_bagging with no bag_tags row) and it is fixed the same
+   * way, deliberately: register first, refuse the line if registration fails,
+   * and say so. Showing an operator a serial the system can never find again
+   * is worse than making them try the save twice — `bag_tags` is the canonical
+   * per-bag record and prod_bagging is save-scratch.
+   *
+   * ── One row per PALLET LINE, not per bag ──────────────────────────────────
+   *
+   * A line is a bag-number range, and its serial identifies the range. That is
+   * what genSerial() mints, what goes on the printed tag and what a supervisor
+   * reads back, so one row keyed on that serial is the honest record of it.
+   * Minting a row per bag here would invent serials nothing has ever printed.
+   * The bag count and kg/bag are carried on the row so the range stays legible.
+   *
+   * The weight is the whole line — bags x kg/bag — which is exactly what
+   * printLabelAuto() already puts on the tag, so the tag and the record cannot
+   * disagree.
+   */
+  async function saveLine(line: PastOutputLine) {
     const isNew = !value.outputs.some(l => l.id === line.id)
     const clean: PastOutputLine = { ...line, lot: upperCode(line.lot), secured: true, logged_at: line.logged_at ?? nowISO() }
+
+    if (clean.serial) {
+      const lineKg = n(clean.bagCount) * (n(clean.bagWeight) || perBag) || null
+      // Editing a line re-upserts the same serial, so a corrected bag count or
+      // weight follows through to the canonical record instead of leaving
+      // bag_tags describing the first draft.
+      const tagErr = await registerBagTag(getDb(), {
+        serial_number: clean.serial, section_id: sectionId, session_id: null,
+        product_type: clean.item || value.item || 'Rooibos Final Product',
+        variant: variantWord || null,
+        weight_kg: lineKg,
+        lot_number: clean.lot || value.batchNo || null,
+        acumatica_id: clean.itemCode || value.itemCode || null,
+        status: 'in_stock', consumed: false,
+      })
+      if (tagErr) {
+        setOutputError(`Could not register pallet ${clean.serial} — check the connection and try again. The line has not been saved.`)
+        return
+      }
+      await appendScanEvent(getDb(), {
+        serial_number: clean.serial, action: 'bagging_out', section_id: sectionId,
+        weight_kg: lineKg, operator_id: operatorId ?? null,
+      })
+    }
+
+    setOutputError(null)
     patch({ outputs: isNew ? [...value.outputs, clean] : value.outputs.map(l => l.id === line.id ? clean : l) })
     setEditLine(null)
   }
@@ -897,6 +958,12 @@ export function PasteuriserCapture({
       {tab === 'bag' && (
         <>
           <p className="text-[12px] text-stone-500 px-1">Each line is a pallet / bag range — enter the bag count and confirm the weights; the serial is generated automatically.</p>
+          {outputError && (
+            <p className="flex items-start gap-1.5 text-[12px] text-red-700 px-1">
+              <AlertTriangle size={13} className="mt-0.5 flex-shrink-0" />
+              <span>{outputError}</span>
+            </p>
+          )}
 
           <div className="space-y-3">
             {Array.from(new Set(value.outputs.map(l => l.kind))).map((kind, gi) => {
@@ -1028,7 +1095,7 @@ export function PasteuriserCapture({
       {/* Output-line editor modal */}
       {editLine && (
         <OutputLineModal line={editLine} items={items} defaultItem={value.item} defaultCode={value.itemCode} perBag={value.weightPerBag}
-          onClose={() => setEditLine(null)} onSave={saveLine} />
+          onClose={() => setEditLine(null)} onSave={l => void saveLine(l)} />
       )}
     </div>
   )

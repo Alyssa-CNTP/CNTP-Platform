@@ -3,6 +3,8 @@ import { getCallerPermissions, getAdminClient, resolveEmployeeId } from '@/lib/a
 import { notify } from '@/lib/notifications'
 import { resolveRecipients } from '@/lib/notifications/recipients'
 import { resolveBatchId } from '@/lib/production/batch-spine'
+import { jobCardGate, type TemplateStatus } from '@/lib/core/labels'
+import { readSignOffs, splitSignOffs } from '@/lib/production/label-sign-offs'
 
 // A production supervisor approves or rejects a job card a manager sent for
 // approval. Approving IS the supervisor's "Verify & Sign" — their signature is
@@ -42,11 +44,57 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
   }
 
   const { data: card, error: cErr } = await admin.from('job_cards_pasteuriser')
-    .select('id, status, item_no, batch_number, product_name, created_by').eq('id', cardId).maybeSingle()
+    .select('id, status, item_no, batch_number, product_name, created_by, label_assignment_id')
+    .eq('id', cardId).maybeSingle()
   if (cErr) return NextResponse.json({ error: cErr.message }, { status: 500 })
   if (!card) return NextResponse.json({ error: 'Job card not found' }, { status: 404 })
   if (card.status !== 'sent_for_approval') {
     return NextResponse.json({ error: 'Job card is not awaiting approval' }, { status: 400 })
+  }
+
+  /**
+   * GATE A, at the only chokepoint that matters.
+   *
+   * A card cannot be printed against until it is approved (the print route
+   * refuses anything else), so approving it IS the moment the label chain has
+   * to be settled — `jobCardGate()` exists to answer exactly that and was,
+   * until now, imported by nothing outside its own tests.
+   *
+   * Checked only where a customer label is attached. A card with no
+   * `label_assignment_id` is the ordinary internal job card that has run for
+   * months and has no artwork to approve; gating it on a chain it never had
+   * would stop the Pasteuriser dead for a rule that does not apply to it.
+   *
+   * Rejection is deliberately NOT gated. A supervisor must always be able to
+   * send a card back, and refusing that because its label is unsigned would
+   * trap the card in `sent_for_approval` with no way out — the same dead end
+   * the one-way COA chain produced.
+   */
+  if (decision === 'approved' && card.label_assignment_id) {
+    const { data: assignment } = await admin
+      .from('label_po_assignments')
+      .select('id, template:label_templates(id, version, status)')
+      .eq('id', card.label_assignment_id).maybeSingle()
+    const template = assignment?.template as
+      { id: string; version: number; status: string } | null | undefined
+    if (!template) {
+      return NextResponse.json({
+        error: 'The customer label on this job card no longer exists. Reassign one before approving.',
+      }, { status: 409 })
+    }
+    const rows = await readSignOffs(admin, template.id)
+    const gate = jobCardGate({
+      status: template.status as TemplateStatus,
+      templateVersion: Number(template.version),
+      signOffs: splitSignOffs(rows).template,
+      poAssigned: true,   // the assignment IS the PO, and we just read it
+    })
+    if (!gate.open) {
+      return NextResponse.json({
+        error: 'The customer label on this job card is not settled, so the card cannot be approved yet.',
+        blockers: gate.blockedBy.map(b => b.reason),
+      }, { status: 409 })
+    }
   }
 
   const now = new Date().toISOString()

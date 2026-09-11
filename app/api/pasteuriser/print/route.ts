@@ -3,7 +3,11 @@ import { getCallerPermissions } from '@/lib/auth/server-helpers'
 import { labelDb, readBody, str, strOrNull, errMessage } from '../_db'
 import { writeAudit } from '@/lib/audit/write'
 import { pasteuriserLabelSerial } from '@/lib/core/serials'
-import { resolveLabel, printBlockers, type LabelBinding } from '@/lib/core/labels'
+import {
+  resolveLabel, printBlockers, printGate,
+  type LabelBinding, type TemplateStatus,
+} from '@/lib/core/labels'
+import { readSignOffs, splitSignOffs } from '@/lib/production/label-sign-offs'
 import { buildLabelPplb, pplbFidelity, toTemplate, type LabelTemplateRow } from '@/features/pasteuriser-labels'
 import { getPrinterForSection } from '@/lib/production/printer-registry'
 import { sendToPrinter } from '@/lib/production/print-socket'
@@ -25,8 +29,21 @@ import { isRelayMode, enqueuePrintJob } from '@/lib/production/print-queue'
  *     clock would roll the stem over mid-run and restart the sequence inside one
  *     continuous run (§5, §9).
  *
- *   - WHETHER IT MAY PRINT AT ALL. The template must be approved and every
- *     placeholder filled. Re-checked from a fresh read, because a template can
+ *   - WHETHER IT MAY PRINT AT ALL. `printGate()` in core, from a fresh read of
+ *     the signature register: the template approved and signed by all four of
+ *     Sales, Quality, the customer and Control Union against THIS version, a PO
+ *     assigned, and the two pre-print signatures on this job card by two
+ *     different people. Then every placeholder filled.
+ *
+ *     This route used to check only `label_templates.status` and the
+ *     placeholders. The four template sign-offs and the two print sign-offs
+ *     were computed in the sign-off routes and returned as `printReady`, and
+ *     nothing consulted them at the moment that matters — so a run could print
+ *     on a chain that was never completed. `printReady` was advice; this is the
+ *     gate. A rule that lives only in the screen that reports it is not a rule
+ *     (ARCHITECTURE.md §6).
+ *
+ *     Re-checked here rather than trusted from the page, because a template can
  *     be superseded between the operator opening the screen and pressing print,
  *     and a disabled button is not an enforcement mechanism (§6).
  *
@@ -81,6 +98,26 @@ export async function POST(req: NextRequest) {
   if (card.status !== 'approved') {
     return NextResponse.json({
       error: `Job card ${card.job_card_no ?? ''} is ${card.status}. Labels can only be printed against an approved job card.`.trim(),
+    }, { status: 409 })
+  }
+
+  // ── The gate ──────────────────────────────────────────────────────────────
+  // Both scopes in one read. `readSignOffs` returns [] on any failure, and no
+  // signatures means every role outstanding, which means the gate is shut —
+  // the right direction to fail for a document that goes on a customer's bag.
+  const signOffRows = await readSignOffs(admin, templateRow.id)
+  const scoped = splitSignOffs(signOffRows, jobCardId)
+  const gate = printGate({
+    status: templateRow.status as TemplateStatus,
+    templateVersion: Number(templateRow.version),
+    signOffs: scoped.template,
+    poAssigned: !!assignment,
+    printSignOffs: scoped.print,
+  })
+  if (!gate.open) {
+    return NextResponse.json({
+      error: 'This label has not cleared its approval chain, so it cannot be printed.',
+      blockers: gate.blockedBy.map(b => b.reason),
     }, { status: 409 })
   }
 
