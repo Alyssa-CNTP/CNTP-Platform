@@ -36,3 +36,38 @@ jobs:
             npm run build 2>&1 | tail -20
             PORT=3001 /home/cntpdev/.nvm/versions/node/v24.16.0/bin/pm2 restart cntp-production --update-env
             echo "✅ Production deployed successfully"
+
+            # Leaf Shade Classifier (ml/leafshade) — self-healing, not a rebuild.
+            # This is a PRODUCTION-only service: staging and production share
+            # this one VPS, but ml/leafshade/docker-compose.yml pins a fixed
+            # container_name and a fixed host port (network_mode: host), so only
+            # ONE instance can exist on the box. deploy-staging.yml deliberately
+            # does not touch it, so ownership lives here alone.
+            #
+            # Before this existed, starting the container was a fully manual SSH
+            # step (see ml/leafshade/README.md) and nothing ever re-checked it.
+            # `restart: unless-stopped` in the compose file only covers a crash or
+            # a VPS reboot — it does nothing if the container was manually
+            # stopped, hit disk/OOM pressure during its one build, or was simply
+            # never started. Any of those leaves the Raw Material → Leaf Shade
+            # tab reporting "service is not running" indefinitely, with no
+            # signal to anyone until a person happens to open that tab.
+            #
+            # `docker compose up -d` (no --build) is what's run here on purpose:
+            # it builds the image only if one doesn't exist yet, otherwise starts
+            # the existing image unchanged — cheap and safe on every deploy. It
+            # does NOT pick up a code/model change in ml/leafshade/* automatically;
+            # that still needs an explicit `docker compose up -d --build` by hand.
+            #
+            # Wrapped in `if`, not left to `set -eo pipefail` above: a problem
+            # with this one Python micro-service must never mark the Next.js
+            # deploy itself as failed — the two are unrelated failure domains.
+            if command -v docker >/dev/null 2>&1; then
+              if (cd ml/leafshade && docker compose up -d); then
+                echo "✅ Leaf Shade service is running"
+              else
+                echo "⚠️  Leaf Shade service failed to start — check manually: cd ml/leafshade && docker compose logs --tail=50"
+              fi
+            else
+              echo "⚠️  Docker not found on VPS — Leaf Shade service was not started"
+            fi
