@@ -14,7 +14,7 @@ import {
   resolvePermission, resolveAllPermissions,
   type Department, type PermissionKey, type Permissions,
 } from '@/lib/auth/permissions'
-import { PERMISSION_MATRIX, moduleReadKey } from '@/lib/auth/permission-registry'
+import { PERMISSION_MATRIX, MODULE_GRANTS } from '@/lib/auth/permission-registry'
 import { Plus, Trash2, KeyRound, RefreshCw, ChevronDown, ChevronUp, Check, Mail, Activity, Shield, Clock } from 'lucide-react'
 
 const ALYSSA_UUID = 'df6cc2b1-c0ec-47ed-bb2e-b07771f3bf0e'
@@ -324,16 +324,26 @@ function PermissionMatrix({ role, department, overrides, onChange, readOnly }: {
 
   function resolved(key: PermissionKey) {
     const defaultVal = resolvePermission(role, {}, key)
-    if (key in overrides) return { value: overrides[key] === true, overridden: true, defaultVal }
-    return { value: defaultVal, overridden: false, defaultVal }
+    // The EFFECTIVE answer, not just the override. A module grant
+    // (can_write_quality) is stored against its own key, so a cell like
+    // can_save_records is not in `overrides` at all — reading the raw object
+    // would draw every Write cell as off while the grant had switched them on.
+    // Run the same resolver the app runs, and the table shows what the person
+    // actually has. `overridden` stays "set explicitly on this row", which is
+    // what the amber ring means.
+    const value = resolvePermission(role, overrides, key)
+    return { value, overridden: key in overrides, defaultVal, granted: value && !(key in overrides) && !defaultVal }
   }
 
   function CellToggle({ pk }: { pk: PermissionKey }) {
-    const { value, overridden } = resolved(pk)
+    const { value, overridden, granted } = resolved(pk)
     return (
       <button type="button" disabled={readOnly}
+        // Clicking an ON-by-grant cell writes an explicit false, which beats the
+        // grant — that is how "read the whole module except this one page" is
+        // expressed, and why the resolver checks overrides first.
         onClick={() => !readOnly && onChange(pk, !value)}
-        title={pk + (overridden ? ' · override' : '')}
+        title={pk + (overridden ? ' · override' : granted ? ' · via a module grant' : '')}
         style={{ position: 'relative', width: 34, height: 19, borderRadius: 10, cursor: readOnly ? 'not-allowed' : 'pointer',
           background: value ? '#16A34A' : '#D1D5DB', border: overridden ? '2px solid #D97706' : 'none',
           opacity: readOnly ? 0.5 : 1, transition: 'background 150ms', verticalAlign: 'middle' }}
@@ -368,20 +378,44 @@ function PermissionMatrix({ role, department, overrides, onChange, readOnly }: {
             {m.department && m.department !== department && (
               <span style={{ ...FONT, fontSize: 9, fontWeight: 700, color: '#6B7280', background: '#F3F4F6', borderRadius: 20, padding: '1px 7px' }}>cross-dept</span>
             )}
-            {/* One switch for "read-only across this module". It grants every
-                Read cell in the table below without ticking them one by one,
-                and keeps granting them as resources are added — the keys come
-                from PERMISSION_MATRIX at resolve time, not from a snapshot
-                taken when the box was ticked. Administration has no switch
-                (readGrant: false) because none of its rows is a plain view. */}
-            {m.readGrant !== false && (
-              <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                <span style={{ ...FONT, fontSize: 9, fontWeight: 700, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                  Read-only
+            {/* Module-wide grants: one switch per axis, granting every cell in
+                that column below without ticking them one by one — and still
+                granting them as resources are added, because the keys are read
+                out of PERMISSION_MATRIX at resolve time rather than snapshotted
+                when the box was ticked.
+
+                A switch is drawn only where the module actually declares slots
+                of that kind (`counts`), so there is no toggle that reaches
+                nothing. Administration has none at all (readGrant: false) —
+                every one of its rows is an admin action, not a view.
+
+                Write and Delete imply Read, so ticking either lights the Read
+                switch's cells too. There is no `manage` switch on purpose:
+                approve / finalise / sign off stay per-key, below. */}
+            {(() => {
+              const grant = MODULE_GRANTS.find(g => g.slug === m.slug)
+              if (!grant) return null
+              const axes = ([
+                ['read',   'Read',   grant.read],
+                ['write',  'Write',  grant.write],
+                ['delete', 'Delete', grant.delete],
+              ] as const).filter(([axis]) => grant.counts[axis] > 0)
+              return (
+                <span style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 12 }}>
+                  <span style={{ ...FONT, fontSize: 9, fontWeight: 700, color: '#9CA3AF', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    Whole module
+                  </span>
+                  {axes.map(([axis, label, key]) => (
+                    <span key={axis} style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                      <span style={{ ...FONT, fontSize: 9, fontWeight: 700, color: '#6B7280', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                        {label}
+                      </span>
+                      <CellToggle pk={key} />
+                    </span>
+                  ))}
                 </span>
-                <CellToggle pk={moduleReadKey(m.slug)} />
-              </span>
-            )}
+              )
+            })()}
           </div>
           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
             <thead>
@@ -463,8 +497,11 @@ function PermissionsPanel({ role, department, overrides, onChange, readOnly }: {
 
   function resolved(key: PermissionKey) {
     const defaultVal = resolvePermission(role, {}, key)
-    if (key in overrides) return { value: overrides[key] === true, overridden: true, defaultVal }
-    return { value: defaultVal, overridden: false, defaultVal }
+    // Effective value, same reasoning as PermissionMatrix.resolved above: a
+    // module grant is stored under its own key, so reading `overrides` directly
+    // would show every key it grants as off.
+    const value = resolvePermission(role, overrides, key)
+    return { value, overridden: key in overrides, defaultVal }
   }
 
   const totalOverrides = Object.keys(overrides).length

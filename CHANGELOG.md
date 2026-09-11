@@ -2,6 +2,110 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-11 — Alyssa (Write and delete join read: three module grants, derived the same way)
+
+**Files changed:** `lib/auth/permissions.ts` + test, `lib/auth/permission-registry.ts`, `app/(app)/users/page.tsx`
+
+The read-only grant from earlier today, extended to the other two axes. Same
+derivation, same additive-only rule, same "explicit false wins" ordering — now
+`can_write_<slug>` and `can_delete_<slug>` alongside `can_read_<slug>`, thirteen
+modules each.
+
+### What a grant does and does not reach
+
+| axis | keys it reaches | blanket key |
+|---|---|---|
+| read | 24 | `can_read_all_modules` |
+| write | 27 | none, deliberately |
+| delete | 13 | none, deliberately |
+| manage | **62 — never reached** | n/a |
+
+**`manage` is not a grant and should not become one.** Approve a run, finalise a
+run, sign off a shift report, approve a job card, allocate a technician, verify
+completed work — that is authority, not editing. The sign-off chains exist
+precisely so one person cannot hold both sides, and a switch handing over all 62
+at once would undo that quietly. They stay per-key.
+
+**No blanket write or delete.** Read has one because "view the whole platform" is
+a real job — a director, an auditor. "Delete anything anywhere" is
+`senior_developer` by another name, and this repo has lost production data to
+bulk deletes before (ARCHITECTURE.md §1B). Write and delete are granted one
+module at a time. A test asserts `can_write_all_modules` and
+`can_delete_all_modules` do not exist, so nobody adds one in passing.
+
+**Write and delete imply read.** Every route guard in the app is on a read key,
+so write-without-read would hand someone save permissions for pages the guard
+bounces them out of first. Write does **not** imply delete and delete does not
+imply write — removing a record is not authoring one.
+
+### Two deletes were filed in the wrong column
+
+`can_delete_bag_tag` and `can_delete_staff` both sat under `manage`, so neither
+appeared under Delete and a module-wide delete grant would have silently skipped
+them. `/api/staff/[id]` DELETE gates on `can_delete_staff` — it is a delete in
+every sense except where it was written down. Both moved.
+
+Also filled: `logistics.dispatch_signing` and `workspace.ticketing` had blank Read
+cells, which reads as "no way to view this" rather than "the module key covers
+it". Both now name the module key they always used.
+
+`workspace.board` keeps no write or delete, with a note saying why: the board only
+ever holds the viewer's own cards, so `/api/workspace/items` gates on module
+access and there is no other person's data to permission.
+
+### The collision that nearly shipped
+
+Slug `staff` builds the grant key `can_delete_staff` — **already** the Staff
+Directory's own per-resource delete key. One string would have meant both "delete
+any staff record" and "delete across the Staff Directory module", making the
+grant its own grantee. The slug is `staff_directory` now, and a test fails the
+build if any slug produces a key that already exists.
+
+That also renamed `can_read_staff` to `can_read_staff_directory`. It shipped this
+morning and nothing references it — no role default, no guard, no page — so this
+is a rename of a key nobody holds yet, not a revocation.
+
+### A UI bug the read grant shipped with
+
+`PermissionMatrix.resolved()` read the raw `overrides` object. A module grant is
+stored under **its own** key, so a cell like `can_save_records` is not in
+`overrides` at all — every Read cell stayed drawn as OFF while `can_read_quality`
+had switched them on. Both `resolved()` helpers now run the same resolver the app
+runs, so the table shows what the person actually has. The amber ring still means
+"set explicitly on this row"; a cell on via a grant says so in its tooltip.
+
+Clicking an on-by-grant cell writes an explicit `false`, which beats the grant.
+That is how "read the whole module except this one page" is expressed, and why
+the resolver checks overrides first.
+
+### Two invariants now enforced
+
+- **The four slot kinds are disjoint.** A key filed as `write` on one resource and
+  `manage` on another would be handed out by a write grant while reading as
+  workflow authority in the UI. It holds today across all 126 keys; the test keeps
+  it holding.
+- **No module grant key collides with a resource key.** The `can_delete_staff` bug
+  above, generalised.
+
+Plus: write grants reach only that module's writes, delete only its deletes,
+neither ever reaches a manage key, both imply read, and an explicit false beats
+either.
+
+### The Users page
+
+Each module header now carries up to three switches — Read · Write · Delete —
+drawn only where the module actually declares slots of that kind. Sales,
+Marketing, Bag Tracking, Management and Workspace are read-only surfaces today, so
+they show Read alone; their write and delete keys exist so nothing breaks when
+that changes, but a switch that reaches zero keys just invites someone to tick it
+and wonder why nothing happened.
+
+No page or route needed editing for any of this. Everything funnels through
+`resolvePermission()`, which is the whole point of deriving the grants rather than
+listing them.
+
+---
+
 ## 2026-09-11 — Alyssa (A read-only permission, derived from the matrix instead of hand-listed)
 
 **Files changed:** `lib/auth/permissions.ts` + test, `lib/auth/permission-registry.ts`, `app/(app)/layout.tsx`, `components/layout/Sidebar.tsx`, `app/(app)/users/page.tsx`, `app/(app)/intelligence/global-wits/page.tsx`, `app/api/accounts/route.ts`, `app/api/marketing/route.ts`, `app/api/global-wits/route.ts`
