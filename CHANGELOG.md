@@ -2,6 +2,46 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-11 — Alyssa (A production order document covers one order, not one day)
+
+**Files changed:** `lib/core/production/order-scope.ts` + test (new), `lib/production/order-detail.ts`
+
+The Production Orders **list** shows one row per record. Clicking one opened a document scoped to `(section_id, date)` — the whole production day. So a shift that changed over produced one document covering every record on that line.
+
+On 11 September the Sieving tower ran Organic · Export, changed over to Conventional · Export Blend, and continued into the afternoon. Three records, one document, and the header showed `S10LGBL-C` across the lot — a **Conventional** code printed over the organic run. Two of the three records carried no order at all; the header borrowed the third's.
+
+### Nothing new was invented
+
+`production.production_runs` already exists and already says what a run is: *"one production order (PO + variant + grade) that can span several shifts of the same production day"*. `prod_sessions.run_id` points at it, the capture screen fills it in, and it is populated on **319 of 350 production sessions**.
+
+Those three records already had three distinct runs, each with the right variant, grade and totals:
+
+| run | PO | variant | grade | in | out |
+|---|---|---|---|---|---|
+| `601c65e2` | — | Organic | A | 3535 | 2696 |
+| `49e99fcb` | — | Conventional | B | 3187 | 2352 |
+| `b4c8566a` | `S10LGBL-C` | Conventional | B | 5950 | 5652 |
+
+The identity was right the whole time. The document ignored it.
+
+### The scoping rule
+
+`sessionsInSameOrder()` narrows the day to the clicked record's run. A morning and an afternoon on one order still come back as one document — that is what runs are *for*. A changeover no longer does.
+
+Records written before runs existed (31 of 350) group with other run-less records of the same line, day and **variant**. They are never swept into a real run: a coincidental variant match would produce a document claiming a record belongs to an order nothing ever filed it under. An unknown id returns nothing rather than the whole day, so "not found" cannot be mistaken for "everything".
+
+### Still owed — the order itself
+
+This stops the wrong order being shown. It does not yet put the **right** one on. The run's PO comes from:
+
+```ts
+const poKey = (assignment?.production_orders ?? []).join(',') || null
+```
+
+— the roster's whole planned array, comma-joined. A two-order plan gives every run `"S10LGBL-C,S10LGBL-O"`. And the roster is per **shift** while records number per **day**, so distributing planned order N to record N needs a decision before it is safe to build.
+
+**Gates:** tests 1091 (19 new) · boundaries clean · hooks clean · typecheck 28, at baseline · lint 3010, at baseline · `next build` exit 0.
+
 ## 2026-09-11 — Alyssa (A handover note reaches the next shift, and then it is finished)
 
 **Files changed:** `lib/core/production/handover.ts` + test (new), `app/(app)/production/capture/[section]/page.tsx`
