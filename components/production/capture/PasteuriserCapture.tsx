@@ -35,7 +35,7 @@ import {
   Plus, Trash2, Package, PackageCheck, Lock, Pencil, Check, Search, X,
   AlertTriangle, Printer, PenLine, FileText, Boxes, Tag, Gauge,
 } from 'lucide-react'
-import { getDb } from '@/lib/supabase/db'
+import { getDb, getPublicDb } from '@/lib/supabase/db'
 import { registerBagTag, appendScanEvent } from '@/lib/production/bag-tag-write'
 import { printLabelAuto } from '@/lib/production/label-print'
 import { variantToShort, massBalanceToleranceKg, withinMassBalanceTolerance, isImplausibleWeight } from '@/lib/production/capture-config'
@@ -605,7 +605,7 @@ export function PasteuriserCapture({
   // Recent pasteuriser job cards — the manual-override picker (last 40,
   // company-wide). Public schema (matches the Job Card page).
   useEffect(() => {
-    getDb().from('job_cards_pasteuriser')
+    getPublicDb().from('job_cards_pasteuriser')
       .select('id, product_name, item_no, batch_number, blend_description, weight_per_bulk_bag, packaging, customer_po')
       .eq('status', 'approved')
       .order('date_of_card', { ascending: false }).limit(40)
@@ -619,7 +619,7 @@ export function PasteuriserCapture({
   // changes from today's manual-entry behaviour — never a blocker.
   useEffect(() => {
     if (!date || value.jobCardId) return
-    getDb().from('job_cards_pasteuriser')
+    getPublicDb().from('job_cards_pasteuriser')
       .select('id, job_card_no, product_name, item_no, batch_number, blend_description, weight_per_bulk_bag, packaging, customer_po')
       .eq('status', 'approved').eq('date_of_card', date)
       .then(({ data }: any) => {

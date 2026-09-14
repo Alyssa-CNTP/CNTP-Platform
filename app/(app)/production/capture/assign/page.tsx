@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import {
   ChevronLeft, Loader2, CheckCircle2, Users, Save, Calendar,
 } from 'lucide-react'
-import { getDb } from '@/lib/supabase/db'
+import { getDb, getPublicDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
 import { roleKeysForSection, ALL_SECTION_ROLE_KEYS } from '@/lib/core/roster/section-roles'
 import {
@@ -611,7 +611,7 @@ function PasteuriserJobCardPanel({ date }: { date: string }) {
   useEffect(() => {
     let cancelled = false
     setLoading(true)
-    getDb().from('job_cards_pasteuriser')
+    getPublicDb().from('job_cards_pasteuriser')
       .select('id, job_card_no, item_no, product_name, customer, batch_number, blend_description, packaging, total_mass, no_of_bags, special_instructions, status')
       .eq('status', 'approved').eq('date_of_card', date)
       .then(({ data }: any) => { if (!cancelled) { setCards((data as any[]) ?? []); setLoading(false) } })
@@ -660,7 +660,7 @@ function GranuleJobCardPanel({ date, onCard }: { date: string; onCard: (card: { 
   useEffect(() => {
     let cancelled = false
     setLoading(true)
-    getDb().from('job_cards_granule')
+    getPublicDb().from('job_cards_granule')
       .select('id, job_card_no, item_no, product_name, customer, batch_number, packaging, total_mass, no_of_bags, special_instructions, status')
       .eq('status', 'approved').eq('date_of_card', date)
       .then(({ data }: any) => {

@@ -18,6 +18,7 @@ import { operatorIdForUser } from '@/lib/production/roster-pin'
 import { MyScorecard } from '@/components/production/MyScorecard'
 import type { Scorecard } from '@/lib/core/production/scorecard'
 import { AcumaticaSummary } from '@/components/production/AcumaticaSummary'
+import { massBalanceFlag } from '@/lib/production/mass-balance-flag'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -25,7 +26,6 @@ interface MassBalanceRow {
   total_input_kg: number | null
   total_output_b_kg: number | null
   balance_kg: number | null
-  within_tolerance: boolean | null
 }
 
 interface SessionRow {
@@ -369,7 +369,7 @@ export default function ProductionHistoryPage() {
           operator_name_text, operator_names, supervisor_name,
           comments, lot_number, production_orders, notes,
           created_at, updated_at,
-          prod_mass_balance!left(total_input_kg, total_output_b_kg, balance_kg, within_tolerance)
+          prod_mass_balance!left(total_input_kg, total_output_b_kg, balance_kg)
         `)
         .gte('date', dateFrom)
         .lte('date', dateTo)
@@ -393,9 +393,9 @@ export default function ProductionHistoryPage() {
         const mb = (row.prod_mass_balance as any)?.[0] ?? {}
         return {
           ...row,
-          mb_total_input_kg:  mb.total_input_kg   ?? null,
-          mb_balance_kg:      mb.balance_kg        ?? null,
-          mb_within_tolerance: mb.within_tolerance ?? null,
+          mb_total_input_kg:  mb.total_input_kg ?? null,
+          mb_balance_kg:      mb.balance_kg     ?? null,
+          mb_within_tolerance: massBalanceFlag(mb.total_input_kg, mb.balance_kg),
         }
       })
 

@@ -2,6 +2,46 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-14 — Alyssa (Pasteuriser: the job card screens were reading the wrong schema)
+
+**Files changed:** `lib/supabase/db.ts`, `lib/production/mass-balance-flag.ts` (new), `app/(app)/job-cards/pasteuriser/page.tsx`, `app/(app)/job-cards/granule/page.tsx`, `components/sales/ProductionBatchesTab.tsx`, `app/(app)/production/capture/assign/page.tsx`, `components/production/capture/PasteuriserCapture.tsx`, `features/pasteuriser-labels/db.ts`, `app/api/pasteuriser/assignments/route.ts`, `app/(app)/pasteuriser/labels/[id]/page.tsx`, `app/(app)/production/history/page.tsx`, `app/(app)/production/page.tsx`, `app/(app)/dashboard/operator/page.tsx`, `app/(app)/dashboard/supervisor/page.tsx`
+
+### The 404s were never a missing migration
+
+Every reported Pasteuriser failure — "Could not auto-generate a number", Verify & Sign doing nothing, and the wall of 404s on `job_cards_pasteuriser`, `job_card_settings_templates` and `rpc/next_job_card_no` — came from one line.
+
+`getSupabaseClient()` is constructed with `db: { schema: 'production' }`. So `getDb().from('job_cards_pasteuriser')` resolves to **`production.job_cards_pasteuriser`**, which does not exist — the job card, label and settings tables all live in `public`. PostgREST answers a table that is not in the pinned schema with `404 PGRST205`, and an RPC with `404 PGRST202`:
+
+```
+Could not find the function production.next_job_card_no without parameters in the schema cache
+```
+
+That reads exactly like a migration that was never applied, which is what the screen then told the user — *"migration 20260729_003 must be applied in this environment"*. Verified against staging (`qjqkpockmujecjgmdple`): `20260729_002` and `20260729_003` **have** been applied all along. `public.job_cards_pasteuriser`, `public.job_card_settings_templates` and `public.next_job_card_no()` all answer 200, and all three carry `GRANT ... TO authenticated`.
+
+- **`getPublicDb()` added next to `getDb()`**, with the distinction documented at the point where it is easy to get wrong. `features/pasteuriser-labels`' own `publicDb()` now delegates to it, so there is one definition.
+- **Six call sites repointed.** The Pasteuriser job card page, the **Granule** job card page (identical bug — its auto-numbering was equally dead), the sales Production Batches tab, the capture assign screen and `PasteuriserCapture`. The comment above one of them already claimed *"Public schema (matches the Job Card page)"* — it was reaching `production`.
+- **The misleading error text is gone.** It now names `public.next_job_card_no()` and says what a PGRST202 there actually means, instead of blaming a migration.
+
+### `prod_mass_balance.within_tolerance` does not exist
+
+The History page 400ed with `column prod_mass_balance_1.within_tolerance does not exist`, which took out the whole session list — hence the `points="54.0,NaN"` SVG errors underneath it. **No migration in this repo has ever created that column**, and five screens selected it: History, the Production overview, and the operator and supervisor dashboards.
+
+The fix is not to add it. ARCHITECTURE.md §5 already settled the same question for the tolerance figure — `v_session_yield` derives it in SQL rather than trusting `prod_mass_balance.tolerance_kg`, because rows written before the ±1% rule carry the old flat 15 kg. A stored verdict is that trap one step further on, and `live/capture/page.tsx` still writes exactly that (`Math.abs(balance) <= 15`).
+
+- **`massBalanceFlag(totalInput, balance)`** derives it from the two figures that genuinely are stored, through the one tolerance rule in `lib/core/mass-balance/tolerance.ts`. A session with no input returns `null` — "not started", not "unaccounted for" — so an un-captured session stays off the exception list.
+
+### A PO can no longer be assigned to a half-signed label
+
+`status = 'approved'` was the only gate, and it is not sufficient. The sign-off route deliberately accepts signatures against an already-approved template, because every label approved *before* the chain existed carries only the old single approval and had to be closeable without re-issuing the proof. Those read `approved` with an empty chain.
+
+- **The assignments route re-reads the register** and refuses with a 409 naming the outstanding roles, for the version being assigned — v1's four signatures say nothing about v2's artwork.
+- **The panel disables the button and says who it is waiting on**, rather than greying out with no reason. The server decision is the enforcement; the button only reflects it (ARCHITECTURE.md §6).
+
+No change to who may sign what: `can_quality_sign_labels` already gated the Quality signature both in the UI and in the route.
+
+---
+
+
 ## 2026-09-14 — Gustav (COA: a customer's own bulk-density spec now has a home, and prints alongside CNTP's)
 
 **Files changed:** `components/quality/CoaSpecsTab.tsx`, `app/(app)/quality/coa/page.tsx`, `supabase/migrations/20260914_001_coa_specs_client_bd_spec.sql` (new, applied to staging)

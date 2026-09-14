@@ -3,7 +3,7 @@
 import { Fragment, Suspense, useEffect, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
 import Link from 'next/link'
-import { getDb } from '@/lib/supabase/db'
+import { getPublicDb } from '@/lib/supabase/db'
 import { format } from 'date-fns'
 import { Save, Send, CheckCircle2, XCircle, Clock, Printer, Download, FileClock, Plus } from 'lucide-react'
 import clsx from 'clsx'
@@ -199,7 +199,7 @@ interface DraftRow {
 function DraftsPanel({ excludeId, refreshToken, onResume }: {
   excludeId: string | null; refreshToken: number; onResume: (id: string) => void
 }) {
-  const db = getDb()
+  const db = getPublicDb()
   const [drafts, setDrafts] = useState<DraftRow[]>([])
   const [loading, setLoading] = useState(true)
   const [open, setOpen] = useState(false)
@@ -248,7 +248,7 @@ function DraftsPanel({ excludeId, refreshToken, onResume }: {
 }
 
 function PasteuriserJobCardScreen() {
-  const db = getDb()
+  const db = getPublicDb()
   const { p, isFullAdmin, isQuality } = useAuth()
   const canGenerate = isFullAdmin || p('can_generate_job_cards')
   const canApprove = isFullAdmin || p('can_approve_job_cards')
@@ -282,7 +282,7 @@ function PasteuriserJobCardScreen() {
     setJobCardNoError(null)
     db.rpc('next_job_card_no' as any).then(({ data, error }: any) => {
       if (error) {
-        setJobCardNoError(`Could not auto-generate a number — ${error.message || error.code || 'unknown error'} (migration 20260729_003 must be applied in this environment)`)
+        setJobCardNoError(`Could not auto-generate a number — ${error.message || error.code || 'unknown error'}. The number comes from public.next_job_card_no(); a PGRST202 here means the caller reached the wrong schema, a permission error means the sequence is not granted.`)
         return
       }
       if (data) setForm(f => (f.job_card_no ? f : { ...f, job_card_no: data as string }))

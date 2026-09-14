@@ -10,6 +10,7 @@ import {
   Circle, Activity, Pen,
 } from 'lucide-react'
 import Link from 'next/link'
+import { massBalanceFlag } from '@/lib/production/mass-balance-flag'
 
 interface ProdSession {
   id: string; section_id: string; section_name: string
@@ -194,9 +195,12 @@ export default function FactorySupervisorDashboard() {
     if (sess.length > 0) {
       const { data: mbData } = await db
         .from('prod_mass_balance')
-        .select('session_id,total_input_kg,balance_kg,within_tolerance')
+        .select('session_id,total_input_kg,balance_kg')
         .in('session_id', sess.map(s => s.id))
-      setBalances((mbData as MassBalance[]) ?? [])
+      // within_tolerance is derived, never stored — see lib/production/mass-balance-flag.ts
+      setBalances(((mbData as any[]) ?? []).map(m => ({
+        ...m, within_tolerance: massBalanceFlag(m.total_input_kg, m.balance_kg),
+      })) as MassBalance[])
     } else {
       setBalances([])
     }

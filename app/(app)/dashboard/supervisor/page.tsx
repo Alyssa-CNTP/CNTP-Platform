@@ -9,6 +9,7 @@ import {
   ChevronRight, RefreshCw, Tag, Scale, AlertTriangle,
 } from 'lucide-react'
 import Link from 'next/link'
+import { massBalanceFlag } from '@/lib/production/mass-balance-flag'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface ScSession {
@@ -96,7 +97,7 @@ export default function SupervisorDashboard() {
     if (prodSess.length > 0) {
       const { data: mbData } = await db
         .from('prod_mass_balance')
-        .select('session_id,total_input_kg,balance_kg,within_tolerance')
+        .select('session_id,total_input_kg,balance_kg')
         .in('session_id', prodSess.map((s: any) => s.id))
 
       const mbs = (mbData as any[]) ?? []
@@ -109,7 +110,8 @@ export default function SupervisorDashboard() {
           status:           s.status,
           total_input_kg:   mb?.total_input_kg ?? null,
           balance_kg:       mb?.balance_kg     ?? null,
-          within_tolerance: mb?.within_tolerance ?? null,
+          // Derived, never stored — see lib/production/mass-balance-flag.ts
+          within_tolerance: massBalanceFlag(mb?.total_input_kg, mb?.balance_kg),
         }
       })
     }

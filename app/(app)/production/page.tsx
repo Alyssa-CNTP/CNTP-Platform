@@ -11,6 +11,7 @@ import {
 } from 'lucide-react'
 import { EnergyTotals } from '@/components/production/EnergyTotals'
 import Link from 'next/link'
+import { massBalanceFlag } from '@/lib/production/mass-balance-flag'
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface ProdSession {
@@ -342,9 +343,12 @@ export default function ProductionPage() {
     if (sess.length > 0) {
       const { data: mb } = await db
         .from('prod_mass_balance')
-        .select('session_id,total_input_kg,balance_kg,within_tolerance')
+        .select('session_id,total_input_kg,balance_kg')
         .in('session_id', sess.map(s => s.id))
-      setMb((mb as MassBalance[]) ?? [])
+      // within_tolerance is derived, never stored — see lib/production/mass-balance-flag.ts
+      setMb(((mb as any[]) ?? []).map(m => ({
+        ...m, within_tolerance: massBalanceFlag(m.total_input_kg, m.balance_kg),
+      })) as MassBalance[])
     } else {
       setMb([])
     }
