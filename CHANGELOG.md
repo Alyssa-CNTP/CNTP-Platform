@@ -2,6 +2,45 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-14 — Alyssa (A production order document shows the order you opened, not the whole day)
+
+**Files changed:** `app/(app)/production/orders/[id]/page.tsx`
+
+The Production Orders list shows one row per record. Every row opened the **same whole-day document**.
+
+On 11 September the Sieving tower ran Organic · Export, changed over to Conventional · Export Blend, and continued into the afternoon. Three records, three rows in the list — and one page covering all of them, headed `Morning + Morning + Afternoon` with `PRODUCTION ORDER: S10LGBL-C`. That is a **Conventional** code printed over the organic run, and two of the three records carry no order at all.
+
+### The scoping belongs on the render, not the loader
+
+An earlier attempt narrowed `loadOrderDay()` to one run. That was wrong here and was pulled before it reached production: the day has to be loaded **whole**, because the reconciliation underneath — the bucket elevator carried across a changeover, machine spillage, half-bag top-ups — belongs to the DAY and to no run. Narrow the loader and that material silently leaves the page.
+
+So the day is still loaded and still reconciled. What changed is which run the document is **about**.
+
+- The document shows the run(s) the opened record contributed to, found from the rows' own `session_id`.
+- The header names that run's variant, grade and shifts — not the day's. 11 September's organic document now reads *Morning*, not *Morning + Morning + Afternoon*.
+- The production order is narrowed to the **run**, not the click. Sessions 02 and 03 are both Conventional · Export Blend and carry different orders (one null, one `S10LGBL-C`), so keying off the clicked row alone would show a different order for the same run depending on which row you came in from.
+- A record with no order now says `—`. That is the truth, and it is what makes the gap visible rather than papering over it with a neighbour's code.
+
+### The day is a separate view now
+
+The first pass scoped the header and the run blocks but left *Not attributable to one run* and *Whole day — all runs combined* on the page, so it still read as a combined day record. Both are day-level by nature, so on one order's summary they are context, not content:
+
+- On an **order summary** they stay on screen and are **left off the print**, with a line saying so. That is what makes a changeover produce two separate order documents rather than two copies of the day.
+- **`?scope=day`** opens the whole-day view — every run, the reconciliation, the unattributed material — and prints in full. Without it, scoping every document to a run would orphan the 35 kg of bucket elevator and 778 kg of top-ups that belong to no run.
+
+Each view names the other: the order summary links to the day, the day lists its orders.
+
+### What is kept
+
+*Not attributable to one run* and *Whole day — all runs combined (07h00–01h00)* still cover the whole day and still reconcile it. They are the day's figures and they were never the run's.
+
+The day's other runs are named and linked beneath the summary, so a reader who came looking for one can reach the other.
+
+### Edge cases
+
+A record that spans two runs — a grade change inside one record, which the (variant, grade) division exists to handle — shows both. A record whose rows carry neither variant nor grade matches no run, and the whole day is shown rather than an empty page.
+
+**Gates:** tests 679 · boundaries clean · hooks clean · typecheck 32, at baseline, none in the changed page · lint 3027, one **under** the 3028 baseline · `next build` exit 0.
 ## 2026-09-14 — Alyssa (History / Planning: a page nobody could reach and nothing guarded)
 
 **Files changed:** `components/layout/Sidebar.tsx`, `app/(app)/layout.tsx`, `lib/auth/permission-registry.ts`, `app/(app)/production/history/page.tsx`

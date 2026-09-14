@@ -12,7 +12,8 @@
 // print and everything renders un-collapsed, so Print produces the full report.
 
 import { useEffect, useState, useRef, type ReactNode } from 'react'
-import { useParams, useRouter } from 'next/navigation'
+import { useParams, useRouter, useSearchParams } from 'next/navigation'
+import Link from 'next/link'
 import { format } from 'date-fns'
 import { ArrowLeft, Printer, Loader2, CheckCircle2, Clock, Pen, Play, Radio, Sparkles, MessageSquare, MessageSquarePlus, ArrowRightLeft, AlertTriangle } from 'lucide-react'
 import { loadOrderDay, type OrderDay, type OrderBagRow, type OrderRebagRow, type OrderFreshTopUpRow, type OrderDebagRow, type OrderShiftBlock, type OrderMassBalance, type OrderTimesheet, type OrderNote } from '@/lib/production/order-detail'
@@ -101,6 +102,15 @@ function runTitle(variant: string | null, grade: string | null): string {
 
 export default function ProductionOrderDetailPage() {
   const { id } = useParams<{ id: string }>()
+  /**
+   * `?scope=day` opens the whole-day view instead of one order's summary.
+   *
+   * The default is the ORDER — that is what the list links to and what a reader
+   * asks for. The day view exists so the reconciliation and the material that
+   * belongs to no run stay printable somewhere, rather than being orphaned by
+   * scoping every document to a run.
+   */
+  const dayView = useSearchParams().get('scope') === 'day'
   const router = useRouter()
   const { displayName } = useAuth()
   const [day, setDay] = useState<OrderDay | null>(null)
@@ -170,9 +180,6 @@ export default function ProductionOrderDetailPage() {
     : (gradeNames[0] ?? (grade ? `Grade ${grade}` : null))
   const variantGrade = [variant, gradeText].filter(Boolean).join(' · ') || '—'
   const changedOver = gradeNames.length > 1
-  const poText = poItems.length
-    ? poItems.map(p => p.description ? `${p.code} — ${p.description}` : p.code).join('; ')
-    : '—'
 
   // The bucket elevator is WIP that carries across the day: the afternoon/night
   // shift LEAVES it in the tower for tomorrow, unprocessed — it hasn't become
@@ -337,6 +344,41 @@ export default function ProductionOrderDetailPage() {
     const outKg = r.outputs.filter(b => !b.bornViaRebag).reduce((t, b) => t + (b.kg || 0), 0)
     return { ...r, shifts: shiftsInRun, inKg, outKg }
   })
+  /**
+   * ── The ORDER the reader actually opened ───────────────────────────────────
+   *
+   * The list shows one row per record; every row used to open the same
+   * whole-day document. On 11 September the Sieving tower ran Organic · Export,
+   * changed over to Conventional · Export Blend and continued into the
+   * afternoon — three records, three rows, and one page covering all of them
+   * with `S10LGBL-C` in the header. That is a CONVENTIONAL code printed over
+   * the organic run.
+   *
+   * So the document scopes to the run the clicked record contributed to. The
+   * scoping is done HERE, on the render, and deliberately not in
+   * `loadOrderDay()`: the day still has to be loaded whole, because the
+   * reconciliation below it — the bucket elevator across a changeover, machine
+   * spillage, half-bag top-ups — belongs to the DAY and not to any run. Narrow
+   * the loader and that material silently leaves the page.
+   *
+   * A record that spans two runs (a grade change inside one record, which the
+   * division above exists to handle) shows both. A record whose rows carry
+   * neither variant nor grade matches no run, and then the whole day is shown
+   * rather than an empty page.
+   */
+  const clickedRunKeys = dayView ? new Set<string>() : new Set(
+    runs.filter(r =>
+      r.inputs.some(d => d.session_id === id) || r.outputs.some(b => b.session_id === id),
+    ).map(r => r.key),
+  )
+  /** True when this page is one order's summary rather than the day's. */
+  const scoped = clickedRunKeys.size > 0
+  const shownRuns = clickedRunKeys.size ? runs.filter(r => clickedRunKeys.has(r.key)) : runs
+  const otherRuns = clickedRunKeys.size ? runs.filter(r => !clickedRunKeys.has(r.key)) : []
+  /** A record inside another run, so the reader can open its summary. */
+  const sessionInRun = (r: typeof runs[number]): string | null =>
+    r.inputs[0]?.session_id ?? r.outputs[0]?.session_id ?? null
+
   // Half-bag top-ups add weight to a bag first bagged on an earlier day; the
   // increment carries no grade of its own, so it belongs to no run either.
   const topUpUnattributedKg = freshTopUps.reduce((t, r) => t + r.kg, 0)
@@ -348,7 +390,48 @@ export default function ProductionOrderDetailPage() {
   // The header names every run the day actually held, not just the first
   // shift's — which is what made 07-09 read as a plain Conventional order when
   // half of it was RA-Conventional.
-  const runsLabel = runs.length ? runs.map(r => runTitle(r.variant, r.grade)).join('  +  ') : variantGrade
+  const runsLabel = shownRuns.length ? shownRuns.map(r => runTitle(r.variant, r.grade)).join('  +  ') : variantGrade
+
+  /**
+   * The shifts THIS order ran, not the day's.
+   *
+   * The header used to join every session on the line that day, which is how
+   * 11 September read "Morning + Morning + Afternoon" on a document about one
+   * organic morning run.
+   */
+  const shownShiftText = (shownRuns.length
+    ? Array.from(new Set(shownRuns.flatMap(r => r.shifts)))
+    : shifts.map(b => b.session.shift)
+  ).map(sh => SHIFT_LABEL[sh] ?? sh).join(' + ')
+
+  /**
+   * The production order on THIS record — never the day's union.
+   *
+   * `poItems` covers every session that day. On 11 September two of the three
+   * records carried no order at all and the third carried `S10LGBL-C`, so the
+   * union put a Conventional code on the organic run. A record with no order
+   * now says so, which is the truth and is what makes the gap visible.
+   */
+  // Every record that contributed to the shown run(s) — not just the one
+  // clicked. Sessions 02 and 03 of 11 September are both Conventional · Export
+  // Blend and carry DIFFERENT orders (one null, one S10LGBL-C), so keying the
+  // header off the click alone would show a different order for the same run
+  // depending on which row you came in from. The order belongs to the run.
+  const shownSessionIds = new Set<string>()
+  for (const r of shownRuns) {
+    for (const d of r.inputs) shownSessionIds.add(d.session_id)
+    for (const b of r.outputs) shownSessionIds.add(b.session_id)
+  }
+  const shownPoCodes = new Set(
+    shifts.filter(b => shownSessionIds.has(b.session.id))
+      .flatMap(b => (b.session.production_orders ?? []) as string[]),
+  )
+  const shownPoItems = clickedRunKeys.size && shownSessionIds.size
+    ? poItems.filter(pi => shownPoCodes.has(pi.code))
+    : poItems
+  const poText = shownPoItems.length
+    ? shownPoItems.map(pi => pi.description ? `${pi.code} — ${pi.description}` : pi.code).join('; ')
+    : '—'
 
   return (
     <div className="px-4 py-6 max-w-[1000px] mx-auto space-y-5 print-full-width">
@@ -377,7 +460,7 @@ export default function ProductionOrderDetailPage() {
         <PanelBody>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
             <Field label="Date" value={format(new Date(date), 'd MMM yyyy')} bold />
-            <Field label="Shift" value={shifts.map(s => SHIFT_LABEL[s.session.shift] ?? s.session.shift).join(' + ')} bold />
+            <Field label="Shift" value={shownShiftText} bold />
             <Field label="Variant & grade" value={runsLabel} strong className="col-span-2" />
             <Field label="Operators" value={operators.join(', ') || '—'} bold />
             <Field label="Supervisor" value={supervisor || '—'} bold />
@@ -414,16 +497,63 @@ export default function ProductionOrderDetailPage() {
           </PanelBody>
         </Panel>
       )}
-      {runs.map(run => (
+      {shownRuns.map(run => (
         <RunSection key={run.key} run={run} multiShift={shifts.length > 1} />
       ))}
+
+      {/* Say which of the two things this page is. Without it, a day view and
+          an order summary look the same until you read the totals. */}
+      {dayView && (
+        <div className="flex flex-wrap items-center gap-2 px-1">
+          <span className="text-[11.5px] text-text-muted">
+            Whole day — every run on this line, with the reconciliation. Each order has its own summary.
+          </span>
+          {runs.map(r => {
+            const sid = sessionInRun(r)
+            return sid ? (
+              <Link key={r.key} href={`/production/orders/${sid}`}
+                className="no-print inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-surface-rule text-[11.5px] text-text hover:border-brand hover:text-brand transition-colors">
+                {runTitle(r.variant, r.grade)}
+              </Link>
+            ) : null
+          })}
+        </div>
+      )}
+
+      {/* The day's other orders. Named and linked rather than folded in: a
+          changeover produces two summaries and a reader who came looking for
+          one still needs to be able to reach the other. */}
+      {otherRuns.length > 0 && (
+        <div className="no-print flex flex-wrap items-center gap-2 px-1">
+          <span className="text-[11.5px] text-text-muted">Also run on this line today:</span>
+          {otherRuns.map(r => {
+            const sid = sessionInRun(r)
+            const label = runTitle(r.variant, r.grade)
+            return sid ? (
+              <Link key={r.key} href={`/production/orders/${sid}`}
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-surface-rule text-[11.5px] text-text hover:border-brand hover:text-brand transition-colors">
+                {label}
+              </Link>
+            ) : (
+              <span key={r.key} className="text-[11.5px] text-text-muted">{label}</span>
+            )
+          })}
+        </div>
+      )}
 
       {/* Everything that belongs to no single run. Listed rather than spread
           across the runs, because spreading it would be an apportionment and
           every other figure on this page is a measurement. */}
+      {/* Day-level, both of them — so on ONE ORDER's summary they are context,
+          not content. `no-print` keeps them off the printed artefact, which is
+          what makes a changeover produce two separate order documents rather
+          than two copies of the day. They still print in full on the day view
+          (`?scope=day`), so the material that belongs to no run is never
+          orphaned. */}
+      <div className={scoped ? 'no-print space-y-5' : 'space-y-5'}>
       {hasUnattributed && (
         <Panel>
-          <PanelHead title="Not attributable to one run"
+          <PanelHead title={scoped ? 'Not attributable to one run — the day, for context' : 'Not attributable to one run'}
             meta={`${unattributedInKg.toFixed(1)} kg in · ${unattributedOutKg.toFixed(1)} kg out`} />
           <PanelBody>
             <div className="space-y-4">
@@ -557,6 +687,17 @@ export default function ProductionOrderDetailPage() {
           </PanelBody>
         </Panel>
       )}
+      {scoped && (
+        <p className="no-print text-[11.5px] text-text-muted px-1">
+          The two panels above are the whole day, not this order — they are on screen for context and
+          are left off the printed summary.{' '}
+          <Link href={`/production/orders/${id}?scope=day`} className="text-brand hover:underline">
+            Open the day view
+          </Link>{' '}
+          to print them.
+        </p>
+      )}
+      </div>
 
       {/* Re-bagged in — bags born from an existing bag via re-bagging, not
           fresh production. Informational only: its kg is deliberately NOT
