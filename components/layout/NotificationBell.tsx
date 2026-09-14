@@ -7,6 +7,7 @@ import { getDb } from '@/lib/supabase/db'
 import { useAuth } from '@/lib/auth/context'
 import { formatDistanceToNow, parseISO } from 'date-fns'
 import { Bell, X, Check, Trash2, CheckCheck, Dot } from 'lucide-react'
+import { WORK_REQUEST_KINDS } from './WorkRequestPopup'
 
 // One unified notification shape — everything now lives in shared.notifications.
 interface Note {
@@ -94,6 +95,11 @@ export default function NotificationBell() {
         (payload: any) => {
           const n = payload.new as Note
           setItems(prev => (prev.some(p => p.id === n.id) ? prev : [n, ...prev]))
+          // Work requests (a QC check waiting on a job card) get the persistent
+          // WorkRequestPopup instead — toasting them here too would put the same
+          // request on screen twice, and the toast would then expire underneath
+          // the popup. They still land in the list and the unread count.
+          if (WORK_REQUEST_KINDS.includes((n.kind ?? '') as any)) return
           setToast(n)
           if (toastTimer.current) clearTimeout(toastTimer.current)
           toastTimer.current = setTimeout(() => setToast(null), 6000)

@@ -23,6 +23,13 @@ export interface JobCard {
   assigned_to_2?: string | null; assigned_user_id_2?: string | null
   // Food-grade lubricant declaration, recorded on completion.
   fg_lubricant?: boolean | null; fg_lubricant_note?: string | null
+  // Temporary repair declared by the TECHNICIAN while doing the work (distinct
+  // from the 'Temporary Repair' maint_type the raiser may have guessed at up
+  // front). Signing the card off raises the permanent-repair card and records it
+  // in follow_up_card_id; that card points back with follow_up_of_card_id.
+  temp_repair?: boolean | null; temp_repair_note?: string | null
+  temp_repair_at?: string | null; temp_repair_by?: string | null
+  follow_up_card_id?: number | null; follow_up_of_card_id?: number | null
   accepted_at: string | null; started_at: string | null; completed_at: string | null
   // Manager urgency label (null → derived priority); cancellation audit fields.
   urgency: Urgency | null; cancelled_at: string | null; cancelled_by: string | null
@@ -45,7 +52,7 @@ export interface Slot { id: number; card_id: number | null; technician: string; 
 export interface Staff { id: string | null; name: string; initials: string; email?: string | null; phone?: string | null; role?: string }
 export interface Template { id: number; frequency: 'weekly' | 'monthly'; area: string; doc_ref: string; tasks: string[]; sort_order: number }
 // task_states values carry who ticked the task and when (audit trail)
-export interface Completion { id: number; template_id: number; period_key: string; task_states: Record<string, { done?: boolean; fault?: boolean; notes?: string; by?: string; at?: string }>; comments: string; completed_by: string; updated_at?: string; assigned_to?: string | null; assigned_by?: string | null; assigned_at?: string | null; submitted_at?: string | null; submitted_by?: string | null; verified_at?: string | null; verified_by?: string | null }
+export interface Completion { id: number; template_id: number; period_key: string; task_states: Record<string, { done?: boolean; fault?: boolean; notes?: string; by?: string; at?: string }>; comments: string; completed_by: string; updated_at?: string; assigned_to?: string | null; assigned_user_id?: string | null; assigned_by?: string | null; assigned_at?: string | null; submitted_at?: string | null; submitted_by?: string | null; verified_at?: string | null; verified_by?: string | null }
 export interface AnnualItem { id: number; category: string; asset: string; serial_no: string; supplier: string; next_due: string | null; last_done: string | null; interval_days: number | null; last_done_by: string | null; notes: string; cert_path: string | null; cert_name: string | null; cert_uploaded_at: string | null; cert_uploaded_by: string | null }
 export interface SparePart { id: number; part_no: string; class: string; description: string; qty_new: number; qty_used: number; barcode?: string | null }
 export interface Offsite { id: number; item: string; sent_to: string; date_sent: string | null; status: string }
@@ -76,7 +83,7 @@ export interface DieselReading { id: number; reading_date: string; run_hours: nu
 export interface LsLog { id: number; log_date: string; stage: string; time_slot: string; run_hours: number | null; recorded_by: string }
 export interface WaterReading { id: number; reading_date: string; main_meter: number | null; unit2_w1: number | null; unit2_w2: number | null; unit1: number | null; boiler: number | null; recorded_by: string }
 export interface BoilerStart { id: number; log_date: string; switched_on_by: string; morning_shift: string; afternoon_shift: string }
-export interface EqConfig { id: number; equipment: string; service_interval_hours: number; hours_per_workday: number; active: boolean }
+export interface EqConfig { id: number; equipment: string; service_interval_hours: number; hours_per_workday: number; active: boolean; service_interval_days?: number | null }
 export interface EqHours { id: number; equipment: string; reading_date: string; total_hours: number | null; hours_since_service: number | null; serviced: boolean; notes: string; recorded_by: string }
 export interface CalAsset { id: number; serial_no: string; department: string; asset_name: string; last_done: string | null; interval_days: number; weekly_check: boolean; comment: string; active: boolean }
 export interface Machine { id: number; name: string; area: string; active: boolean; created_by: string }

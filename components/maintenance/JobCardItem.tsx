@@ -153,6 +153,7 @@ export function JobCardItem({ j, roles, compact = true }: { j: JobCard; roles: J
           <StatusBadge status={j.status} />
           {j.external && <span className="badge badge-warn">EXT: {j.external_company}</span>}
           {(j.reopen_count ?? 0) > 0 && <span className="badge badge-err">REOPENED ×{j.reopen_count}</span>}
+          {j.temp_repair && <span className="badge badge-warn" title="Running on a temporary repair — a permanent-repair card follows">TEMP REPAIR</span>}
           {!j.qc_required && j.status !== 'raised' && !isCancelled && <span className="badge badge-gray">NO QC</span>}
         </div>
         <div className="flex items-center gap-1.5 shrink-0">
@@ -280,6 +281,26 @@ export function JobCardItem({ j, roles, compact = true }: { j: JobCard; roles: J
               </div>
             </div>
           )}
+
+          {/* The temporary-repair chain, both directions: the permanent card this
+              one spawned, or the temporary repair this one came from. */}
+          {(j.follow_up_card_id || j.follow_up_of_card_id) && (() => {
+            const linked = data.jcs.find(x => x.id === (j.follow_up_card_id ?? j.follow_up_of_card_id))
+            const isFollowUp = !!j.follow_up_of_card_id
+            return (
+              <div className="rounded-lg border border-info/30 bg-info/5 px-2.5 py-2 mt-2.5 text-[11px]">
+                <span className="text-info font-semibold">
+                  {isFollowUp ? 'Permanent repair for a temporary fix' : 'Temporary repair — permanent card raised'}
+                </span>{' '}
+                <span className="text-text-muted">
+                  {isFollowUp ? 'Follows on from' : 'Follow-up card:'}{' '}
+                  <a href={`/maintenance/job-cards/${j.follow_up_card_id ?? j.follow_up_of_card_id}`}
+                    className="text-accent font-semibold">{linked?.card_no ?? `#${j.follow_up_card_id ?? j.follow_up_of_card_id}`}</a>
+                  {linked ? ` · ${linked.status.replace(/_/g, ' ')}` : ''}
+                </span>
+              </div>
+            )
+          })()}
 
           {/* Photo attached at creation — always visible to manager & technician, click to enlarge */}
           {j.photo_url && (
@@ -559,6 +580,33 @@ export function JobCardItem({ j, roles, compact = true }: { j: JobCard; roles: J
                 )}
               </div>
 
+              {/* Temporary repair — ticked by the technician at the moment they
+                  make one, not predicted when the card was raised. Signing the
+                  card off then raises the permanent-repair card automatically,
+                  so a temporary fix can never be the last word on a machine. */}
+              <div className={`rounded-xl border p-3 ${j.temp_repair ? 'border-warn/40 bg-warn/5' : 'border-surface-rule bg-surface-raised/60'}`}>
+                <label className={LB}>Is this a temporary repair?</label>
+                <div className="flex gap-1.5 flex-wrap">
+                  <button className={TOG(!!j.temp_repair)}
+                    onClick={() => actions.setTempRepair(j, true)}>Yes — temporary repair</button>
+                  <button className={TOG(!j.temp_repair)}
+                    onClick={() => actions.setTempRepair(j, false)}>No — permanent repair</button>
+                </div>
+                {j.temp_repair && (
+                  <>
+                    <input className={`${INP} mt-2 text-[12px]`}
+                      placeholder="What still needs doing permanently? (carried onto the new card)"
+                      value={drafts['tr' + j.id] ?? (j.temp_repair_note ?? '')}
+                      onChange={e => setDrafts(p => ({ ...p, ['tr' + j.id]: e.target.value }))}
+                      onBlur={e => actions.upJC(j.id, { temp_repair_note: e.target.value })} />
+                    <div className="text-[11px] text-warn mt-1.5">
+                      A permanent-repair job card for {j.machine || j.area} will be raised automatically
+                      when the maintenance manager signs this one off.
+                    </div>
+                  </>
+                )}
+              </div>
+
               {(() => {
                 const canFinish = ((drafts['wd' + j.id] ?? j.work_done ?? '').trim().length > 0) && ((drafts['rc' + j.id] ?? j.root_cause ?? '').trim().length > 0)
                 return (
@@ -671,6 +719,15 @@ export function JobCardItem({ j, roles, compact = true }: { j: JobCard; roles: J
               <div className="text-[12px] text-text-muted mb-0.5"><span className="text-text font-medium">Duration:</span> {netMin} min</div>
               {j.qc_required && <div className="text-[12px] text-text-muted mb-0.5"><span className="text-text font-medium">QC by:</span> {j.qc_name} at {fmtT(j.qc_done_at)}</div>}
               <div className="text-[12px] text-text-muted mb-2"><span className="text-text font-medium">Raised by:</span> {j.raised_by}</div>
+              {/* Signing off a temporary repair is what raises the permanent one —
+                  say so before the manager clicks, not after. */}
+              {j.temp_repair && !j.follow_up_card_id && (
+                <div className="rounded-lg border border-warn/30 bg-warn/5 px-2.5 py-2 text-[11px] text-warn mb-2">
+                  <strong>Temporary repair.</strong> Signing this off will automatically raise a
+                  permanent-repair job card for {j.machine || j.area}, ready for you to allocate.
+                  {j.temp_repair_note ? <> Outstanding: {j.temp_repair_note}</> : null}
+                </div>
+              )}
               <div className="flex gap-2 flex-wrap mt-1">
                 <button className={PRIMARY} onClick={() => actions.verifyCard(j, true)}>✓ Sign off &amp; close</button>
                 <button className="border border-err/40 text-err bg-err/5 rounded-lg px-4 py-2.5 min-h-[44px] text-sm font-semibold hover:bg-err/10 transition" onClick={() => actions.verifyCard(j, false)}>Not satisfactory — return to tech</button>

@@ -25,7 +25,18 @@ import type { JobCard } from '@/lib/maintenance/types'
 const TAB = (active: boolean) =>
   `px-3.5 py-2 rounded-lg text-[12px] font-semibold whitespace-nowrap transition ${active ? 'bg-brand text-white' : 'text-text-muted hover:bg-surface-dim'}`
 
-type TabKey = 'allocated' | 'in_progress' | 'completed' | 'history'
+type TabKey = 'allocated' | 'in_progress' | 'signoff' | 'completed' | 'history'
+
+// A card a technician has finished but nobody has closed yet. It sits in QC or
+// with the maintenance manager — the technician has nothing to DO, but it is
+// still their job card and they need to see where it got to.
+//
+// These statuses previously matched no tab at all: the card left "In progress"
+// the moment work was submitted and only reappeared under "Completed" after the
+// manager signed off, so for hours or days it looked to the technician as though
+// their work had vanished.
+const AWAITING_SIGNOFF = ['qc_check', 'mgr_verify', 'verify'] as const
+const isAwaitingSignoff = (j: JobCard) => (AWAITING_SIGNOFF as readonly string[]).includes(j.status)
 
 export default function MyJobsPage() {
   const auth = useAuth()
@@ -44,9 +55,16 @@ export default function MyJobsPage() {
   const [to, setTo] = useState('')
 
   // Cards where I am either technician (a two-person job counts for both).
+  // Matched on USER ID first: the name comparison alone silently missed every
+  // card whenever the roster spelling and the person's profile name differed —
+  // the same failure that stopped allocated checklists reaching technicians.
+  // Name is kept as the fallback for cards allocated before ids were recorded.
+  const uid = auth.userId
   const mine = useMemo(
-    () => jcs.filter(j => j.assigned_to === actor || j.assigned_to_2 === actor),
-    [jcs, actor],
+    () => jcs.filter(j =>
+      (uid && (j.assigned_user_id === uid || j.assigned_user_id_2 === uid)) ||
+      (!!actor && (j.assigned_to === actor || j.assigned_to_2 === actor))),
+    [jcs, actor, uid],
   )
 
   // Filter option lists come from whichever set the active tab reads, so the
@@ -77,6 +95,7 @@ export default function MyJobsPage() {
     const base =
       tab === 'allocated' ? mine.filter(j => j.status === 'assigned')
       : tab === 'in_progress' ? mine.filter(j => j.status === 'in_progress')
+      : tab === 'signoff' ? mine.filter(isAwaitingSignoff)
       : tab === 'completed' ? mine.filter(j => j.status === 'complete')
       : jcs.filter(j => j.status === 'complete' || j.status === 'cancelled')
     return base.filter(passes).sort((a, b) => (dateOf(b) ?? '').localeCompare(dateOf(a) ?? ''))
@@ -85,6 +104,7 @@ export default function MyJobsPage() {
   const counts = {
     allocated: mine.filter(j => j.status === 'assigned').length,
     in_progress: mine.filter(j => j.status === 'in_progress').length,
+    signoff: mine.filter(isAwaitingSignoff).length,
     completed: mine.filter(j => j.status === 'complete').length,
   }
 
@@ -107,6 +127,7 @@ export default function MyJobsPage() {
       <div className="flex flex-wrap gap-1.5 mb-3">
         <button className={TAB(tab === 'allocated')} onClick={() => setTab('allocated')}>Allocated <span className="opacity-70 tabular-nums">{counts.allocated}</span></button>
         <button className={TAB(tab === 'in_progress')} onClick={() => setTab('in_progress')}>In progress <span className="opacity-70 tabular-nums">{counts.in_progress}</span></button>
+        <button className={TAB(tab === 'signoff')} onClick={() => setTab('signoff')} title="Work you have finished that is still with QC or the maintenance manager">Awaiting sign-off <span className="opacity-70 tabular-nums">{counts.signoff}</span></button>
         <button className={TAB(tab === 'completed')} onClick={() => setTab('completed')}>Completed <span className="opacity-70 tabular-nums">{counts.completed}</span></button>
         <button className={TAB(tab === 'history')} onClick={() => setTab('history')}>All history</button>
       </div>
@@ -181,10 +202,19 @@ export default function MyJobsPage() {
           {rows.length > 200 && <div className="p-2 text-[11px] text-text-faint text-center">Showing the first 200 of {rows.length} — narrow with the filters.</div>}
         </div>
       ) : (
-        <JobCardTable cards={rows} roles={cardRoles} empty={
-          tab === 'allocated' ? 'Nothing allocated to you right now.'
-          : tab === 'in_progress' ? 'You have no jobs in progress.'
-          : 'You have no completed job cards yet.'} />
+        <>
+          {tab === 'signoff' && rows.length > 0 && (
+            <div className="rounded-lg border border-info/25 bg-info/5 px-3 py-2 mb-3 text-[12px] text-text-muted">
+              Your work here is done — these are waiting on QC or the maintenance manager to close them.
+              Nothing for you to do unless one comes back.
+            </div>
+          )}
+          <JobCardTable cards={rows} roles={cardRoles} empty={
+            tab === 'allocated' ? 'Nothing allocated to you right now.'
+            : tab === 'in_progress' ? 'You have no jobs in progress.'
+            : tab === 'signoff' ? 'Nothing of yours is waiting for sign-off.'
+            : 'You have no completed job cards yet.'} />
+        </>
       )}
     </div>
   )
