@@ -13,6 +13,16 @@
 //   5. Only IT department users can create users
 //   6. Managers (any dept) can edit permissions for users in their own department
 //   7. New roles can be created on the fly — just add to DEPARTMENT_ROLES below
+//   8. Read-only access is DERIVED, not listed — resolvePermission() reads the
+//      `read` slots out of PERMISSION_MATRIX rather than keeping a second list
+//      of "which keys are views" that would drift the moment a module ships.
+
+// permission-registry only imports TYPES from this file (`import type`), which
+// TypeScript erases, so this is not a runtime circular import.
+import {
+  READ_KEY_GRANTORS, WRITE_KEY_GRANTORS, DELETE_KEY_GRANTORS,
+  MODULE_READ_KEYS, READ_KEY_IMPLIED_BY,
+} from './permission-registry'
 
 // ─── All permission keys ──────────────────────────────────────────────────────
 
@@ -28,6 +38,17 @@ export type PermissionKey =
   | 'can_save_lab_results'
   | 'can_delete_lab_results'
   | 'can_edit_lab_comments'
+  // Quality's per-resource READ keys. Before these existed, VIEWING lab
+  // results/specs/runs/sieving was governed ENTIRELY by can_view_history — one
+  // key that opens the whole module — or by Quality department membership.
+  // There was no way to hand someone read access to just one of these pages.
+  // See app/(app)/layout.tsx's Quality ROUTE_GUARDS block for how each is
+  // wired in (each accepts can_view_history too, so nobody who could already
+  // see a page loses that).
+  | 'can_view_lab_results'
+  | 'can_view_specs'
+  | 'can_view_runs'
+  | 'can_view_sieving'
   // Quality — Specifications
   | 'can_edit_customer_specs'
   | 'can_delete_specs'
@@ -49,6 +70,9 @@ export type PermissionKey =
   | 'can_add_sieving_runs'
   | 'can_delete_sieving_runs'
   | 'can_edit_sieving_specs'
+  // Quality — COA Generator. A dedicated key rather than the can_save_lab_results
+  // / can_approve_runs the page's canUse borrowed until now — see coa/page.tsx.
+  | 'can_generate_coa'
   // Production — Ops
   | 'can_submit_count'
   | 'can_edit_count'
@@ -93,6 +117,15 @@ export type PermissionKey =
   | 'can_access_marketing'
   | 'can_access_research'
   | 'can_access_intelligence'
+  // View-only counterparts for the two Sales-group modules that actually WRITE:
+  // Alara/Research can promote a signal into an account and upload to the vault,
+  // and Global Wits imports a CSV. can_access_* still means "full use" and is
+  // what those three actions check, so nobody who has it today loses anything —
+  // these keys open the same screens with those actions withheld, which is what
+  // lets the read-only grant cover the module honestly.
+  | 'can_view_research'
+  | 'can_view_intelligence'
+  | 'can_view_marketing'      // same split — the Marketing hub saves reports and creates accounts
   // Management & Reporting
   | 'can_view_management'
   | 'can_view_reports'
@@ -147,18 +180,85 @@ export type PermissionKey =
   | 'can_edit_roster_cleaning'     | 'can_submit_roster_cleaning'     | 'can_delete_roster_cleaning'
   | 'can_edit_roster_maintenance'  | 'can_submit_roster_maintenance'  | 'can_delete_roster_maintenance'
   | 'can_edit_roster_hs'           | 'can_submit_roster_hs'           | 'can_delete_roster_hs'
+  // ── Read-only access ───────────────────────────────────────────────────────
+  // One key per module in PERMISSION_MATRIX, plus a blanket key. Holding one
+  // resolves every READ key that module declares in lib/auth/permission-registry.ts
+  // to true — see resolvePermission() and READ_KEYS_BY_MODULE.
+  //
+  // These grant reads and nothing else. They never switch a write, delete or
+  // manage key on, and they never switch anything OFF: someone who also holds a
+  // write permission through their role keeps it. "Read-only" here describes
+  // what the KEY hands out, not a cap on the person.
+  //
+  // The names must match `can_read_${slug}` for the slugs in the matrix — a
+  // drift test in permissions.test.ts fails the build if the two disagree.
+  | 'can_read_all_modules'     // every module below, including ones added later
+  | 'can_read_quality'
+  | 'can_read_production'
+  | 'can_read_maintenance'
+  | 'can_read_sales'
+  | 'can_read_marketing'
+  | 'can_read_bag_tracking'
+  | 'can_read_logistics'
+  // No can_read/write/delete_notebooks: production has no Note Books module.
+  // It is a staging-only feature — no /notebooks pages, no can_access_notebooks
+  // key, no row in PERMISSION_MATRIX — so grant keys for it would be orphans the
+  // drift test rejects. They arrive when the module does.
+  | 'can_read_management'
+  | 'can_read_workspace'
+  | 'can_read_staff_directory'
+  | 'can_read_training'
+  | 'can_read_roster'
+  // Write and delete, same scheme, one per module. There is no
+  // can_write_all_modules or can_delete_all_modules and there should not be:
+  // see the note above MODULE_GRANTS in permission-registry.ts.
+  //
+  // A module keeps all three keys even where it declares no write or delete
+  // slot today (Sales, Marketing, Bag Tracking, Management, Workspace), so
+  // the first resource that gains one is covered without a new key. The
+  // Users page draws a switch only where the count is non-zero.
+  | 'can_write_quality'
+  | 'can_write_production'
+  | 'can_write_maintenance'
+  | 'can_write_sales'
+  | 'can_write_marketing'
+  | 'can_write_bag_tracking'
+  | 'can_write_logistics'
+  | 'can_write_management'
+  | 'can_write_workspace'
+  | 'can_write_staff_directory'
+  | 'can_write_training'
+  | 'can_write_roster'
+  | 'can_delete_quality'
+  | 'can_delete_production'
+  | 'can_delete_maintenance'
+  | 'can_delete_sales'
+  | 'can_delete_marketing'
+  | 'can_delete_bag_tracking'
+  | 'can_delete_logistics'
+  | 'can_delete_management'
+  | 'can_delete_workspace'
+  | 'can_delete_staff_directory'
+  | 'can_delete_training'
+  | 'can_delete_roster'
+  // Administration is deliberately absent: its resources are the audit log,
+  // migrations, dev tools and user admin, none of which is a "read" anybody
+  // should get from a view-everything toggle. It sets readGrant: false.
 
 export type Permissions = Partial<Record<PermissionKey, boolean>>
 
 export const ALL_PERMISSION_KEYS: PermissionKey[] = [
   'can_upload_pdfs','can_save_records','can_edit_records','can_delete_records',
   'can_view_history','can_export_csv','can_save_lab_results','can_delete_lab_results',
-  'can_edit_lab_comments','can_edit_customer_specs','can_delete_specs','can_edit_sieve_specs',
+  'can_edit_lab_comments',
+  'can_view_lab_results','can_view_specs','can_view_runs','can_view_sieving',
+  'can_edit_customer_specs','can_delete_specs','can_edit_sieve_specs',
   'can_edit_granule_specs','can_create_runs','can_edit_runs','can_finalise_runs',
   'can_reopen_runs','can_delete_runs','can_add_samples','can_edit_samples',
   'can_add_tastings','can_edit_tastings','can_approve_runs','can_signoff_day',
   'can_add_sieving_runs','can_delete_sieving_runs',
-  'can_edit_sieving_specs','can_submit_count','can_edit_count','can_view_all_sections',
+  'can_edit_sieving_specs','can_generate_coa',
+  'can_submit_count','can_edit_count','can_view_all_sections',
   'can_view_ops_dashboard',
   'can_view_capture','can_assign_shifts',
   'can_start_live_session','can_scan_inputs','can_add_outputs','can_reset_operator_pin',
@@ -171,6 +271,7 @@ export const ALL_PERMISSION_KEYS: PermissionKey[] = [
   'can_view_shift_report','can_edit_shift_report','can_submit_shift_report','can_approve_shift_report',
   'can_view_capture_ratings','can_rate_capture','can_delete_capture_rating',
   'can_access_sales','can_access_marketing','can_access_research','can_access_intelligence',
+  'can_view_research','can_view_intelligence','can_view_marketing',
   'can_view_management','can_view_reports','can_export_reports','can_manage_users',
   'can_reset_passwords','can_change_roles','can_edit_permissions','can_invite_users',
   'can_confirm_emails','can_view_audit_log','can_run_migrations','can_access_dev_tools',
@@ -191,6 +292,20 @@ export const ALL_PERMISSION_KEYS: PermissionKey[] = [
   'can_edit_roster_cleaning','can_submit_roster_cleaning','can_delete_roster_cleaning',
   'can_edit_roster_maintenance','can_submit_roster_maintenance','can_delete_roster_maintenance',
   'can_edit_roster_hs','can_submit_roster_hs','can_delete_roster_hs',
+  // Module grants (see the union above). Order matches PERMISSION_MATRIX.
+  'can_read_all_modules',
+  'can_read_quality',    'can_write_quality',    'can_delete_quality',
+  'can_read_production', 'can_write_production', 'can_delete_production',
+  'can_read_maintenance','can_write_maintenance','can_delete_maintenance',
+  'can_read_sales',      'can_write_sales',      'can_delete_sales',
+  'can_read_marketing',  'can_write_marketing',  'can_delete_marketing',
+  'can_read_bag_tracking','can_write_bag_tracking','can_delete_bag_tracking',
+  'can_read_logistics',  'can_write_logistics',  'can_delete_logistics',
+  'can_read_management', 'can_write_management', 'can_delete_management',
+  'can_read_workspace',  'can_write_workspace',  'can_delete_workspace',
+  'can_read_staff_directory','can_write_staff_directory','can_delete_staff_directory',
+  'can_read_training',   'can_write_training',   'can_delete_training',
+  'can_read_roster',     'can_write_roster',     'can_delete_roster',
 ]
 
 // Roster section keys (match ROSTER_CATEGORIES in lib/production/roster-config.ts).
@@ -257,6 +372,20 @@ export const DEPARTMENT_ROLES: Record<Department, { role: string; label: string;
     { role: 'senior_developer', label: 'Senior Developer', desc: 'Full access to everything — 45/45 permissions' },
     { role: 'co_developer',     label: 'Co-Developer',     desc: 'Full access except destructive ops & migrations' },
     { role: 'it_admin',         label: 'IT Admin',         desc: 'User management only — no data or dev access' },
+    // Real IT staff, added to ROLE_PERMISSION_DEFAULTS below for the first
+    // time — until now these two role strings existed only in the database
+    // (set outside this system, probably during onboarding before it existed)
+    // and were never in this picker list or in ROLE_PERMISSION_DEFAULTS. With
+    // no entry here, resolvePermission() falls through to false for every
+    // key, and IT department membership alone grants nothing (deliberately —
+    // see the "IT is NOT a blanket key" note above ROUTE_GUARDS), so anyone on
+    // either role had ZERO permissions unless individually overridden — the
+    // same gap `store_default` had. `it_management` is the production
+    // spelling; `it-management` (hyphen) is how the same role is stored on
+    // staging — both are wired below so the defaults apply regardless of
+    // which environment the person is in.
+    { role: 'bis_manager',      label: 'BIS Manager',      desc: 'Business information systems — can open the COA Generator' },
+    { role: 'it_management',    label: 'IT Management',    desc: 'Can open the COA Generator' },
   ],
   Quality: [
     { role: 'quality_default',       label: 'Quality (Default)',    desc: 'All permissions off — toggle on what they need' },
@@ -279,7 +408,13 @@ export const DEPARTMENT_ROLES: Record<Department, { role: string; label: string;
     { role: 'maintenance_qc',         label: 'Maintenance QC',           desc: 'Performs post-maintenance QC checks' },
   ],
   Management: [
-    { role: 'management_default', label: 'Management (Default)', desc: 'Read-only across all modules — view quality, production, maintenance, reports. Toggle write/delete on per person if needed.' },
+    { role: 'management_default', label: 'Management (Default)', desc: 'Read-only over a fixed list of modules — quality, production, maintenance, reports. Toggle write/delete on per person if needed.' },
+    // The claim "read-only across all modules" belongs to this role, not to
+    // management_default above, whose list is hand-maintained and predates
+    // several modules. This one holds can_read_all_modules and follows the
+    // matrix. Listed under Management as the natural home, but it is a role
+    // string like any other — assign it from any department.
+    { role: 'read_only_viewer',   label: 'Read-Only Viewer',    desc: 'View access to every module, including ones added later. No write, delete or admin rights anywhere.' },
   ],
   Sales: [
     { role: 'sales_default',    label: 'Sales (Default)',    desc: 'All permissions off — toggle on what they need' },
@@ -458,6 +593,25 @@ export const ROLE_PERMISSION_DEFAULTS: Record<string, Permissions> = {
     can_view_audit_log: true,
   },
 
+  // ── IT — BIS Manager / IT Management: previously undefined roles ───────────
+  // These two hold real people (see DEPARTMENT_ROLES.IT above for the full
+  // story) but had never been given any default. Wiring only what was
+  // explicitly asked for — the ability to open and use the COA Generator —
+  // rather than inventing a broader permission set nobody has specified.
+  // `can_generate_coa` alone is enough: the dedicated /quality/coa route guard
+  // accepts it without requiring can_view_history, so this does not open any
+  // other part of Quality.
+  bis_manager: {
+    can_generate_coa: true,
+  },
+  it_management: {
+    can_generate_coa: true,
+  },
+  // Same role, stored with a hyphen on staging (see the comment above).
+  'it-management': {
+    can_generate_coa: true,
+  },
+
   // ── Quality — Lab Assistant: PIN-based capture only ───────────────────────
   quality_lab_assistant: {
     can_save_records:     true,
@@ -527,11 +681,42 @@ export const ROLE_PERMISSION_DEFAULTS: Record<string, Permissions> = {
     can_view_roster: true,
   },
 
+  // ── Read-Only Viewer — the whole platform, view access, nothing else ───────
+  // The hand-maintained list above is management_default's, and it drifted: it
+  // predates Labels, Job Cards, Bag Tracking, Logistics and the Sales-group
+  // modules, so a "read-only across the platform" role written that way is out
+  // of date the next time a module ships. This role holds ONE key instead, and
+  // that key is resolved against PERMISSION_MATRIX at call time — a module added
+  // to the matrix is covered without touching this file.
+  //
+  // Deliberately NOT applied to management_default: that would widen what every
+  // existing Management user can see, which is a decision for whoever owns those
+  // accounts, not a side effect of adding the capability. Assign this role, or
+  // tick the read keys per person, when you actually want it.
+  read_only_viewer: {
+    can_read_all_modules: true,
+  },
+
   // ── All other roles: zero defaults — toggle on per person ──────────────────
   // Any role string not listed here resolves to all-false.
 }
 
 // ─── Core resolver ────────────────────────────────────────────────────────────
+
+/**
+ * Override, then role default. The direct answer for a key, with no read-only
+ * grant applied — resolvePermission() uses it to ask "does this person hold
+ * can_read_<module>?" without re-entering the grant branch below.
+ */
+function heldDirectly(
+  role:      string | null,
+  overrides: Permissions,
+  key:       PermissionKey
+): boolean {
+  if (key in overrides) return overrides[key] === true
+  if (!role) return false
+  return ROLE_PERMISSION_DEFAULTS[role]?.[key] === true
+}
 
 export function resolvePermission(
   role:        string | null,
@@ -541,8 +726,55 @@ export function resolvePermission(
   // Explicit override always wins
   if (key in overrides) return overrides[key] === true
   // Role default
-  if (!role) return false
-  return ROLE_PERMISSION_DEFAULTS[role]?.[key] === true
+  if (role && ROLE_PERMISSION_DEFAULTS[role]?.[key] === true) return true
+
+  // ── Module grants, checked LAST so they can only ever ADD ─────────────────
+  //
+  // Ordering is the safety property here, not an implementation detail:
+  //   - after the override check, so an explicit `false` on one key still wins
+  //     (grant read-all, then deny one module's key, and the deny holds);
+  //   - only for keys the matrix files under that exact axis. The three
+  //     GRANTORS maps are built from `read`, `write` and `delete` slots
+  //     separately, and a test asserts the four slot kinds are disjoint — so a
+  //     write grant cannot reach a read key, and NOTHING reaches `manage`.
+  //     A resource with no slot of that kind is simply never granted. Fails
+  //     closed in every direction.
+
+  // A read key: granted by its module's read, write OR delete grant. Write and
+  // delete imply read because every route guard in the app is on a read key —
+  // without the implication, "write on Quality" would hand someone save
+  // permissions for pages the guard bounces them out of before they can use.
+  const readGrantors = READ_KEY_GRANTORS.get(key)
+  if (readGrantors) {
+    if (heldDirectly(role, overrides, 'can_read_all_modules')) return true
+    if (readGrantors.some(g =>
+      heldDirectly(role, overrides, g) ||
+      (READ_KEY_IMPLIED_BY.get(g) ?? []).some(k => heldDirectly(role, overrides, k))
+    )) return true
+  }
+
+  // A write key: only its module's write grant. Deliberately not implied by
+  // delete — being allowed to remove a record is not being allowed to author
+  // one, and the reverse is the pairing the sign-off chains rely on.
+  const writeGrantors = WRITE_KEY_GRANTORS.get(key)
+  if (writeGrantors?.some(g => heldDirectly(role, overrides, g))) return true
+
+  // A delete key: only its module's delete grant. No blanket key exists.
+  const deleteGrantors = DELETE_KEY_GRANTORS.get(key)
+  if (deleteGrantors?.some(g => heldDirectly(role, overrides, g))) return true
+
+  // can_read_all_modules implies each per-module can_read_<slug>, and a
+  // module's write/delete grant implies its read grant. Not cosmetic: five
+  // route guards (/supervisor, /stock-control and three /production/* pages)
+  // had no permission at all and now name can_read_production, so a holder of
+  // the blanket key — or of write on Production — has to resolve THAT key
+  // itself, not merely the keys it in turn grants. Tests assert both.
+  if (MODULE_READ_KEYS.has(key)) {
+    if (heldDirectly(role, overrides, 'can_read_all_modules')) return true
+    if ((READ_KEY_IMPLIED_BY.get(key) ?? []).some(k => heldDirectly(role, overrides, k))) return true
+  }
+
+  return false
 }
 
 export function resolveAllPermissions(
@@ -562,6 +794,50 @@ export const PERMISSION_GROUPS: {
   permissions: { key: PermissionKey; label: string }[]
 }[] = [
   {
+    // First, because it is the fastest way to set someone up. Three axes per
+    // module — Read, Write, Delete — each derived from the slots the permission
+    // matrix already declares, so a module gains coverage the day a resource is
+    // added to it. Write and Delete imply Read for the same module (every route
+    // guard is on a read key, so write-without-read reaches nothing).
+    //
+    // `manage` is absent on purpose: approve, finalise, sign off, allocate and
+    // verify are authority rather than editing, and stay per-key in the groups
+    // below. There is no blanket Write or Delete either — only Read has one.
+    //
+    // A module appears here with Write or Delete only if it actually declares a
+    // slot of that kind. Sales, Marketing, Bag Tracking, Management and
+    // Workspace are read-only surfaces today; their keys exist (so nothing
+    // breaks when that changes) but drawing a switch for a grant that reaches
+    // zero keys just invites someone to tick it and wonder why nothing happened.
+    group: 'Module access — read / write / delete',
+    permissions: [
+      { key: 'can_read_all_modules', label: 'Read across ALL modules (covers modules added later)' },
+      { key: 'can_read_quality',              label: 'Quality — Read' },
+      { key: 'can_write_quality',             label: 'Quality — Write' },
+      { key: 'can_delete_quality',            label: 'Quality — Delete' },
+      { key: 'can_read_production',           label: 'Production — Read' },
+      { key: 'can_write_production',          label: 'Production — Write' },
+      { key: 'can_delete_production',         label: 'Production — Delete' },
+      { key: 'can_read_maintenance',          label: 'Maintenance — Read' },
+      { key: 'can_write_maintenance',         label: 'Maintenance — Write' },
+      { key: 'can_read_sales',                label: 'Sales, Alara & Intelligence — Read' },
+      { key: 'can_read_marketing',            label: 'Marketing — Read' },
+      { key: 'can_read_bag_tracking',         label: 'Bag Tracking — Read' },
+      { key: 'can_read_logistics',            label: 'Logistics — Read' },
+      { key: 'can_write_logistics',           label: 'Logistics — Write' },
+      { key: 'can_read_management',           label: 'Management dashboard & reports — Read' },
+      { key: 'can_read_workspace',            label: 'Workspace — Read' },
+      { key: 'can_read_staff_directory',      label: 'Staff Directory — Read' },
+      { key: 'can_write_staff_directory',     label: 'Staff Directory — Write' },
+      { key: 'can_delete_staff_directory',    label: 'Staff Directory — Delete' },
+      { key: 'can_read_training',             label: 'Training (Skills Matrix & SOPs) — Read' },
+      { key: 'can_write_training',            label: 'Training (Skills Matrix & SOPs) — Write' },
+      { key: 'can_read_roster',               label: 'Shift Roster — Read' },
+      { key: 'can_write_roster',              label: 'Shift Roster — Write' },
+      { key: 'can_delete_roster',             label: 'Shift Roster — Delete' },
+    ],
+  },
+  {
     group: 'Quality — Records',
     department: 'Quality',
     permissions: [
@@ -577,6 +853,7 @@ export const PERMISSION_GROUPS: {
     group: 'Quality — Lab Results',
     department: 'Quality',
     permissions: [
+      { key: 'can_view_lab_results',   label: 'View lab results (without full can_view_history)' },
       { key: 'can_save_lab_results',   label: 'Save lab results' },
       { key: 'can_delete_lab_results', label: 'Delete lab results' },
       { key: 'can_edit_lab_comments',  label: 'Edit comments on lab results' },
@@ -586,6 +863,7 @@ export const PERMISSION_GROUPS: {
     group: 'Quality — Specifications',
     department: 'Quality',
     permissions: [
+      { key: 'can_view_specs',          label: 'View specifications (without full can_view_history)' },
       { key: 'can_edit_customer_specs', label: 'Edit customer specifications' },
       { key: 'can_delete_specs',        label: 'Delete specification rows' },
       { key: 'can_edit_sieve_specs',    label: 'Edit sieving specs & overrides' },
@@ -596,6 +874,7 @@ export const PERMISSION_GROUPS: {
     group: 'Quality — Runs',
     department: 'Quality',
     permissions: [
+      { key: 'can_view_runs',     label: 'View granule / pasteuriser runs (without full can_view_history)' },
       { key: 'can_create_runs',   label: 'Create new runs' },
       { key: 'can_edit_runs',     label: 'Edit run details & batch numbers' },
       { key: 'can_finalise_runs', label: 'Finalise runs (Pass / Fail)' },
@@ -613,9 +892,20 @@ export const PERMISSION_GROUPS: {
     group: 'Quality — Sieving',
     department: 'Quality',
     permissions: [
+      { key: 'can_view_sieving',        label: 'View sieving (without full can_view_history)' },
       { key: 'can_add_sieving_runs',    label: 'Add new sieving runs' },
       { key: 'can_delete_sieving_runs', label: 'Delete sieving runs' },
       { key: 'can_edit_sieving_specs',  label: 'Edit sieving specs' },
+    ],
+  },
+  {
+    group: 'Quality — COA Generator',
+    department: 'Quality',
+    permissions: [
+      // The only gate. See coa-gating.ts / coa/page.tsx's canUse — this key is
+      // additive alongside the pre-existing can_save_lab_results /
+      // can_approve_runs so nobody who already had access loses it.
+      { key: 'can_generate_coa', label: 'Open & build a COA (view and edit are not yet separated for this screen)' },
     ],
   },
   {
@@ -677,7 +967,10 @@ export const PERMISSION_GROUPS: {
     department: 'Sales',
     permissions: [
       { key: 'can_access_sales',    label: 'Access sales module' },
-      { key: 'can_access_research', label: 'Access research engine' },
+      { key: 'can_view_research',      label: 'View Alara / research engine (no lead creation, no vault upload)' },
+      { key: 'can_access_research',    label: 'Full use of the research engine — promote signals to accounts, upload to the vault' },
+      { key: 'can_view_intelligence',  label: 'View the intelligence engine (no Global Wits import)' },
+      { key: 'can_access_intelligence',label: 'Full use of the intelligence engine — import Global Wits data' },
       { key: 'can_export_csv',      label: 'Export data to CSV' },
     ],
   },
@@ -685,7 +978,8 @@ export const PERMISSION_GROUPS: {
     group: 'Marketing',
     department: 'Marketing',
     permissions: [
-      { key: 'can_access_marketing', label: 'Access marketing module' },
+      { key: 'can_view_marketing',   label: 'View the marketing module (no report saving, bookmarking or account creation)' },
+      { key: 'can_access_marketing', label: 'Full use of the marketing module' },
       { key: 'can_access_sales',     label: 'View sales (read-only)' },
     ],
   },

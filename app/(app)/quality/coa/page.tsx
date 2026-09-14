@@ -245,7 +245,10 @@ const inp = 'px-2 py-1 border border-gray-300 rounded text-[12px] outline-none f
 
 export default function CoaGeneratorPage() {
   const { p, session } = useAuth()
-  const canUse = p('can_save_lab_results') || p('can_approve_runs')
+  // can_generate_coa is the dedicated key (see the /quality/coa ROUTE_GUARDS
+  // rule and lib/auth/permission-registry.ts); the other two are kept so
+  // nobody who already had access via them loses it.
+  const canUse = p('can_save_lab_results') || p('can_approve_runs') || p('can_generate_coa')
   const db = getDb()
 
   const [batchInput, setBatchInput] = useState('')

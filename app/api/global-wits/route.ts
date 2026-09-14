@@ -5,6 +5,7 @@ import { NextResponse }      from 'next/server'
 import { createServerClient } from '@supabase/ssr'
 import { createClient }       from '@supabase/supabase-js'
 import { cookies }            from 'next/headers'
+import { getCallerPermissions } from '@/lib/auth/server-helpers'
 
 export const maxDuration = 60
 
@@ -57,6 +58,16 @@ export async function POST(req: Request) {
   const overrides = ((appRole as any)?.permissions ?? {}) as Record<string, boolean>
   if (!ALLOWED.includes(dept ?? '') && !overrides['can_access_sales']) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+  }
+
+  // Importing a Global Wits file WRITES trade data, so it takes the full-use
+  // key. can_view_intelligence — what the read-only grant hands out for this
+  // module — opens the screen and stops here. The department check above stays
+  // as it was; this is an additional requirement, not a replacement, and every
+  // route into the import UI already requires can_access_intelligence.
+  const caller = await getCallerPermissions()
+  if (!caller.can('can_access_intelligence')) {
+    return NextResponse.json({ error: 'Read-only access — cannot import trade data' }, { status: 403 })
   }
 
   const body = await req.json().catch(() => null)

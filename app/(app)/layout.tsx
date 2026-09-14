@@ -26,11 +26,19 @@ const ROUTE_GUARDS: Array<{
   prefix:       string
   departments?: string[]
   permission?:  PermissionKey
+  // Alternatives to `permission` — ANY one of these grants access, same as
+  // holding `permission` itself. Exists so a route can accept both the
+  // module-wide cross-department key (can_view_history) AND a narrower
+  // per-resource key (e.g. can_view_lab_results) without one having to imply
+  // the other — there is no permission hierarchy in this system, only a flat
+  // OR of whichever keys are listed.
+  permissions?: PermissionKey[]
   itOnly?:      boolean
-  // When true, `permission` is an ALTERNATIVE to department (department OR
-  // permission grants access), instead of an additional requirement. Lets us
-  // grant a module to someone outside its department via a toggle without
-  // forcing every in-department user to also hold the permission.
+  // When true, `permission`/`permissions` is an ALTERNATIVE to department
+  // (department OR permission grants access), instead of an additional
+  // requirement. Lets us grant a module to someone outside its department via
+  // a toggle without forcing every in-department user to also hold the
+  // permission.
   orPermission?: boolean
   // When true, the route is hidden/disabled for everyone except the full
   // admin — used to take a module out of service without deleting its code.
@@ -42,23 +50,55 @@ const ROUTE_GUARDS: Array<{
   { prefix: '/axis/projects',      itOnly: true },
   { prefix: '/axis',               itOnly: true },
 
-  // Quality — Sales can only reach customer-specs.
-  // Cross-department: any user with can_view_history (e.g. Management) gets through.
-  { prefix: '/quality/customer-specs', departments: ['Quality','Sales'], permission: 'can_edit_customer_specs' },
+  // Quality — per-page READ rules, each accepting the module-wide can_view_history
+  // (so nobody who could see a page before loses it) plus a narrower per-resource
+  // key (so a single page can be handed to someone outside Quality without
+  // opening the rest of the module — the "just tick Read" grant on the Master
+  // Permissions matrix). Longest-prefix-first, one rule per prefix (see the
+  // Maintenance job-cards note above for why that matters).
+  //
+  // customer-specs used to be gated on can_edit_customer_specs ALONE, with no
+  // orPermission — meaning VIEWING the page required the EDIT permission, for
+  // everyone, department included. A Lab Manager (who has no edit right on
+  // specs) could not open Customer Specs at all, including via the pasteuriser
+  // "Spec loaded" deep link (specHref() in quality/pasteuriser/page.tsx), and
+  // Management's normally-blanket can_view_history didn't reach it either. The
+  // page itself already gates every write affordance behind canWrite
+  // (p('can_edit_customer_specs')) — Save/Add/Delete buttons, editable cells,
+  // the alias form — so it has always been safe to open read-only; the route
+  // guard was simply never told that. can_view_specs is the new read-only key;
+  // can_edit_customer_specs still grants entry (an editor can obviously view).
+  { prefix: '/quality/customer-specs', departments: ['Quality','Sales'], permissions: ['can_view_history','can_view_specs','can_edit_customer_specs'], orPermission: true },
+  { prefix: '/quality/lab-results',    departments: ['Quality'], permissions: ['can_view_history','can_view_lab_results'], orPermission: true },
+  { prefix: '/quality/pasteuriser',    departments: ['Quality'], permissions: ['can_view_history','can_view_runs'],        orPermission: true },
+  { prefix: '/quality/granule',        departments: ['Quality'], permissions: ['can_view_history','can_view_runs'],        orPermission: true },
+  { prefix: '/quality/sieving',        departments: ['Quality'], permissions: ['can_view_history','can_view_sieving'],     orPermission: true },
+  // COA Generator — its own dedicated key rather than borrowing
+  // can_save_lab_results/can_approve_runs the way canUse inside the page still
+  // does for backward compatibility. can_generate_coa lets it be handed to
+  // someone (e.g. IT) without opening the rest of Quality or granting an
+  // unrelated write permission just to reach one screen.
+  { prefix: '/quality/coa',            departments: ['Quality'], permissions: ['can_view_history','can_generate_coa'],     orPermission: true },
+  // Catch-all for everything else under /quality (raw-material, and anything
+  // added later without its own rule) — unchanged from before.
   { prefix: '/quality',                departments: ['Quality'], permission: 'can_view_history', orPermission: true },
 
-  // Supervisor hub — production supervisors + management
-  { prefix: '/supervisor',           departments: ['Production','Management'] },
+  // Supervisor hub — production supervisors + management.
+  // can_read_production is listed (here and on the four rules below) because
+  // these five routes had NO permission at all: department membership was the
+  // only way in, so a read-only grant could never reach them however many keys
+  // were ticked. orPermission, so the department path is untouched.
+  { prefix: '/supervisor',           departments: ['Production','Management'], permission: 'can_read_production', orPermission: true },
 
   // Stock Control (Operations) — printer assignment + future stock modules
-  { prefix: '/stock-control',        departments: ['Production','Management'] },
+  { prefix: '/stock-control',        departments: ['Production','Management'], permission: 'can_read_production', orPermission: true },
 
   // Production
   { prefix: '/count',                departments: ['Production'], permission: 'can_submit_count'       },
   { prefix: '/info',                 departments: ['Production'], permission: 'can_view_ops_dashboard' },
-  { prefix: '/production/operations',departments: ['Management'] },
-  { prefix: '/production/dashboard', departments: ['Production','Management'] },
-  { prefix: '/production/floor-plan',departments: ['Production','Management'] },
+  { prefix: '/production/operations',departments: ['Management'], permission: 'can_read_production', orPermission: true },
+  { prefix: '/production/dashboard', departments: ['Production','Management'], permission: 'can_read_production', orPermission: true },
+  { prefix: '/production/floor-plan',departments: ['Production','Management'], permission: 'can_read_production', orPermission: true },
   { prefix: '/production/orders',     departments: ['Production','Management'], permission: 'can_view_live_history', orPermission: true },
   // Production Capture. FLOOR OPERATORS NEVER REACH THIS -- the sandbox above
   // returns before ROUTE_GUARDS is consulted, so the tablets are unaffected by
@@ -99,16 +139,18 @@ const ROUTE_GUARDS: Array<{
   { prefix: '/status',     departments: ['IT'] },
   { prefix: '/management', departments: ['Management'], permission: 'can_view_management', orPermission: true },
 
-  // Sales & Research
-  { prefix: '/research',   departments: ['Sales','Management','Marketing'], permission: 'can_access_research' },
+  // Sales & Research. Alara and Intelligence each accept a view key alongside
+  // the full-use key: the screens are readable by a viewer, while the three
+  // actions that WRITE (promote a signal to an account, upload to the vault,
+  // import Global Wits) still check can_access_* inside the page and its route.
+  { prefix: '/research',   departments: ['Sales','Management','Marketing'], permissions: ['can_access_research','can_view_research'] },
   { prefix: '/sales',      departments: ['Sales','Management'], permission: 'can_access_sales'    },
 
   // Marketing
-  { prefix: '/marketing',  departments: ['Marketing','Management'], permission: 'can_access_marketing' as PermissionKey },
+  { prefix: '/marketing',  departments: ['Marketing','Management'], permissions: ['can_access_marketing','can_view_marketing'] },
 
-  // Intelligence — `can_access_intelligence` is a planned permission key honoured
-  // by the /api/signals route; cast until it's added to PermissionKey.
-  { prefix: '/intelligence', departments: ['Sales', 'Management', 'Marketing'], permission: 'can_access_intelligence' as PermissionKey },
+  // Intelligence
+  { prefix: '/intelligence', departments: ['Sales', 'Management', 'Marketing'], permissions: ['can_access_intelligence','can_view_intelligence'] },
 
   // Admin
   { prefix: '/users',      permission: 'can_manage_users' },
@@ -359,9 +401,15 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     // IT-only routes (AXIS internals) — only IT dept or full admin
     if (guard.itOnly && !isIT && !isFullAdmin) { router.replace('/home'); return }
 
-    // If the user has the required permission explicitly enabled, they get through
-    // regardless of department. Permission is the single source of truth.
-    const hasExplicitPermission = guard.permission && !isFullAdmin && p(guard.permission)
+    // Any ONE of the listed permissions is enough — there is no hierarchy
+    // between them, just a flat OR. Most guards list at most one; a few
+    // (Quality's per-page rules) list the module-wide key alongside a
+    // narrower one so either unlocks the page.
+    const guardPermissions = [guard.permission, ...(guard.permissions ?? [])].filter((k): k is PermissionKey => !!k)
+
+    // If the user has any required permission explicitly enabled, they get
+    // through regardless of department. Permission is the single source of truth.
+    const hasExplicitPermission = !isFullAdmin && guardPermissions.some(k => p(k))
     if (isFullAdmin || hasExplicitPermission) return
 
     // Developers (senior_developer = full admin, co_developer) bypass the
@@ -376,7 +424,7 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     }
     // Department matches but permission still required — unless the permission is
     // an alternative to department (orPermission), in which case department alone suffices.
-    if (guard.permission && !guard.orPermission && !p(guard.permission)) {
+    if (guardPermissions.length > 0 && !guard.orPermission && !guardPermissions.some(k => p(k))) {
       router.replace('/home'); return
     }
   }, [loading, permissionsReady, user, pathname, isIT, isFullAdmin, department, role, p, router])
