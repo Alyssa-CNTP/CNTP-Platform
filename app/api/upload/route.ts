@@ -139,16 +139,30 @@ const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
 
 // ─── Gemini call with model fallback ─────────────────────────────────────────
 
-// Everything after "List of analysed substances" is the screening panel — the
-// hundreds of compound names a lab lists to show what it tested FOR, not what
-// it found. On a combined Eurofins report that appendix is 35k of the 47k
-// characters, and because the text limit slices from the top, it used to push
-// the real results off the end: the PA/TA summary rows (Sum of Pyrrolizidine,
-// Atropine, Scopolamine) land at ~8.1-8.4k, just past the 8k default, so
-// pa_final saw every individual analyte but none of the totals it actually
-// needs. Dropping the appendix first leaves the whole results body in budget.
+// Everything after this heading is the screening panel — the hundreds of
+// compound names a lab lists to show what it tested FOR, not what it found.
+// On a combined Eurofins report that appendix is 35k of the 47k characters,
+// and because the text limit slices from the top, it used to push the real
+// results off the end: the PA/TA summary rows (Sum of Pyrrolizidine, Atropine,
+// Scopolamine) land at ~8.1-8.4k, just past the 8k default, so pa_final saw
+// every individual analyte but none of the totals it actually needs. Dropping
+// the appendix first leaves the whole results body in budget.
+//
+// Two heading phrasings, because labs don't share a template:
+//   Eurofins: "List of analysed substances"
+//   Microchem's PA/TA screening COA: "The following list of pesticide
+//     residues were screened for in sample <id>, but were not detected..."
+// The second one wasn't matched at all, so a Microchem "clean" PA/TA screen —
+// no quantitative result, just ~38 compounds each printed with only an LOQ —
+// went to Gemini in full. The model, told to emit "one entry per SUMMARY row"
+// but handed nothing BUT that appendix, tried to enumerate all ~38 of them
+// into the analytes array anyway, and the response broke mid-array (a missing
+// comma between two elements ~4.7k characters / 233 lines in) — "Expected ','
+// or '}' after array element" is what a long generated JSON array looks like
+// when it's this long, not a truncation (see WORKFLOW_MAX_TOKENS's thinking
+// note above geminiOnce for what THAT failure mode looks like instead).
 function stripScreeningAppendix(text: string): string {
-  const idx = text.search(/List of analysed substances/i)
+  const idx = text.search(/list of analysed substances|list of pesticide residues[\s\S]{0,120}screened for[\s\S]{0,120}not detected/i)
   return idx > 500 ? text.slice(0, idx) : text
 }
 
@@ -628,15 +642,22 @@ overall_status: "—" (no pass/fail is printed on this report type).
 
 Output: {"batch_no":"","type":"","grade":"","sample_date":"","report_reference":"","lab":"","date_issued":"","date_received":"","analytes":[{"analyte":"","result":"","unit":"Aw","spec":null,"status":"—"}],"overall_status":"—"}`,
 
-  pa_final: `INSTRUCTIONS: Extract PA/TA final product summary data from this lab report. Output ONLY raw JSON. No markdown.
+  pa_final: `INSTRUCTIONS: Extract PA/TA final product summary data from this lab report. Output ONLY a single raw JSON object. Start with { and end with }. No markdown, no preamble.
+
 Extract top-level fields: batch_no, report_reference, lab, sample_description, date_issued, date_received, overall_status.
-Extract an "analytes" array — one entry per SUMMARY PA/TA measurement row (e.g. Total PA by EU regulation, Total PA by BfR 28, Scopolamine, Total TA, etc.). Each entry: { analyte, result, unit, spec, status }.
-Rules:
+
+CLEAN SCREEN — read this before building the analytes array. Microchem's "Pyrrolizidine & Tropane Alkaloids Screening" COA often reports NOTHING detected: the document says "No residue(s) detected" and the only table left is an appendix of ~30-40 individual compounds (Atropine, Echimidine, Senecionine, Scopolamine, and so on), each printed with only a Limit Of Quantification (e.g. "0.01") and NO result value — because none of them were found. That appendix is a list of what was SCREENED FOR, not a set of results, and it must never be turned into one row per compound: a report with 38 compounds is not 38 analytes, and trying to make it so is exactly what breaks the output (a JSON array that long is where a formatting mistake creeps in).
+- If the document says "No residue(s) detected" (or equivalent — "Not Detected" as the overall finding, no quantitative value printed anywhere): emit exactly ONE entry in "analytes" — {"analyte":"Total PA/TA","result":"None Detected","unit":"µg/kg","spec":"400","status":"Pass"} — and set overall_status to "Pass". Do not list the individual screened compounds at all.
+- Otherwise, extract one entry per SUMMARY PA/TA measurement row that DOES carry a value (e.g. "Sum of Pyrrolizidine alkaloids CR (EU) 2023/915", Total PA by BfR 28, Scopolamine, Total TA). Each entry: { analyte, result, unit, spec, status }.
+
+Rules for a real (non-clean) result:
 - result: keep the value exactly as printed, including any comparison operator — e.g. a printed "<10" (below the lab's reporting/detection limit) MUST be kept as the string "<10", NOT collapsed to "None detected". Only use "None detected" if the document truly has no value or threshold printed for that analyte.
-- unit: typically "µg/kg".
+- unit: typically "µg/kg". If the source table is in mg/kg, convert the numeric value to µg/kg (×1000) and report unit as "µg/kg" — never output the raw mg/kg figure.
 - spec: the EU/regulatory limit for that analyte (e.g. "400" for PA, "1000" for TA) or "—" if not set.
 - status: "Pass" or "Fail" based on whether result exceeds the limit.
-- overall_status: "Pass" if total PA (EU) is null or below 400, "Fail" if above 400.`,
+- overall_status: "Pass" if total PA (EU) is null or below 400, "Fail" if above 400.
+
+Output: {"batch_no":"","report_reference":"","lab":"","sample_description":"","date_issued":"","date_received":"","analytes":[{"analyte":"","result":"","unit":"µg/kg","spec":"","status":""}],"overall_status":"Pass"}`,
 }
 
 

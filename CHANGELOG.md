@@ -2,6 +2,21 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-14 — Gustav (PA/TA final-product upload: a clean screen crashed the AI extraction)
+
+**Files changed:** `app/api/upload/route.ts`
+
+Reported from a real upload: `PA_-_26133-CON.RA-FSE40.pdf` (Microchem "Pyrrolizidine & Tropane Alkaloids Screening") failed with *"AI returned invalid JSON — Expected ',' or '}' after array element in JSON at position 4760 (line 233 column 6)"* on the Final Product Lab Results → PA/TA tab.
+
+- **Root cause: this document is a clean screen — "No residue(s) detected" — with no results table at all**, only an appendix listing the ~38 individual PA/TA compounds that were tested FOR (Atropine, Echimidine, Senecionine, Scopolamine, and so on), each printed with only a detection limit and no value. `stripScreeningAppendix()` — which exists specifically to cut this kind of appendix before it ever reaches Gemini — only matched Eurofins' heading ("List of analysed substances"); Microchem's own phrasing ("The following list of pesticide residues were screened for in sample ..., but were not detected...") didn't match, so the full 38-compound list went to the model. Told to extract "one entry per SUMMARY row" but handed nothing else, the model tried to turn all ~38 compounds into their own analyte rows anyway — and a JSON array that long is exactly where a generated response drops a comma between elements. Position 4760 / line 233 lines up almost exactly with a ~38-entry array.
+- **`stripScreeningAppendix()` now also matches Microchem's phrasing**, so this appendix is cut before the request is even sent — verified directly against the failing PDF (extracted with the same `pdf-parse` library the route uses): the appendix is now removed, leaving only the header and the "No residue(s) detected" line.
+- **The `pa_final` prompt didn't know what to do with a clean screen even once the appendix is gone** — its only guidance was to extract "SUMMARY PA/TA measurement rows," and this document has none. It now has an explicit rule, ported from the more battle-tested `pa_ta_analysis` prompt which already handles this exact Microchem report shape correctly (`pa_ta_analysis` is the raw-material tab's PA/TA workflow; `pa_final` is final-product's, and the two had drifted apart): a "No residue(s) detected" report now produces exactly one summary row — Total PA/TA, None Detected, Pass — instead of either crashing or inventing 38 rows.
+- `pa_final` also gains the explicit `Output: {...}` schema template every sibling prompt already has (it was the one prompt missing one), which constrains the model's output shape generally, not just for this one report type.
+
+No change to how a report WITH real results is extracted or graded.
+
+---
+
 ## 2026-09-11 — Alyssa (A production order document covers one order, not one day)
 
 **Files changed:** `lib/core/production/order-scope.ts` + test (new), `lib/production/order-detail.ts`
