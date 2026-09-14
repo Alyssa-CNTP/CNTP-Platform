@@ -4,7 +4,7 @@ import { useState, useEffect, useMemo } from 'react'
 import Link from 'next/link'
 import { format, subDays, parseISO } from 'date-fns'
 import {
-  Search, X, Scale,
+  Search, X, Scale, Lock, AlertTriangle,
   Users, Package, ExternalLink, ChevronDown, ChevronUp,
   Calendar, Loader2,
 } from 'lucide-react'
@@ -83,11 +83,14 @@ function statusBadge(status: string) {
   return { label: status, cls: 'bg-stone-100 text-stone-500 border-stone-200' }
 }
 
-/** One `prod_bagging` row, as much of it as the tallies need. */
-interface BagRow { session_id: string; kg: number | null }
-/** One `prod_debagging` row. `is_spillage` is loss off the machine. */
-interface DebagRow { session_id: string; kg_nett: number | null; is_spillage: boolean | null }
-interface Tally { kg: number; bags: number }
+/** One row of production.v_session_activity — already aggregated. */
+interface ActivityRow {
+  session_id: string
+  bags_in: number | null
+  kg_in: number | string | null
+  bags_out: number | null
+  kg_out: number | string | null
+}
 
 /** Exactly the columns selected from prod_sessions — see the note on the query. */
 interface SessionSelect {
@@ -142,9 +145,18 @@ function SessionCard({ session }: { session: SessionRow }) {
   // without it the capture page loads the most recently created session for
   // that (section, date, shift), which is the WRONG record whenever a shift ran
   // more than one — normal on the Blender, and normal after any changeover.
-  const href =
-    `/production/capture/${session.section_id}` +
-    `?date=${session.date}&shift=${session.shift}&session=${session.id}`
+  /**
+   * The record opens its own PRODUCTION ORDER SUMMARY — not the capture screen.
+   *
+   * Capture is where you type. This page is where you look, and sending a
+   * reader from a read-only history into a live capture form is an invitation
+   * to change something they only came to check. The order summary is already
+   * the neat version of the same record.
+   *
+   * `view=record` asks that page for its read-only mode: no 20-second poll, no
+   * realtime subscription, no controls that write.
+   */
+  const href = `/production/orders/${session.id}?view=record`
 
   const orders: string[] = session.production_orders ?? []
   // Show the code before ' — ' separator
@@ -243,7 +255,7 @@ function SessionCard({ session }: { session: SessionRow }) {
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-stone-800 text-white text-[12px] font-medium hover:bg-stone-700 transition-colors"
         >
           <ExternalLink size={12}/>
-          Open session
+          Open record
         </Link>
         <button
           onClick={() => setExpanded(v => !v)}
@@ -278,7 +290,7 @@ function SessionCard({ session }: { session: SessionRow }) {
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function ProductionHistoryPage() {
-  const { role, sectionId: authSectionId, isSupervisor, isIT } = useAuth()
+  const { user, role, sectionId: authSectionId, isSupervisor, isIT } = useAuth()
 
   const today     = format(new Date(), 'yyyy-MM-dd')
   const thirtyAgo = format(subDays(new Date(), 30), 'yyyy-MM-dd')
@@ -293,6 +305,26 @@ export default function ProductionHistoryPage() {
 
   // Section operators only see their own section
   const isSectionOp = role === 'section_operator'
+  /**
+   * An operator sees the lines they were ROSTERED on, and no others.
+   *
+   * `isSectionOp` only ever caught `section_operator`; a `floor_operator` — the
+   * role this page was opened up for — fell through it and saw every line in
+   * the factory. The roster is what says which machine is theirs, so the roster
+   * is what scopes the page.
+   *
+   * Scoped to the DATE RANGE being viewed rather than to today: looking back at
+   * last week should show the lines they worked last week, not the one they
+   * happen to be on this morning.
+   *
+   * null = no restriction (supervisors, management, IT).
+   * []   = rostered on nothing in this range, which is a real answer and shows
+   *        an empty list rather than silently widening to everything.
+   */
+  const [activityUnavailable, setActivityUnavailable] = useState(false)
+  const [mySections, setMySections] = useState<string[] | null>(null)
+  /** Who gets scoped. Supervisors, IT and admin see the whole factory. */
+  const restrictToRoster = !(isSupervisor || isIT || role === 'admin')
 
   async function load() {
     setLoading(true)
@@ -324,7 +356,15 @@ export default function ProductionHistoryPage() {
         .order('date', { ascending: false })
         .order('section_id')
 
-      if (isSectionOp && authSectionId) {
+      if (restrictToRoster) {
+        // Not yet resolved — ask for nothing rather than everything. One render
+        // showing the whole factory is one render too many.
+        if (mySections === null) { setSessions([]); setLoading(false); return }
+        if (mySections.length === 0) { setSessions([]); setLoading(false); return }
+        q = sectionFilter && mySections.includes(sectionFilter)
+          ? q.eq('section_id', sectionFilter)
+          : q.in('section_id', mySections)
+      } else if (isSectionOp && authSectionId) {
         q = q.eq('section_id', authSectionId)
       } else if (sectionFilter) {
         q = q.eq('section_id', sectionFilter)
@@ -347,30 +387,31 @@ export default function ProductionHistoryPage() {
        * anywhere on this screen. It reads when the filters change and then it
        * stops, which is what keeps a read-only history off the database's back.
        */
-      const [bagRes, debagRes] = ids.length
-        ? await Promise.all([
-            getDb().schema('production').from('prod_bagging')
-              .select('session_id, kg').in('session_id', ids),
-            getDb().schema('production').from('prod_debagging')
-              .select('session_id, kg_nett, is_spillage').in('session_id', ids),
-          ])
-        : [{ data: [] as BagRow[] }, { data: [] as DebagRow[] }]
+      /**
+       * The tallies come from production.v_session_activity — ONE row per
+       * record, aggregated in the database.
+       *
+       * This used to pull prod_bagging and prod_debagging into the browser and
+       * add them up here. Over a 30-day range that is ~2 000 rows of each, and
+       * PostgREST caps a response at 1 000 — so the page got the OLDEST
+       * thousand and every recent record read "0 bags in". Silently, because a
+       * truncated response is a successful one.
+       *
+       * It was the wrong shape anyway: a read-only history has no business
+       * shipping four thousand rows to a tablet to produce forty numbers.
+       */
+      const { data: actData, error: actErr } = ids.length
+        ? await getDb().schema('production').from('v_session_activity')
+            .select('session_id, bags_in, kg_in, bags_out, kg_out')
+            .in('session_id', ids)
+        : { data: [] as ActivityRow[], error: null }
+      // The view is a migration away on a database that has not had it run yet.
+      // Say so rather than showing zeroes that look like a quiet shift.
+      if (actErr) setActivityUnavailable(true)
+      else setActivityUnavailable(false)
 
-      const out = new Map<string, Tally>()
-      for (const b of ((bagRes.data ?? []) as BagRow[])) {
-        const cur = out.get(b.session_id) ?? { kg: 0, bags: 0 }
-        cur.kg += Number(b.kg) || 0
-        cur.bags += 1
-        out.set(b.session_id, cur)
-      }
-      const inn = new Map<string, Tally>()
-      for (const d of ((debagRes.data ?? []) as DebagRow[])) {
-        const cur = inn.get(d.session_id) ?? { kg: 0, bags: 0 }
-        cur.kg += Number(d.kg_nett) || 0
-        // Machine spillage is loss off the machine, not a bag that went in.
-        if (!d.is_spillage) cur.bags += 1
-        inn.set(d.session_id, cur)
-      }
+      const act = new Map<string, ActivityRow>()
+      for (const a of ((actData ?? []) as ActivityRow[])) act.set(a.session_id, a)
 
       const rows: SessionRow[] = (sessionRows as SessionSelect[]).map(row => ({
         ...row,
@@ -378,10 +419,10 @@ export default function ProductionHistoryPage() {
         section_name: sectionMeta(row.section_id).name,
         operator_name_text: null,
         notes: null,
-        in_kg:    inn.get(row.id)?.kg   ?? 0,
-        out_kg:   out.get(row.id)?.kg   ?? 0,
-        bags_in:  inn.get(row.id)?.bags ?? 0,
-        bags_out: out.get(row.id)?.bags ?? 0,
+        in_kg:    Number(act.get(row.id)?.kg_in)    || 0,
+        out_kg:   Number(act.get(row.id)?.kg_out)   || 0,
+        bags_in:  Number(act.get(row.id)?.bags_in)  || 0,
+        bags_out: Number(act.get(row.id)?.bags_out) || 0,
       }))
 
       setSessions(rows)
@@ -391,7 +432,41 @@ export default function ProductionHistoryPage() {
     setLoading(false)
   }
 
-  useEffect(() => { load() }, [dateFrom, dateTo, sectionFilter, statusFilter, isSectionOp, authSectionId])
+  /**
+   * Which lines is this person rostered on, over the range being viewed?
+   *
+   * Two small reads, only for people who need restricting — a supervisor never
+   * runs them. Resolved through production.operators, which is where a login is
+   * tied to a person, and then through the roster. Never through
+   * prod_sessions.operator_names: that is an array of display names with no
+   * ids, so a rename silently drops someone off their own line.
+   */
+  useEffect(() => {
+    let alive = true
+    if (!restrictToRoster || !user?.id) { setMySections(null); return }
+    void (async () => {
+      const db = getDb().schema('production')
+      const { data: me } = await db.from('operators')
+        .select('id').eq('user_id', user.id).maybeSingle()
+      const opId = (me as { id: string } | null)?.id
+      if (!opId) {
+        // A login with no operator record is not rostered on anything. Showing
+        // them every line because we could not identify them is the wrong way
+        // to fail.
+        if (alive) setMySections([])
+        return
+      }
+      const { data: rows } = await db.from('shift_assignments')
+        .select('section_id')
+        .gte('date', dateFrom).lte('date', dateTo)
+        .contains('operator_ids', [opId])
+      const secs = Array.from(new Set(((rows ?? []) as { section_id: string }[]).map(r => r.section_id)))
+      if (alive) setMySections(secs)
+    })()
+    return () => { alive = false }
+  }, [restrictToRoster, user?.id, dateFrom, dateTo])
+
+  useEffect(() => { load() }, [dateFrom, dateTo, sectionFilter, statusFilter, isSectionOp, authSectionId, mySections, restrictToRoster])
 
   // Client-side text filter
   const filtered = useMemo(() => {
@@ -416,8 +491,20 @@ export default function ProductionHistoryPage() {
       {/* Header */}
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div>
-          <h1 className="font-display font-bold text-[22px] text-text">Session history</h1>
-          <p className="font-mono text-[11px] text-text-muted mt-0.5">Search all production sessions</p>
+          <div className="flex items-center gap-2 flex-wrap">
+            <h1 className="font-display font-bold text-[22px] text-text">Session history</h1>
+            {/* Said plainly, on the page, because "why can I not change this"
+                is the question a record screen has to answer before it is
+                asked. */}
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-stone-100 border border-stone-200 text-[10px] font-medium text-stone-600 uppercase tracking-wide">
+              <Lock size={10} /> Read-only
+            </span>
+          </div>
+          <p className="font-mono text-[11px] text-text-muted mt-0.5">
+            {restrictToRoster
+              ? 'The record of what ran on your line'
+              : 'Search all production sessions'}
+          </p>
         </div>
         <Link
           href="/production"
@@ -470,7 +557,7 @@ export default function ProductionHistoryPage() {
           </div>
 
           {/* Section dropdown */}
-          {!isSectionOp && (
+          {!isSectionOp && !(restrictToRoster && (mySections?.length ?? 0) <= 1) && (
             <select
               value={sectionFilter}
               onChange={e => setSectionFilter(e.target.value)}
@@ -497,7 +584,17 @@ export default function ProductionHistoryPage() {
 
       {/* Results count */}
       <div className="flex items-center gap-2">
-        {loading ? (
+        {activityUnavailable && (
+        <div className="mb-3 flex items-start gap-2 px-3 py-2.5 rounded-xl bg-amber-50 border border-amber-200 text-[12px] text-amber-800">
+          <AlertTriangle size={13} className="shrink-0 mt-0.5" />
+          <span>
+            Bag counts are unavailable — <span className="font-mono">production.v_session_activity</span> has not
+            been created on this database yet. The records below are complete; only the in/out figures are missing.
+          </span>
+        </div>
+      )}
+
+      {loading ? (
           <div className="flex items-center gap-2 text-[12px] text-stone-400 font-mono">
             <Loader2 size={13} className="animate-spin"/>
             Loading…
