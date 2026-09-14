@@ -24,3 +24,11 @@ jobs:
             npm run build 2>&1 | tail -20
             /home/cntpdev/.nvm/versions/node/v24.16.0/bin/pm2 restart cntp-staging
             echo "✅ Deployed successfully"
+
+            # Leaf Shade Classifier (ml/leafshade) is a PRODUCTION-only service —
+            # deliberately not started/managed from here. See deploy-production.yml
+            # for the self-healing `docker compose up -d` step and why it lives
+            # there instead: the compose file pins a fixed container_name and a
+            # fixed host port (network_mode: host), so only ONE instance can run
+            # on this VPS at a time — staging and production must not both try to
+            # own it.
