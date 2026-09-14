@@ -111,6 +111,7 @@ const ROUTE_GUARDS: Array<{
   { prefix: '/production/capture/assign', departments: ['Production','Management'], permission: 'can_assign_shifts', orPermission: true },
   { prefix: '/production/capture',    departments: ['Production','Management'], permission: 'can_view_capture',  orPermission: true },
   { prefix: '/production/operators',  departments: ['Production','Management'], permission: 'can_assign_shifts', orPermission: true },
+  { prefix: '/production/history',   departments: ['Production','Management'], permission: 'can_view_live_history', orPermission: true },
   { prefix: '/production/live',      departments: ['Production'], permission: 'can_view_live_history',   orPermission: true },
   { prefix: '/production/inventory', departments: ['Production','Management'], permission: 'can_view_inventory', orPermission: true },
   { prefix: '/production/blends',    departments: ['Production','Management'], permission: 'can_view_blends',    orPermission: true },
@@ -354,7 +355,11 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     // Floor operators are sandboxed to their capture area + custom dashboard.
     // They never see the general dashboard, settings, or any other module.
     if (role === 'floor_operator') {
-      if (!pathname.startsWith('/production/capture') && !pathname.startsWith('/training')) router.replace('/production/capture')
+      // History / Planning is deliberately NOT under /production/capture — it is
+      // the record of what ran on the line, not a capture screen — so the
+      // sandbox has to name it or the people it was built for cannot reach it.
+      const allowed = ['/production/capture', '/production/history', '/training']
+      if (!allowed.some(prefix => pathname.startsWith(prefix))) router.replace('/production/capture')
       return
     }
 

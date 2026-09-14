@@ -6,7 +6,7 @@ import { format, subDays, parseISO } from 'date-fns'
 import {
   Search, X, Scale, AlertTriangle, CheckCircle2,
   Users, Package, ExternalLink, ChevronDown, ChevronUp,
-  Calendar, Loader2, Trash2,
+  Calendar, Loader2,
 } from 'lucide-react'
 import { useAuth } from '@/lib/auth/context'
 import { getDb } from '@/lib/supabase/db'
@@ -78,29 +78,39 @@ function operatorLabel(row: SessionRow): string {
 
 // ── Session card ──────────────────────────────────────────────────────────────
 
-function SessionCard({ session, canDelete, onDelete }: { session: SessionRow; canDelete: boolean; onDelete: (id: string) => void }) {
+function SessionCard({ session }: { session: SessionRow }) {
   const [expanded, setExpanded] = useState(false)
-  const [deleting, setDeleting] = useState(false)
   const { label: statusLabel, cls: statusCls } = statusBadge(session.status)
 
-  async function handleDelete() {
-    if (!confirm(`Delete the ${session.section_name} session from ${session.date} (${session.shift} shift)? This cannot be undone.`)) return
-    setDeleting(true)
-    try {
-      const db = getDb().schema('production')
-      await db.from('session_signatures').delete().eq('session_id', session.id)
-      await db.from('scan_events').delete().eq('session_id', session.id)
-      await db.from('prod_mass_balance').delete().eq('session_id', session.id)
-      await db.from('prod_debagging').delete().eq('session_id', session.id)
-      await db.from('prod_bagging').delete().eq('session_id', session.id)
-      await db.from('prod_sessions').delete().eq('id', session.id)
-      onDelete(session.id)
-    } catch (e: any) {
-      alert('Delete failed: ' + e.message)
-      setDeleting(false)
-    }
-  }
-  const href = `/production/section?id=${session.section_id}&shift=${session.shift}&date=${session.date}`
+  /*
+   * There is no delete here any more, and its absence is deliberate.
+   *
+   * It ran six client-side deletes in a row — session_signatures, scan_events,
+   * prod_mass_balance, prod_debagging, prod_bagging, then the session — behind
+   * a confirm(). ARCHITECTURE.md §4 names one of those outright: "Never
+   * blanket-delete scan_events. It is an append-only audit ledger. To undo an
+   * event, append a reversing event." There was no audit row and no
+   * transaction, so a partial failure orphaned bagging rows against a session
+   * that no longer existed, and prod_sessions already carries deleted_at /
+   * deleted_by that nothing there used.
+   *
+   * It survived this long because the page was unreachable — no nav entry, no
+   * route guard. This change gives it both, so the control goes before the
+   * door opens rather than after. Deleting a session is done from Production
+   * Orders, which has the reopen-request flow behind it.
+   */
+  // /production/section is a REDIRECT to the capture hub whose whole body is
+  // redirect('/production/capture') — retired in June 2026, and the redirect
+  // drops the query string with it. So every card on this page landed the
+  // reader on an empty capture hub, which is the one thing this page is for.
+  //
+  // The real route takes all three parameters, and `session` matters most:
+  // without it the capture page loads the most recently created session for
+  // that (section, date, shift), which is the WRONG record whenever a shift ran
+  // more than one — normal on the Blender, and normal after any changeover.
+  const href =
+    `/production/capture/${session.section_id}` +
+    `?date=${session.date}&shift=${session.shift}&session=${session.id}`
 
   const orders: string[] = session.production_orders ?? []
   // Show the code before ' — ' separator
@@ -216,15 +226,6 @@ function SessionCard({ session, canDelete, onDelete }: { session: SessionRow; ca
           {expanded ? <ChevronUp size={12}/> : <ChevronDown size={12}/>}
           Acumatica summary
         </button>
-        {canDelete && (
-          <button
-            onClick={handleDelete} disabled={deleting}
-            className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-red-200 text-[12px] font-medium text-red-500 hover:bg-red-50 disabled:opacity-50 transition-colors"
-          >
-            {deleting ? <Loader2 size={12} className="animate-spin"/> : <Trash2 size={12}/>}
-            Delete
-          </button>
-        )}
       </div>
 
       {/* Expanded Acumatica summary */}
@@ -252,7 +253,6 @@ function SessionCard({ session, canDelete, onDelete }: { session: SessionRow; ca
 
 export default function ProductionHistoryPage() {
   const { role, sectionId: authSectionId, isSupervisor, isIT } = useAuth()
-  const canDelete = isSupervisor || isIT || role === 'admin'
 
   const today     = format(new Date(), 'yyyy-MM-dd')
   const thirtyAgo = format(subDays(new Date(), 30), 'yyyy-MM-dd')
@@ -448,8 +448,6 @@ export default function ProductionHistoryPage() {
               <SessionCard
                 key={session.id}
                 session={session}
-                canDelete={canDelete}
-                onDelete={id => setSessions(prev => prev.filter(s => s.id !== id))}
               />
             ))
           )}
