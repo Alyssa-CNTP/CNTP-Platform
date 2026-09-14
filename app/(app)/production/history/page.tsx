@@ -4,11 +4,12 @@ import { useState, useEffect, useMemo } from 'react'
 import Link from 'next/link'
 import { format, subDays, parseISO } from 'date-fns'
 import {
-  Search, X, Scale, AlertTriangle, CheckCircle2,
+  Search, X, Scale,
   Users, Package, ExternalLink, ChevronDown, ChevronUp,
   Calendar, Loader2,
 } from 'lucide-react'
 import { useAuth } from '@/lib/auth/context'
+import { sectionMeta } from '@/lib/production/capture-config'
 import { getDb } from '@/lib/supabase/db'
 import { AcumaticaSummary } from '@/components/production/AcumaticaSummary'
 
@@ -24,10 +25,13 @@ interface MassBalanceRow {
 interface SessionRow {
   id: string
   section_id: string
+  /** Derived from `section_id` — prod_sessions has no section_name column. */
   section_name: string
   date: string
   shift: string
   status: string
+  /** prod_sessions has no operator_name_text column; kept null for the
+   *  fallback path and never selected. */
   operator_name_text: string | null
   operator_names: string[] | null
   supervisor_name: string | null
@@ -36,11 +40,19 @@ interface SessionRow {
   production_orders: string[] | null
   notes: string | null
   created_at: string
-  updated_at: string
+  /** Nullable in the database; selected but not rendered. */
+  updated_at: string | null
   // flattened from left join
-  mb_total_input_kg: number | null
-  mb_balance_kg: number | null
-  mb_within_tolerance: boolean | null
+  /**
+   * What the MACHINE did, summed from the rows themselves — prod_debagging in,
+   * prod_bagging out. Never from the prod_mass_balance snapshot: the order page
+   * already stopped trusting it, because a stored total that disagrees with the
+   * rows under it is how that page came to read 91 036 kg in against 4 704 out.
+   */
+  in_kg: number
+  out_kg: number
+  bags_in: number
+  bags_out: number
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -69,6 +81,28 @@ function statusBadge(status: string) {
   if (status === 'submitted') return { label: 'Needs sign-off', cls: 'bg-blue-100 text-blue-700 border-blue-200' }
   if (status === 'draft')     return { label: 'In progress',    cls: 'bg-amber-100 text-amber-700 border-amber-200' }
   return { label: status, cls: 'bg-stone-100 text-stone-500 border-stone-200' }
+}
+
+/** One `prod_bagging` row, as much of it as the tallies need. */
+interface BagRow { session_id: string; kg: number | null }
+/** One `prod_debagging` row. `is_spillage` is loss off the machine. */
+interface DebagRow { session_id: string; kg_nett: number | null; is_spillage: boolean | null }
+interface Tally { kg: number; bags: number }
+
+/** Exactly the columns selected from prod_sessions — see the note on the query. */
+interface SessionSelect {
+  id: string
+  section_id: string
+  date: string
+  shift: string
+  status: string
+  operator_names: string[] | null
+  supervisor_name: string | null
+  comments: string | null
+  lot_number: string | null
+  production_orders: string[] | null
+  created_at: string
+  updated_at: string | null
 }
 
 function operatorLabel(row: SessionRow): string {
@@ -145,24 +179,16 @@ function SessionCard({ session }: { session: SessionRow }) {
         </div>
 
         {/* Mass balance chip */}
-        {session.mb_total_input_kg != null && (
-          <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-[11px] font-mono ${
-            session.mb_within_tolerance === false
-              ? 'bg-amber-50 border-amber-200 text-amber-700'
-              : 'bg-emerald-50 border-emerald-200 text-emerald-700'
-          }`}>
+        {/* What ran at the machine: bags in and bags out, summed from
+            prod_debagging and prod_bagging. No balance or tolerance verdict —
+            this page is the RECORD of what happened, and whether it balanced
+            is the Production Order's question, one screen away. */}
+        {(session.bags_in > 0 || session.bags_out > 0) && (
+          <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-stone-200 bg-stone-50 text-[11px] font-mono text-stone-600">
             <Scale size={11}/>
-            <span>{(session.mb_total_input_kg ?? 0).toFixed(1)} kg in</span>
-            {session.mb_balance_kg != null && (
-              <>
-                <span className="text-stone-300">·</span>
-                {session.mb_within_tolerance === false
-                  ? <AlertTriangle size={11} className="text-amber-600"/>
-                  : <CheckCircle2 size={11} className="text-emerald-600"/>
-                }
-                <span>{(session.mb_balance_kg ?? 0).toFixed(1)} kg var</span>
-              </>
-            )}
+            <span>{session.bags_in} bag{session.bags_in === 1 ? '' : 's'} in · {session.in_kg.toFixed(1)} kg</span>
+            <span className="text-stone-300">·</span>
+            <span>{session.bags_out} bag{session.bags_out === 1 ? '' : 's'} out · {session.out_kg.toFixed(1)} kg</span>
           </div>
         )}
       </div>
@@ -271,16 +297,28 @@ export default function ProductionHistoryPage() {
   async function load() {
     setLoading(true)
     try {
+      /**
+       * This page showed "0 sessions found" for every filter, on production,
+       * silently. The select asked for FOUR columns that do not exist —
+       * `prod_sessions.section_name`, `.operator_name_text`, `.notes` and
+       * `prod_mass_balance.within_tolerance` — so PostgREST answered 400, the
+       * catch below logged to the console, and `setSessions` was never called.
+       * The reader saw an empty list and no error. Same systemic drift as the
+       * bag_tags scan bug: a screen selecting columns the table never had.
+       *
+       * Every column below was probed against the production database one at a
+       * time before this was written, not assumed.
+       */
       let q = getDb()
         .schema('production')
         .from('prod_sessions')
         .select(`
-          id, section_id, section_name, date, shift, status,
-          operator_name_text, operator_names, supervisor_name,
-          comments, lot_number, production_orders, notes,
-          created_at, updated_at,
-          prod_mass_balance!left(total_input_kg, total_output_b_kg, balance_kg, within_tolerance)
+          id, section_id, date, shift, status,
+          operator_names, supervisor_name,
+          comments, lot_number, production_orders,
+          created_at, updated_at
         `)
+        .is('deleted_at', null)
         .gte('date', dateFrom)
         .lte('date', dateTo)
         .order('date', { ascending: false })
@@ -298,16 +336,53 @@ export default function ProductionHistoryPage() {
 
       const { data, error } = await q
       if (error) throw error
+      const sessionRows = (data ?? []) as SessionSelect[]
+      const ids = sessionRows.map(r => r.id)
 
-      const rows: SessionRow[] = ((data as any[]) ?? []).map((row: any) => {
-        const mb = (row.prod_mass_balance as any)?.[0] ?? {}
-        return {
-          ...row,
-          mb_total_input_kg:  mb.total_input_kg   ?? null,
-          mb_balance_kg:      mb.balance_kg        ?? null,
-          mb_within_tolerance: mb.within_tolerance ?? null,
-        }
-      })
+      /**
+       * What happened at the machine, read from the two tables that record it.
+       *
+       * TWO queries for the whole page, scoped by the session ids already in
+       * hand — not one per card, and no polling or realtime subscription
+       * anywhere on this screen. It reads when the filters change and then it
+       * stops, which is what keeps a read-only history off the database's back.
+       */
+      const [bagRes, debagRes] = ids.length
+        ? await Promise.all([
+            getDb().schema('production').from('prod_bagging')
+              .select('session_id, kg').in('session_id', ids),
+            getDb().schema('production').from('prod_debagging')
+              .select('session_id, kg_nett, is_spillage').in('session_id', ids),
+          ])
+        : [{ data: [] as BagRow[] }, { data: [] as DebagRow[] }]
+
+      const out = new Map<string, Tally>()
+      for (const b of ((bagRes.data ?? []) as BagRow[])) {
+        const cur = out.get(b.session_id) ?? { kg: 0, bags: 0 }
+        cur.kg += Number(b.kg) || 0
+        cur.bags += 1
+        out.set(b.session_id, cur)
+      }
+      const inn = new Map<string, Tally>()
+      for (const d of ((debagRes.data ?? []) as DebagRow[])) {
+        const cur = inn.get(d.session_id) ?? { kg: 0, bags: 0 }
+        cur.kg += Number(d.kg_nett) || 0
+        // Machine spillage is loss off the machine, not a bag that went in.
+        if (!d.is_spillage) cur.bags += 1
+        inn.set(d.session_id, cur)
+      }
+
+      const rows: SessionRow[] = (sessionRows as SessionSelect[]).map(row => ({
+        ...row,
+        // prod_sessions carries none of these; the page asked for them anyway.
+        section_name: sectionMeta(row.section_id).name,
+        operator_name_text: null,
+        notes: null,
+        in_kg:    inn.get(row.id)?.kg   ?? 0,
+        out_kg:   out.get(row.id)?.kg   ?? 0,
+        bags_in:  inn.get(row.id)?.bags ?? 0,
+        bags_out: out.get(row.id)?.bags ?? 0,
+      }))
 
       setSessions(rows)
     } catch (e: any) {
