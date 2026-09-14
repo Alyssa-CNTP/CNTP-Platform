@@ -16,6 +16,7 @@
  */
 
 import { getSupabaseClient } from '@/lib/supabase/client'
+import { getPublicDb } from '@/lib/supabase/db'
 import type { CustomerAccount } from '@/lib/core/labels/library'
 import type {
   LabelCertification,
@@ -133,7 +134,7 @@ export function toTemplate(row: LabelTemplateRow): LabelTemplate {
  * and silently finding nothing.
  */
 export function publicDb() {
-  return getSupabaseClient().schema('public')
+  return getPublicDb()
 }
 
 /** An unknown thrown value → something showable. Every page catches with this,

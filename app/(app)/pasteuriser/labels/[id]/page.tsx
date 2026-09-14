@@ -6,11 +6,17 @@ import { ArrowLeft, Copy, Download, Save, Send, ThumbsDown } from 'lucide-react'
 import {
   LabelPreview, SignOffChain, TemplateEditor,
   buildLabelDocument, fetchTemplate, fetchTemplateEvents, fetchKnownCustomers, saveDraft, toTemplate,
+  publicDb,
   type LabelTemplateRow, type TemplateEventRow,
   errMessage,
 } from '@/features/pasteuriser-labels'
-import { canRequestApproval, resolveLabel, type LabelTemplate, type SignOffRole } from '@/lib/core/labels'
-import { SIGN_OFF_PERMISSION } from '@/lib/production/label-sign-offs'
+import {
+  canRequestApproval, resolveLabel, SIGN_OFF_LABEL,
+  type LabelTemplate, type SignOffRole,
+} from '@/lib/core/labels'
+import {
+  SIGN_OFF_PERMISSION, outstandingTemplateRoles, readSignOffs, type SignOffRow,
+} from '@/lib/production/label-sign-offs'
 import { useAuth } from '@/lib/auth/context'
 import { customerOptions } from '@/lib/core/labels/library'
 import { ActionDialog, type DialogField } from '@/features/pasteuriser-labels/components/ActionDialog'
@@ -71,6 +77,7 @@ export default function LabelTemplatePage() {
    */
   const [pending, setPending] = useState<null | 'issue_proof' | 'reject'>(null)
   const [events, setEvents] = useState<TemplateEventRow[]>([])
+  const [signOffs, setSignOffs] = useState<readonly SignOffRow[]>([])
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -86,6 +93,10 @@ export default function LabelTemplatePage() {
       setCustomer(r.customer ?? null)
       setDirty(false)
       setEvents(await fetchTemplateEvents(id))
+      // Read here rather than letting SignOffChain self-load: the PO panel
+      // needs the same answer, and two readers of one register is how one of
+      // them ends up a signature behind the other.
+      setSignOffs(await readSignOffs(publicDb(), id))
       setError(null)
     } catch (e) { setError(errMessage(e)) }
     finally { setLoading(false) }
@@ -337,6 +348,7 @@ export default function LabelTemplatePage() {
               scope="template"
               templateId={row.id}
               templateVersion={row.version}
+              rows={signOffs}
               canSign={(role: SignOffRole) => can(SIGN_OFF_PERMISSION[role])}
               onSigned={load}
             />
@@ -347,6 +359,7 @@ export default function LabelTemplatePage() {
       {row.status === 'approved' && (
         <FeatureBoundary name="PO assignment">
           <ApprovedPanel row={row} template={draft} canAssign={can('can_assign_label_po')}
+            outstanding={outstandingTemplateRoles(signOffs, row.version)}
             customerOpts={customerOpts} onDone={load} />
         </FeatureBoundary>
       )}
@@ -390,11 +403,20 @@ function Btn({ onClick, label, icon, disabled, primary, title }: {
  *
  * Only shown on an approved template, because a PO attached to unapproved
  * wording is a promise nobody can keep. The route re-checks that too.
+ *
+ * `outstanding` is the roles that have NOT signed the version on screen. A
+ * label can read `approved` with an incomplete chain — every label approved
+ * before the chain existed does, and the sign-off route accepts signatures
+ * against those on purpose so they can be closed without re-issuing the proof.
+ * So the status is not the gate; the chain is. The button says which signature
+ * is missing rather than sitting there dead, because "greyed out with no
+ * reason" is what sends someone to find a supervisor.
  */
-function ApprovedPanel({ row, template, canAssign, customerOpts, onDone }: {
+function ApprovedPanel({ row, template, canAssign, outstanding, customerOpts, onDone }: {
   row: LabelTemplateRow
   template: LabelTemplate
   canAssign: boolean
+  outstanding: readonly SignOffRole[]
   customerOpts: string[]
   onDone: () => void
 }) {
@@ -450,10 +472,21 @@ function ApprovedPanel({ row, template, canAssign, customerOpts, onDone }: {
           </div>
         </div>
         {canAssign && !open && (
-          <button onClick={() => setOpen(true)}
-            className="px-3 py-2 rounded-lg bg-brand text-white hover:bg-brand-mid transition-colors text-sm font-medium">
-            Assign a PO
-          </button>
+          <div className="text-right">
+            <button onClick={() => setOpen(true)} disabled={outstanding.length > 0}
+              title={outstanding.length > 0
+                ? `Still to sign: ${outstanding.map(r => SIGN_OFF_LABEL[r]).join(', ')}`
+                : undefined}
+              className="px-3 py-2 rounded-lg bg-brand text-white hover:bg-brand-mid transition-colors text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-brand">
+              Assign a PO
+            </button>
+            {outstanding.length > 0 && (
+              <p className="text-[11px] text-text-muted mt-1.5 max-w-[15rem]">
+                Waiting on {outstanding.map(r => SIGN_OFF_LABEL[r]).join(', ')} to sign
+                version {row.version}.
+              </p>
+            )}
+          </div>
         )}
       </div>
 

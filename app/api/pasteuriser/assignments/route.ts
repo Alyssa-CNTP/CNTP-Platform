@@ -2,6 +2,10 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getCallerPermissions } from '@/lib/auth/server-helpers'
 import { labelDb, readBody, str, strOrNull, posInt, isUniqueViolation } from '../_db'
 import { writeAudit } from '@/lib/audit/write'
+import { SIGN_OFF_LABEL } from '@/lib/core/labels'
+import {
+  SIGN_OFF_COLUMNS, outstandingTemplateRoles, type SignOffRow,
+} from '@/lib/production/label-sign-offs'
 
 /**
  * Sales binds an APPROVED label version to a customer purchase order.
@@ -46,6 +50,39 @@ export async function POST(req: NextRequest) {
   if (tpl.status !== 'approved') {
     return NextResponse.json({
       error: `${tpl.code} v${tpl.version} is ${tpl.status}. A PO can only be assigned to an approved label.`,
+    }, { status: 409 })
+  }
+
+  // ── And every signature has to be on the version being assigned ───────────
+  //
+  // `status = 'approved'` is NOT sufficient, which is not obvious. For a label
+  // approved since the chain existed the two are the same thing: the fourth
+  // signature is what sets the status. But the sign-off route deliberately
+  // accepts signatures against an already-approved template, because every
+  // label approved BEFORE the chain carries only the old single approval and
+  // Quality, the customer and Control Union had to be recordable against it
+  // without re-issuing the proof. Those templates read `approved` with an empty
+  // chain, and status alone would hand them a PO.
+  //
+  // The version matters for the same reason it matters in the chain itself: a
+  // new version reopens the artwork, so v1's four signatures say nothing about
+  // what v2 says on the bag.
+  //
+  // This is the server half. The panel disables its button and names the
+  // outstanding roles, but a disabled button is not an enforcement mechanism
+  // (ARCHITECTURE.md §6) — the decision is made here, from a fresh read.
+  const { data: sigRows, error: sigErr } = await admin
+    .from('label_sign_offs').select(SIGN_OFF_COLUMNS).eq('template_id', templateId)
+  if (sigErr) return NextResponse.json({ error: sigErr.message }, { status: 500 })
+
+  const outstanding = outstandingTemplateRoles(
+    (sigRows ?? []) as SignOffRow[], Number(tpl.version),
+  )
+  if (outstanding.length > 0) {
+    return NextResponse.json({
+      error: `${tpl.code} v${tpl.version} is not fully signed off yet. Still outstanding: ` +
+        `${outstanding.map(r => SIGN_OFF_LABEL[r]).join(', ')}.`,
+      outstanding,
     }, { status: 409 })
   }
 

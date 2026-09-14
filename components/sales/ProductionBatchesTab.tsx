@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { format, parseISO } from 'date-fns'
 import { Search, ArrowUpRight, Factory, Loader2 } from 'lucide-react'
-import { getDb } from '@/lib/supabase/db'
+import { getPublicDb } from '@/lib/supabase/db'
 import { sectionMeta } from '@/lib/production/capture-config'
 
 // Sales-facing visibility into what was actually produced — customer, blend,
@@ -36,7 +36,7 @@ export default function ProductionBatchesTab() {
   useEffect(() => {
     let cancelled = false
     setLoading(true)
-    const db = getDb()
+    const db = getPublicDb()
     Promise.all([
       db.from('job_cards_pasteuriser')
         .select('id, customer, item_no, product_name, batch_number, date_of_card, total_mass, job_card_no')
