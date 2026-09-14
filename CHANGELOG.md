@@ -2,6 +2,19 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-14 — Gustav (COA: a customer's own bulk-density spec now has a home, and prints alongside CNTP's)
+
+**Files changed:** `components/quality/CoaSpecsTab.tsx`, `app/(app)/quality/coa/page.tsx`, `supabase/migrations/20260914_001_coa_specs_client_bd_spec.sql` (new, applied to staging)
+
+Reported case: Ostfriesische Tee Gesellschaft (OTG)'s own specification document sets bulk density as **"165 – 175/500ml (IMA Cylinder provided by OTG)"** — their own instrument, their own unit — while CNTP's internal spec for the same product is **280–340cc/100g**. There was nowhere in `qms.coa_specs` to record the customer's own figure at all; only the internal `bd_min`/`bd_max`.
+
+- **New `client_bd_spec` column** — free text, deliberately not another min/max pair: there is no formula converting cc/100g to ml/500ml on a client-supplied cylinder, so this stores the spec exactly as the customer's own document states it. Blank means the customer has no separate client-side spec, which is every customer except this one so far — nothing changes for them.
+- **Customer Specs → COA Requirements** gains a "Client Bulk Density Spec" field under the existing BD Min/Max, with a placeholder showing the OTG example and a note explaining what it does once filled in.
+- **The COA now prints a second Bulk Density row when this field is set** — the customer's own spec text, with no Result: CNTP measures with its own instrument, not the customer's, so the certificate must not claim a result against a spec it never tested against. Blank `client_bd_spec` means no second row — the COA looks exactly as it always has for every other customer.
+- The migration needs applying to **production** when this is promoted, same as any schema change (production is on a separate Supabase project from staging). The actual OTG value has not been entered anywhere yet — it's a real production customer, not present on staging at all — and will be set once the column exists there.
+
+---
+
 ## 2026-09-14 — Alyssa (A production order document shows the order you opened, not the whole day)
 
 **Files changed:** `app/(app)/production/orders/[id]/page.tsx`
