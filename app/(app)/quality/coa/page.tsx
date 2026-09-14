@@ -1285,6 +1285,16 @@ function buildModel(src: any, spec: any): CoaModel {
   const other: CoaLine[] = []
   if (src.moistureAvg != null) other.push({ label: 'Moisture', spec: spec ? moistSpec(spec.moisture_max) || '<10%' : '<10%', result: `${src.moistureAvg.toFixed(1).replace('.', ',')}%` })
   if (src.bdAvg != null) other.push({ label: 'Bulk Density', spec: spec ? (bdSpec(spec.bd_min, spec.bd_max) || '280 – 340cc/100g') : '280 – 340cc/100g', result: `${Math.round(src.bdAvg)}cc/100g` })
+  // Some customers hold their OWN bulk-density spec, in their own units and
+  // measured with their own instrument (reported case: OTG's document says
+  // "165 - 175/500ml (IMA Cylinder provided by OTG)" against CNTP's own
+  // 280-340cc/100g) — there's no formula converting one into the other. This
+  // second row shows the customer's own spec text for reference, with no
+  // result: CNTP does not measure with the customer's instrument, so it must
+  // not claim a result against a spec it never tested. Blank client_bd_spec
+  // means this customer has no separate client-side spec, and nothing changes
+  // from before — only the one Bulk Density row above.
+  if (spec?.client_bd_spec) other.push({ label: 'Bulk Density (Client Spec)', spec: String(spec.client_bd_spec), result: '—' })
   // Like Moisture/Bulk Density above (a measurement to show, not a
   // pass/fail contaminant toggle) — included whenever a result exists rather
   // than gated by sections/wantX, so there's no "Include sections" checkbox
