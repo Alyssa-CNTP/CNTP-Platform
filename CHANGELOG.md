@@ -2,6 +2,48 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-14 — Alyssa (History / Planning: a page nobody could reach and nothing guarded)
+
+**Files changed:** `components/layout/Sidebar.tsx`, `app/(app)/layout.tsx`, `lib/auth/permission-registry.ts`, `app/(app)/production/history/page.tsx`
+
+`/production/history` has been on production the whole time with **none** of the four registrations ARCHITECTURE.md §7 requires:
+
+```
+                      before   after
+NAV entry               0        2
+ROUTE_GUARDS            0        1
+permission-registry     0        1
+```
+
+No nav entry, so the only way in was typing the URL. No `ROUTE_GUARDS` rule, so anyone authenticated who did type it got in. No registry row, so it was invisible on the Users & Roles matrix. Unreachable **and** unguarded at the same time.
+
+### Reaching it
+
+- **NAV** — "History / Planning" in the Production group, on `can_view_live_history`.
+- **ROUTE_GUARDS** — Production/Management, same key, `orPermission`.
+- **permission-registry** — a read-only `production.history` row, so it appears on the matrix instead of being a permission nobody can find.
+- **The floor-operator sandbox** is widened by one prefix. That early return runs *before* `ROUTE_GUARDS`, and the page deliberately does not live under `/production/capture` — it is the record of what ran on the line, not a capture screen — so without naming it the operators it exists for could never reach it. Their hardcoded two-item nav becomes three.
+
+`can_view_live_history` is reused rather than a new key minted: it already exists, is already granted to the right roles, and its own label reads "View live capture session history", which is this page.
+
+### The dead link
+
+Every card opened `/production/section?id=…&shift=…&date=…`, and that page's whole body is `redirect('/production/capture')` — retired in June 2026, and the redirect drops the query string with it. Clicking a record, the one thing this page is for, landed the reader on an empty capture hub.
+
+The fixed link passes all three parameters. `session` matters most: without it the capture page loads the most recently created session for that (section, date, shift), which is the **wrong** record whenever a shift ran more than one — normal after any changeover.
+
+### The delete goes
+
+It ran six client-side deletes in a row — `session_signatures`, **`scan_events`**, `prod_mass_balance`, `prod_debagging`, `prod_bagging`, then the session — behind a `confirm()`. §4 names one of those outright: *never blanket-delete `scan_events`, it is an append-only audit ledger*. No audit row, no transaction, and `prod_sessions` already carries `deleted_at` / `deleted_by` that nothing there used.
+
+It survived because the page was unreachable. This change gives it a door, so the control goes **before** the door opens rather than after. Deleting a session is done from Production Orders, which has the reopen-request flow behind it.
+
+### Worth knowing
+
+A floor operator is not a `section_operator`, so the existing `isSectionOp` branch does not narrow them — they will see every line's history with the section filter available. That is the page's existing behaviour and widening or narrowing it is a permissions decision, not a default. The roster pin and the per-operator scorecard that scope this on staging are **not** in this change.
+
+**Gates:** tests 679 · boundaries clean · hooks clean · typecheck 32, at baseline · lint 3026, **two under** the 3028 baseline · `next build` exit 0.
+
 ## 2026-09-11 — Alyssa (A handover note reaches the next shift, and then it is finished)
 ## 2026-09-11 — Gustav (Permissions: real per-page Read toggles for Quality, a dedicated COA key, and two IT roles that had never been wired)
 
