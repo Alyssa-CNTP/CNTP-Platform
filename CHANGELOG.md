@@ -21,6 +21,15 @@ So the day is still loaded and still reconciled. What changed is which run the d
 - The production order is narrowed to the **run**, not the click. Sessions 02 and 03 are both Conventional · Export Blend and carry different orders (one null, one `S10LGBL-C`), so keying off the clicked row alone would show a different order for the same run depending on which row you came in from.
 - A record with no order now says `—`. That is the truth, and it is what makes the gap visible rather than papering over it with a neighbour's code.
 
+### The day is a separate view now
+
+The first pass scoped the header and the run blocks but left *Not attributable to one run* and *Whole day — all runs combined* on the page, so it still read as a combined day record. Both are day-level by nature, so on one order's summary they are context, not content:
+
+- On an **order summary** they stay on screen and are **left off the print**, with a line saying so. That is what makes a changeover produce two separate order documents rather than two copies of the day.
+- **`?scope=day`** opens the whole-day view — every run, the reconciliation, the unattributed material — and prints in full. Without it, scoping every document to a run would orphan the 35 kg of bucket elevator and 778 kg of top-ups that belong to no run.
+
+Each view names the other: the order summary links to the day, the day lists its orders.
+
 ### What is kept
 
 *Not attributable to one run* and *Whole day — all runs combined (07h00–01h00)* still cover the whole day and still reconcile it. They are the day's figures and they were never the run's.

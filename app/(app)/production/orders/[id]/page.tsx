@@ -12,7 +12,7 @@
 // print and everything renders un-collapsed, so Print produces the full report.
 
 import { useEffect, useState, useRef, type ReactNode } from 'react'
-import { useParams, useRouter } from 'next/navigation'
+import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { format } from 'date-fns'
 import { ArrowLeft, Printer, Loader2, CheckCircle2, Clock, Pen, Play, Radio, Sparkles, MessageSquare, MessageSquarePlus, ArrowRightLeft, AlertTriangle } from 'lucide-react'
@@ -102,6 +102,15 @@ function runTitle(variant: string | null, grade: string | null): string {
 
 export default function ProductionOrderDetailPage() {
   const { id } = useParams<{ id: string }>()
+  /**
+   * `?scope=day` opens the whole-day view instead of one order's summary.
+   *
+   * The default is the ORDER — that is what the list links to and what a reader
+   * asks for. The day view exists so the reconciliation and the material that
+   * belongs to no run stay printable somewhere, rather than being orphaned by
+   * scoping every document to a run.
+   */
+  const dayView = useSearchParams().get('scope') === 'day'
   const router = useRouter()
   const { displayName } = useAuth()
   const [day, setDay] = useState<OrderDay | null>(null)
@@ -357,11 +366,13 @@ export default function ProductionOrderDetailPage() {
    * neither variant nor grade matches no run, and then the whole day is shown
    * rather than an empty page.
    */
-  const clickedRunKeys = new Set(
+  const clickedRunKeys = dayView ? new Set<string>() : new Set(
     runs.filter(r =>
       r.inputs.some(d => d.session_id === id) || r.outputs.some(b => b.session_id === id),
     ).map(r => r.key),
   )
+  /** True when this page is one order's summary rather than the day's. */
+  const scoped = clickedRunKeys.size > 0
   const shownRuns = clickedRunKeys.size ? runs.filter(r => clickedRunKeys.has(r.key)) : runs
   const otherRuns = clickedRunKeys.size ? runs.filter(r => !clickedRunKeys.has(r.key)) : []
   /** A record inside another run, so the reader can open its summary. */
@@ -490,6 +501,25 @@ export default function ProductionOrderDetailPage() {
         <RunSection key={run.key} run={run} multiShift={shifts.length > 1} />
       ))}
 
+      {/* Say which of the two things this page is. Without it, a day view and
+          an order summary look the same until you read the totals. */}
+      {dayView && (
+        <div className="flex flex-wrap items-center gap-2 px-1">
+          <span className="text-[11.5px] text-text-muted">
+            Whole day — every run on this line, with the reconciliation. Each order has its own summary.
+          </span>
+          {runs.map(r => {
+            const sid = sessionInRun(r)
+            return sid ? (
+              <Link key={r.key} href={`/production/orders/${sid}`}
+                className="no-print inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-surface-rule text-[11.5px] text-text hover:border-brand hover:text-brand transition-colors">
+                {runTitle(r.variant, r.grade)}
+              </Link>
+            ) : null
+          })}
+        </div>
+      )}
+
       {/* The day's other orders. Named and linked rather than folded in: a
           changeover produces two summaries and a reader who came looking for
           one still needs to be able to reach the other. */}
@@ -514,9 +544,16 @@ export default function ProductionOrderDetailPage() {
       {/* Everything that belongs to no single run. Listed rather than spread
           across the runs, because spreading it would be an apportionment and
           every other figure on this page is a measurement. */}
+      {/* Day-level, both of them — so on ONE ORDER's summary they are context,
+          not content. `no-print` keeps them off the printed artefact, which is
+          what makes a changeover produce two separate order documents rather
+          than two copies of the day. They still print in full on the day view
+          (`?scope=day`), so the material that belongs to no run is never
+          orphaned. */}
+      <div className={scoped ? 'no-print space-y-5' : 'space-y-5'}>
       {hasUnattributed && (
         <Panel>
-          <PanelHead title="Not attributable to one run"
+          <PanelHead title={scoped ? 'Not attributable to one run — the day, for context' : 'Not attributable to one run'}
             meta={`${unattributedInKg.toFixed(1)} kg in · ${unattributedOutKg.toFixed(1)} kg out`} />
           <PanelBody>
             <div className="space-y-4">
@@ -650,6 +687,17 @@ export default function ProductionOrderDetailPage() {
           </PanelBody>
         </Panel>
       )}
+      {scoped && (
+        <p className="no-print text-[11.5px] text-text-muted px-1">
+          The two panels above are the whole day, not this order — they are on screen for context and
+          are left off the printed summary.{' '}
+          <Link href={`/production/orders/${id}?scope=day`} className="text-brand hover:underline">
+            Open the day view
+          </Link>{' '}
+          to print them.
+        </p>
+      )}
+      </div>
 
       {/* Re-bagged in — bags born from an existing bag via re-bagging, not
           fresh production. Informational only: its kg is deliberately NOT
