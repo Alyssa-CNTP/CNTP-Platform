@@ -19,6 +19,12 @@ interface CoaSpec {
   id: number; doc_no: string; type: string | null; customer: string | null
   product_description: string | null; grade: string | null; variant: string | null
   moisture_max: string | null; bd_min: string | null; bd_max: string | null
+  // The customer's OWN bulk-density spec, in their own words/units/instrument
+  // — free text, because there's no shared unit to store it as a number in.
+  // See the 20260914_001 migration. Blank = this customer has no separate
+  // client-side BD spec; the COA then prints only CNTP's own Bulk Density
+  // row, as it always has.
+  client_bd_spec: string | null
   specs: any; source_file: string | null
 }
 
@@ -96,7 +102,8 @@ export default function CoaSpecsTab({ canWrite }: { canWrite: boolean }) {
     const { data, error } = await db.schema('qms').from('coa_specs').update({
       type: updated.type, customer: updated.customer, product_description: updated.product_description,
       grade: updated.grade, variant: updated.variant, moisture_max: updated.moisture_max,
-      bd_min: updated.bd_min, bd_max: updated.bd_max, specs: updated.specs, source_file: updated.source_file,
+      bd_min: updated.bd_min, bd_max: updated.bd_max, client_bd_spec: updated.client_bd_spec,
+      specs: updated.specs, source_file: updated.source_file,
     }).eq('id', updated.id).select().single()
     if (error) { alert('Save failed: ' + error.message); return }
     setRows(p => p.map(r => r.id === updated.id ? (data as CoaSpec) : r))
@@ -228,6 +235,22 @@ function CoaSpecEditor({ spec, canWrite, onClose, onSave }: { spec: CoaSpec; can
             {([['moisture_max', 'Moisture Max'], ['bd_min', 'BD Min'], ['bd_max', 'BD Max']] as const).map(([k, l]) => (
               <div key={k}><label style={lbl}>{l}</label><input value={(f as any)[k] || ''} onChange={e => set(k, e.target.value)} style={inp} disabled={!canWrite} /></div>
             ))}
+          </div>
+          {/* Some customers hold their OWN bulk-density spec, measured with
+              their own instrument in their own units — CNTP's BD Min/Max above
+              is the internal cc/100g method and cannot represent it. Free text
+              because there is no shared unit to normalise it into (reported
+              case: OTG's own document specifies "165 - 175/500ml (IMA
+              Cylinder provided by OTG)" against CNTP's 280-340cc/100g). Blank
+              means this customer has no separate client-side spec — the COA
+              then prints only the Bulk Density row above, as before. */}
+          <div style={{ marginTop: 8 }}>
+            <label style={lbl}>Client Bulk Density Spec <span style={{ fontWeight: 400, textTransform: 'none', color: '#9ca3af' }}>(as the customer's own document states it — own units/instrument, blank if none)</span></label>
+            <input value={f.client_bd_spec || ''} onChange={e => set('client_bd_spec', e.target.value)}
+              placeholder="e.g. 165 – 175/500ml (IMA Cylinder provided by OTG)" style={inp} disabled={!canWrite} />
+            {f.client_bd_spec && <div style={{ fontSize: 9, color: '#1e40af', marginTop: 3 }}>
+              ⓘ Prints as a second Bulk Density row on the COA, under CNTP's own — with no result, since CNTP does not measure with the customer's instrument.
+            </div>}
           </div>
 
           <div style={section}>Sieve / Cut Length (mesh)</div>
