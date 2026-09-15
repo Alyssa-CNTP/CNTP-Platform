@@ -16,6 +16,7 @@ import {
   Sparkles, Flag, Network, Cpu, Ticket, Flower2,
   CalendarCheck, CalendarRange, Activity, ClipboardCheck,
   FileSpreadsheet, GraduationCap, Printer, Wrench,
+  Warehouse, FileSignature, Search, Banknote,
 } from 'lucide-react'
 import type { PermissionKey } from '@/lib/auth/permissions'
 
@@ -74,6 +75,23 @@ export const NAV: NavItem[] = [
   { href: '/quality/customer-specs',    label: 'Customer Specs',             icon: BookOpen,        group: 'Quality', departments: ['Quality','Sales'], permission: 'can_edit_customer_specs' },
   { href: '/quality/lab-manager',       label: 'Lab Manager',                icon: ClipboardCheck,  group: 'Quality', departments: ['Quality'], permission: 'can_approve_runs' },
   { href: '/quality/maintenance-qc',    label: 'Maintenance QC',             icon: ClipboardCheck,  group: 'Quality', departments: ['Quality','Maintenance','Management'], permission: 'can_access_maintenance', orPermission: true },
+
+  // ── Raw Material Take-In — the farmer intake chain ──
+  // Its own group, not a row under Quality or Logistics: the people who live
+  // here are depot staff, and WHICH depot they see is scoped per user
+  // (public.users.depot_codes) rather than by department.
+  //
+  // Every entry is permission-gated with no department fallback — a depot clerk
+  // may hold no department this module would recognise, and Blackheath reaches
+  // it as the consolidation view rather than as Quality.
+  { href: '/take-in',                   label: 'Take-In Overview',           icon: Warehouse,       group: 'Raw Material Take-In', permission: 'can_access_takein' },
+  { href: '/take-in/contracts',         label: 'Contracts',                  icon: FileSignature,   group: 'Raw Material Take-In', permission: 'can_access_takein' },
+  { href: '/take-in/schedule',          label: 'Delivery Schedule',          icon: CalendarRange,   group: 'Raw Material Take-In', permission: 'can_access_takein' },
+  { href: '/take-in/intake',            label: 'Intake & GRN',               icon: PackageOpen,     group: 'Raw Material Take-In', permission: 'can_access_takein' },
+  { href: '/take-in/mini-lab',          label: 'Mini Lab',                   icon: Beaker,          group: 'Raw Material Take-In', permission: 'can_access_takein' },
+  { href: '/take-in/documents',         label: 'Documents',                  icon: FileText,        group: 'Raw Material Take-In', permission: 'can_access_takein' },
+  { href: '/take-in/history',           label: 'History',                    icon: Search,          group: 'Raw Material Take-In', permission: 'can_access_takein' },
+  { href: '/take-in/settlement',        label: 'Settlement',                 icon: Banknote,        group: 'Raw Material Take-In', permission: 'can_view_takein_settlement' },
 
   // ── Maintenance — full module is Maintenance + Management; Production sees only Job Cards ──
   { href: '/maintenance',               label: 'Dashboard',                  icon: LayoutDashboard, group: 'Maintenance', departments: ['Maintenance','Management'], permission: 'can_access_maintenance', orPermission: true },

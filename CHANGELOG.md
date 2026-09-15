@@ -2,6 +2,74 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-15 — Gustav (RAW MATERIAL TAKE-IN: the farmer take-in flow built into the platform, staging only)
+
+**Files changed:** `supabase/migrations/20260915_001_takein_schema.sql`, `lib/core/takein/grading.ts`, `lib/core/takein/grading.test.ts`, `lib/takein/types.ts`, `lib/takein/db.ts`, `app/(app)/take-in/layout.tsx`, `app/(app)/take-in/page.tsx`, `app/(app)/take-in/contracts/page.tsx`, `app/(app)/take-in/schedule/page.tsx`, `app/(app)/take-in/intake/page.tsx`, `app/(app)/take-in/mini-lab/page.tsx`, `app/(app)/take-in/documents/page.tsx`, `app/(app)/take-in/history/page.tsx`, `app/(app)/take-in/settlement/page.tsx`, `lib/auth/permissions.ts`, `lib/auth/permission-registry.ts`, `components/layout/Sidebar.tsx`, `app/(app)/layout.tsx`, `lib/auth/context.tsx`, `app/api/admin/users/route.ts`, `app/api/admin/users/[id]/route.ts`, `app/(app)/users/page.tsx`
+
+The raw-material take-in flow prototyped in the sandbox is now a real module: **Raw Material Take-In**, with Contracts, Schedule, Intake & GRN, Mini Lab, Documents, History and Settlement as sub-tabs. Booking → weighbridge → GRN → mini lab → Afleweringsbewys → internal lab → external lab → COA → settlement, all on Supabase, all audited.
+
+### What was deliberately NOT built, because it already exists
+
+The brief was to avoid duplicating what the platform has. Four things were reused rather than rebuilt:
+
+- **Leaf shade stays one classifier.** `qms.quality_records` with `workflow = 'leaf_shade'` is unchanged and still lives at `/quality/raw-material` for Blackheath. The Mini Lab tab *reads* those records for the batch's depot and links the chosen one onto the lab result via `quality_record_id` — it does not store a second shade anywhere. A second shade store is how two screens end up disagreeing about the same bag.
+- **`logistics.grns` / `grn_lines` / `units` were not touched.** Take-in writes its own `takein.documents`; the existing logistics tables keep their meaning.
+- **Permissions, route guards, nav and the audit trail** go through `lib/auth/permissions.ts`, `permission-registry.ts`, `ROUTE_GUARDS` and `writeAudit()` — the four registrations ARCHITECTURE §7 requires, no parallel mechanism.
+- **Global CSS only.** Every screen uses the `@theme` tokens in `app/globals.css` (brand / accent / azure / surface-card / rule / dim / ok / warn / err / info). No new colour was introduced.
+
+### Five depots, and who can see them
+
+`logistics.warehouses` was empty, so it is now populated in the shape the existing dead pages already query — not a parallel depot registry. Seeded: **GS Graafwater** and **MAT Vanrhynsdorp** (both take farmer deliveries), **BH Blackheath** (does not — it is the consolidation view over all depots), and **D4 / D5** inactive and unnamed, waiting on the real names.
+
+`shared.app_roles` gains **`depot_codes text[]`**, editable from Users & Access. The rule, in `visibleDepots()`: **an empty array means every depot.** That is what makes Blackheath and management work without enumerating depots, and what keeps a depot clerk pinned to their own site.
+
+**Graafwater and Vanrhynsdorp number independently**, which was the explicit requirement for the production cut-over. Each warehouse row carries its own `batch_prefix` / `grn_prefix` / `doc_prefix` and its own counter (`GS-0001`, `MAT-0001`, `GRN-GS-1`, `GD-FD0000001`, `VD-FD0000001`). At go-live the three counters per depot are set to the last number in the paper book and the sequence continues from there.
+
+### Numbers come from the database, never from the app
+
+`takein.next_batch_no()` is `security definer` and takes `for update` on the warehouse row before incrementing. ARCHITECTURE §5 is explicit about why: app-side `max + 1` is the documented cause of the 44% bag loss, and two clerks opening a delivery in the same second would otherwise mint the same batch number.
+
+A returned load **releases its number back**: the batch number goes into `takein.released_batch_nos` and the next allocation takes the lowest released number before touching the counter, so a rejected load does not leave a hole in a sequential paper-numbered book. Document numbers do **not** work this way — `unique (kind, doc_no)` holds whether the document is voided or not, so a voided GRN number is burnt for good. A document that was printed and handed over is evidence; a batch number that was never used is not.
+
+### The contract does not leak its prices
+
+Pricing is in **its own table**, `takein.contract_pricing`, not columns on `takein.contracts`. Supabase RLS is row-level, not column-level — the only way to let someone read a contract without reading what it pays is to put the money in a separate row-secured table. Its policy requires `can_view_contract_pricing`; writes require `can_set_contract_pricing`. The contracts screen only *issues the query* when the permission is present, so the price is absent from the payload rather than hidden in CSS.
+
+Settlement is behind its own key, `can_view_takein_settlement`, with a longest-prefix route guard so `/take-in/settlement` is refused even to someone holding `can_access_takein`. 16 permission keys in all, registered under a new **Raw Material Take-In** module with 9 resources.
+
+Nothing in the module emails, exports or otherwise sends anything to a farmer.
+
+### Grading is core, and it is pinned to the signed documents
+
+`lib/core/takein/grading.ts` is pure — no React, no I/O, no Supabase — so it passes `lint:boundaries`. **42 tests**, including the ten signed Afleweringsbewyse as fixtures.
+
+- **Rounding is half-away-from-zero, applied per row, then summed.** Tested against all ten documents, 10/10 exact. `GS-0402` is the case that settles it: the rows as printed sum to 80.94, where rounding the exact total once gives 80.93. A `toFixed(9)` guard keeps binary drift from flipping a `.5`.
+- **Leaf shade 1 scores `null`, not 0.** Confirmed against the decompiled Acumatica `MapLeafScore`, which returns `default(decimal?)` for shade 1. Zero would drag an average down; absent does not.
+- **Panel discussion is in-house unless the contract says otherwise.** `panelTriggers()` reads `takein.contract_panel_terms` per contract, so whether a trigger is binding on the farmer's payment is the contract's answer, not the code's. Each trigger carries its clause reference.
+- `stageOf()` orders the gates so a hard reject (moisture ≥ 10, R-banned residue) cannot be overridden by a panel decision, and a fresh trigger reopens a closed panel. Three regression tests pin the panel bugs found in review.
+
+### Bag data is append-only
+
+`takein.batch_events` has `update` and `delete` **revoked from `authenticated`** at the grant level, not by policy — verified on staging (`has_table_privilege` → insert true, update false, delete false). Voiding a GRN appends a reversing event with a mandatory reason and the actor; it never deletes the original. Same rule as `production.scan_events` (§6).
+
+The Afleweringsbewys **freezes** its figures into `documents.frozen` when it is issued. Settlement pays from that frozen nett weight, so a later capture correction cannot silently change what a farmer was already told they would be paid.
+
+`takein_one_live_doc` — a partial unique index on `(batch_id, kind) where voided_at is null` — means a batch can have a history of voided GRNs but only ever one live one.
+
+### Verification
+
+Full chain run on staging and then removed: producer → contract → panel terms → `GS-0001` → two lands (Hetley / Joepie) → 16 bags tagged 5/11 → `GRN-GS-1` signed → mini lab → `GD-FD0000001` with frozen nett 5 048 kg. Batch-number release-and-reuse verified. All counters reset to 0 and the test rows deleted, so staging starts clean.
+
+`npm run lint:boundaries` clean · `npm run test` 645/645 across 24 files · `npm run build` exit 0 · `npx tsc --noEmit` no new errors against the baseline.
+
+### Still open
+
+- **D4 and D5 need their real names and prefixes** before they can take a delivery. They are seeded inactive precisely so they cannot.
+- **The cut-over numbers** — the last batch, GRN and Ontvangsnota number in each depot's paper book — must be written into `logistics.warehouses` before the first live take-in.
+- Whether a contract's payment cycle runs on achieved value or guaranteed price is not yet encoded; settlement currently reads the frozen nett weight only.
+
+---
+
 ## 2026-09-11 — Gustav (COA: glyphosate forced onto organic COAs, no way back down the sign-off chain, specs never refreshed)
 
 **Files changed:** `app/(app)/quality/coa/page.tsx`, `lib/quality/coa-gating.ts`, `lib/quality/coa-gating.test.ts`, `app/api/quality/coa-signoff/route.ts`

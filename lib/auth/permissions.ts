@@ -114,6 +114,26 @@ export type PermissionKey =
   | 'can_access_workspace'
   // Bag Tracking
   | 'can_access_bag_tracking'
+  // Raw Material Take-In — the farmer intake chain (contracts → schedule →
+  // intake → mini lab → documents → settlement). Depot scoping is a separate
+  // axis: shared.app_roles.depot_codes says WHICH depots, these keys say WHAT
+  // they may do.
+  | 'can_access_takein'            // the module at all
+  | 'can_manage_takein_contracts'  // create/edit a contract's terms and kg
+  | 'can_approve_takein_contracts' // the two-step kg approval + release
+  | 'can_view_contract_pricing'    // SEE the rand values (RLS-enforced, not just hidden)
+  | 'can_set_contract_pricing'     // SET them
+  | 'can_book_takein'              // make and cancel delivery bookings
+  | 'can_override_takein_booking'  // book through a calendar rule with a reason
+  | 'can_capture_takein_intake'    // weighbridge, checklist, raise the GRN
+  | 'can_void_takein_document'     // void a GRN / withdraw an Afleweringsbewys or COA
+  | 'can_return_takein_load'       // send a load back to the producer
+  | 'can_capture_takein_minilab'   // mini-lab sieve, moisture, density, shade
+  | 'can_verify_takein_internal'   // Blackheath's confirming reading
+  | 'can_capture_takein_external'  // third-party residue / PA result
+  | 'can_decide_takein_panel'      // sit on the panel
+  | 'can_issue_takein_documents'   // make out the Afleweringsbewys / COA
+  | 'can_view_takein_settlement'   // what a producer is owed — sensitive
   // Logistics
   | 'can_access_logistics'
   | 'can_sign_dispatch_doc'            // sign a dispatch document in-app (own on-file signature)
@@ -177,6 +197,12 @@ export const ALL_PERMISSION_KEYS: PermissionKey[] = [
   'can_manage_integrations',
   'can_assign_tickets', 'can_access_workspace',
   'can_access_bag_tracking',
+  'can_access_takein','can_manage_takein_contracts','can_approve_takein_contracts',
+  'can_view_contract_pricing','can_set_contract_pricing',
+  'can_book_takein','can_override_takein_booking',
+  'can_capture_takein_intake','can_void_takein_document','can_return_takein_load',
+  'can_capture_takein_minilab','can_verify_takein_internal','can_capture_takein_external',
+  'can_decide_takein_panel','can_issue_takein_documents','can_view_takein_settlement',
   'can_access_logistics','can_sign_dispatch_doc','can_request_external_signature','can_verify_dispatch_doc',
   'can_access_maintenance',
   'can_raise_breakdown','can_raise_planned','can_allocate_jobs','can_qc_jobs','can_verify_jobs',

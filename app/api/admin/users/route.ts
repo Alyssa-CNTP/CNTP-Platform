@@ -21,7 +21,7 @@ export async function GET() {
     const { data: roleRows, error: rolesErr } = await sessionClient
       .schema('shared' as any)
       .from('app_roles')
-      .select('id, user_id, full_name, department, role, section_id, permissions, is_active, created_at, employee_id')
+      .select('id, user_id, full_name, department, role, section_id, permissions, is_active, created_at, employee_id, depot_codes')
       .order('created_at', { ascending: true })
 
     if (rolesErr) {
@@ -60,6 +60,7 @@ export async function GET() {
         role:            r.role,
         section_id:      r.section_id,
         permissions:     r.permissions ?? {},
+        depot_codes:     r.depot_codes ?? [],
         is_active:       r.is_active ?? true,
         created_at:      r.created_at,
         last_sign_in:    au?.last_sign_in_at ?? null,
@@ -96,6 +97,7 @@ export async function GET() {
         role:            null,
         section_id:      null,
         permissions:     {},
+        depot_codes:     [],
         is_active:       true,
         created_at:      au.created_at,
         last_sign_in:    au.last_sign_in_at ?? null,

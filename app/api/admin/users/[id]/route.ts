@@ -23,7 +23,7 @@ export async function PATCH(
   const { data: targetRow } = await sessionClient
     .schema('shared' as any)
     .from('app_roles')
-    .select('department, role, full_name, section_id, permissions, is_active, employee_id')
+    .select('department, role, full_name, section_id, permissions, is_active, employee_id, depot_codes')
     .eq('user_id', id)
     .maybeSingle()
 
@@ -92,6 +92,36 @@ export async function PATCH(
       schema: 'shared', table: 'app_roles', recordId: id,
       before: { department: (targetRow as any)?.department, role: (targetRow as any)?.role, section_id: (targetRow as any)?.section_id },
       after: updates,
+    })
+  }
+
+  // ── Update take-in depot scope ──────────────────────────────────────────────
+  // WHICH depots a user sees is a separate axis from WHAT they may do. A
+  // Graafwater clerk holding every take-in permission still only sees
+  // Graafwater; an empty array means every depot, which is what Blackheath and
+  // Management need. Gated on can_edit_permissions because widening someone's
+  // depots widens what data they can reach.
+  if (body.depotCodes !== undefined) {
+    if (!caller.can('can_edit_permissions'))
+      return NextResponse.json({ error: 'Permission denied — cannot change depot access' }, { status: 403 })
+
+    const codes = Array.isArray(body.depotCodes)
+      ? (body.depotCodes as unknown[]).map(String).filter(Boolean)
+      : []
+
+    const { error } = await sessionClient
+      .schema('shared' as any)
+      .from('app_roles')
+      .update({ depot_codes: codes })
+      .eq('user_id', id)
+
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+
+    await writeAudit({
+      actorId: caller.userId, action: 'update',
+      schema: 'shared', table: 'app_roles', recordId: id,
+      before: { depot_codes: (targetRow as any)?.depot_codes ?? [] },
+      after:  { depot_codes: codes },
     })
   }
 

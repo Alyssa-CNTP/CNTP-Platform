@@ -26,6 +26,12 @@ interface AuthContextValue {
   sectionId:   string | null
   fullName:    string | null
   permissions: Permissions
+  /**
+   * Take-in depot codes this user may see. EMPTY means EVERY depot — that is
+   * the safe default here (Blackheath and Management need the consolidated
+   * view); a depot clerk is scoped explicitly on Users & Access.
+   */
+  depotCodes:  string[]
   displayName: string
   initials:    string
   loading:          boolean
@@ -76,6 +82,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [sectionId,   setSectionId]   = useState<string | null>(null)
   const [fullName,    setFullName]    = useState<string | null>(null)
   const [permissions, setPermissions] = useState<Permissions>({})
+  const [depotCodes,  setDepotCodes]  = useState<string[]>([])
   const [resolved,    setResolved]    = useState<Record<PermissionKey, boolean> | null>(null)
   const [loading,     setLoading]     = useState(true)
 
@@ -118,7 +125,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const { data } = await getDb()
         .schema('shared')
         .from('app_roles')
-        .select('role, department, section_id, permissions, full_name')
+        .select('role, department, section_id, permissions, full_name, depot_codes')
         .eq('user_id', userId)
         .maybeSingle()
 
@@ -127,8 +134,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const sid = (data as any)?.section_id as string | null
       const fn  = (data as any)?.full_name  as string | null
       const ov  = ((data as any)?.permissions ?? {}) as Permissions
+      const dc  = ((data as any)?.depot_codes ?? []) as string[]
 
       setRole(r)
+      setDepotCodes(Array.isArray(dc) ? dc.filter(Boolean) : [])
       setDepartment(d)
       setSectionId(sid)
       setFullName(fn)
@@ -136,6 +145,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setResolved(resolveAllPermissions(r, ov))
     } catch {
       setRole(null)
+      setDepotCodes([])
       setDepartment(null)
       setSectionId(null)
       setFullName(null)
@@ -277,7 +287,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const canAccessAdmin      = p('can_manage_users') || p('can_reset_passwords') || p('can_view_audit_log')
 
   const value: AuthContextValue = {
-    user, session, role, department, sectionId, fullName, permissions,
+    user, session, role, department, sectionId, fullName, permissions, depotCodes,
     displayName, initials, loading,
     p, signIn, signOut, changePassword,
     permissionsReady: resolved !== null,

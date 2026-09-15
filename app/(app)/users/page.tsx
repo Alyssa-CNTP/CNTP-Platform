@@ -32,6 +32,8 @@ interface AppUser {
   role:            string | null
   section_id:      string | null
   permissions:     Permissions
+  /** Take-in depots. EMPTY = every depot — what Blackheath and Management need. */
+  depot_codes:     string[]
   created_at:      string
   last_sign_in:    string | null
   no_role?:        boolean
@@ -431,6 +433,64 @@ function PermissionMatrix({ role, department, overrides, onChange, readOnly }: {
   )
 }
 
+// ─── Take-in depot scope ──────────────────────────────────────────────────────
+// WHICH depots a user sees, which is a different axis from WHAT they may do.
+// A Graafwater clerk holding every take-in permission still only sees
+// Graafwater. NO depot ticked means EVERY depot — that is what Blackheath's lab
+// and Management need, since farmers never deliver to Blackheath and its whole
+// job is the consolidated view.
+const TAKEIN_DEPOTS = [
+  { code: 'GS',  label: 'Graafwater' },
+  { code: 'MAT', label: 'Vanrhynsdorp' },
+  { code: 'BH',  label: 'Blackheath' },
+  { code: 'D4',  label: 'Depot 4' },
+  { code: 'D5',  label: 'Depot 5' },
+]
+
+function DepotScopePanel({ codes, onChange }: {
+  codes: string[]; onChange: (next: string[]) => void
+}) {
+  const FONT = { fontFamily: 'Arial, -apple-system, BlinkMacSystemFont, sans-serif' }
+  const toggle = (code: string) =>
+    onChange(codes.includes(code) ? codes.filter(c => c !== code) : [...codes, code])
+
+  return (
+    <div style={{ ...FONT, marginTop: 16, border: '1px solid #E0E0E0', borderRadius: 6, overflow: 'hidden' }}>
+      <div style={{ background: '#F3F4F6', borderBottom: '1px solid #E0E0E0', padding: '10px 14px',
+                    fontSize: 13, fontWeight: 600, color: '#111827' }}>
+        Raw Material Take-In — depot access
+      </div>
+      <div style={{ padding: '12px 14px' }}>
+        <p style={{ fontSize: 12, color: '#6B7280', margin: '0 0 10px', lineHeight: 1.5 }}>
+          Which depots this user sees take-in data for. This is separate from the permissions
+          above: someone can hold every take-in key and still see only their own depot.
+          <br />
+          <strong style={{ color: '#111827' }}>Tick nothing for every depot</strong> — that is the
+          setting for Blackheath and Management, who need the consolidated view.
+        </p>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+          {TAKEIN_DEPOTS.map(d => {
+            const on = codes.includes(d.code)
+            return (
+              <button key={d.code} type="button" onClick={() => toggle(d.code)}
+                style={{ border: `1px solid ${on ? '#1A3A0E' : '#D0D0D0'}`, borderRadius: 6,
+                         background: on ? '#EFF6E6' : 'white', color: on ? '#1A3A0E' : '#6B7280',
+                         padding: '6px 12px', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+                {on ? '✓ ' : ''}{d.label} <span style={{ opacity: 0.6, fontSize: 10 }}>{d.code}</span>
+              </button>
+            )
+          })}
+        </div>
+        <div style={{ fontSize: 11, color: codes.length ? '#6B7280' : '#B85C0A', marginTop: 8 }}>
+          {codes.length
+            ? `Scoped to ${codes.join(', ')}.`
+            : 'No depot ticked — this user sees EVERY depot.'}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function PermissionsPanel({ role, department, overrides, onChange, readOnly }: {
   role:       string | null
   department: Department | null
@@ -718,6 +778,7 @@ function UserModal({ existing, onSave, onClose, isAssignRole, prefill }: {
   const [sendInvite, setSendInvite] = useState(!isEdit)
   const [sectionId,  setSectionId]  = useState(existing?.section_id ?? '')
   const [overrides,  setOverrides]  = useState<Permissions>(existing?.permissions ?? {})
+  const [depotCodes, setDepotCodes] = useState<string[]>(existing?.depot_codes ?? [])
   const [saving,     setSaving]     = useState(false)
   const [error,      setError]      = useState('')
   const [employeeId,   setEmployeeId]   = useState<string | null>(existing?.employee_id ?? existing?.suggested_employee?.id ?? prefill?.employeeId ?? null)
@@ -777,6 +838,8 @@ function UserModal({ existing, onSave, onClose, isAssignRole, prefill }: {
     } else if (isAssignRole) {
       body.employee_id = employeeId
     }
+    if (isEdit && JSON.stringify(depotCodes) !== JSON.stringify(existing?.depot_codes ?? []))
+      body.depotCodes = depotCodes
 
     const url    = (isEdit || isAssignRole) ? `/api/admin/users/${existing!.id}` : '/api/admin/users'
     const method = (isEdit || isAssignRole) ? 'PATCH' : 'POST'
@@ -1010,6 +1073,8 @@ function UserModal({ existing, onSave, onClose, isAssignRole, prefill }: {
               {permView === 'matrix'
                 ? <PermissionMatrix role={effectiveRole || null} department={dept} overrides={overrides} onChange={handlePermChange} />
                 : <PermissionsPanel role={effectiveRole || null} department={dept} overrides={overrides} onChange={handlePermChange} />}
+
+              <DepotScopePanel codes={depotCodes} onChange={setDepotCodes} />
             </div>
           )}
 
