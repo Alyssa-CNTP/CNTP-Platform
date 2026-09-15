@@ -45,6 +45,7 @@ import { logBucketElevator, outstandingBucketElevator, variantFamily } from '@/l
 import { variantForDb } from '@/lib/core/variants'
 import FeatureBoundary from '@/components/shared/FeatureBoundary'
 import { buildDebagRows, buildBagRows } from '@/lib/core/capture-rows'
+import { recordBagLineage, lineageForSession } from '@/lib/production/bag-lineage'
 import { planChangeover, isPastShiftChangeover, isEarlyChangeoverLikely } from '@/lib/core/changeover'
 import { recordAccess } from '@/lib/core/production/record-access'
 import { handoverForShift } from '@/lib/core/production/handover'
@@ -1437,6 +1438,26 @@ function CaptureScreen() {
       const ins = await db.schema('production').from('prod_bagging').insert(bagWithSerial as any)
       if (ins.error) rowErrors.push(`bags: ${rowErrText(ins.error)}`)
     }
+
+    // ── Genealogy: what this session's output bags were made from ─────────────
+    // The bags debagged in and the bags bagged out are both known here and
+    // nowhere else at the same time, so this is where the link gets recorded.
+    // `debag` has already been through the bag_tags guard above, so the parent
+    // serials left standing are ones the system can actually resolve.
+    //
+    // Deliberately NOT pushed into rowErrors: a missing genealogy row does not
+    // lose an operator's production or make a bag unfindable, and failing the
+    // save over it would trade a real loss for a reporting one. It is logged
+    // and left for the next save to re-assert (recordBagLineage is a diff, so
+    // re-running it is free).
+    const lineErr = await recordBagLineage(db, sid, lineageForSession({
+      sectionId, sessionId: sid,
+      parentSerials: (debag as any[]).map(r => r.bag_serial_no),
+      childSerials:  (bag as any[]).map(r => r.bag_serial_no),
+      operatorId: verifiedOp?.user_id ?? user?.id ?? null,
+    }))
+    if (lineErr) console.error('bag lineage write failed', lineErr)
+
     // Same failure class as the input rows above: prod_bagging has emptied out
     // on production before with the capture screen showing no sign of it.
     setRowWriteError(rowErrors.length ? rowErrors.join(' · ') : null)
@@ -2426,6 +2447,7 @@ function CaptureScreen() {
                         genSerial={genSerial}
                         operatorId={verifiedOp?.user_id ?? user?.id ?? null}
                         date={dateParam}
+                        sessionId={sessionId}
                       />
                     : isBlenderSection(sectionId)
                     ? <BlenderCapture
@@ -2439,6 +2461,7 @@ function CaptureScreen() {
                         genSerial={genSerial}
                         operatorId={verifiedOp?.user_id ?? user?.id ?? null}
                         date={dateParam}
+                        sessionId={sessionId}
                       />
                     : sectionId === 'granule'
                     ? <GranuleCapture
@@ -2468,6 +2491,7 @@ function CaptureScreen() {
                         onChange={updateActiveData}
                         genSerial={genSerial}
                         operatorId={verifiedOp?.user_id ?? user?.id ?? null}
+                        sessionId={sessionId}
                       />
                     : <SievingCapture
                         key={active.id}

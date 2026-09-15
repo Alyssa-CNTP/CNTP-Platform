@@ -25,6 +25,7 @@ import { workCentreFor } from '@/lib/core/serials'
 import { allocateBagSerial } from '@/lib/production/serial-allocator'
 import { legacyBlendSerial } from '@/lib/production/serial-legacy'
 import { usesDbSerials } from '@/lib/config/flags'
+import { blenderProductType } from '@/lib/core/blend-code'
 export { blenderTotals }
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -558,7 +559,7 @@ function OutputRow({ b, locked, onSetSecured, onRemove, onTag }: {
 // ── Main component ────────────────────────────────────────────────────────────
 
 export function BlenderCapture({
-  sectionId, assignment, variantWord, locked, value, onChange, genSerial, operatorId, date,
+  sectionId, assignment, variantWord, locked, value, onChange, genSerial, operatorId, date, sessionId,
 }: {
   sectionId: string
   assignment: ShiftAssignment | null
@@ -569,6 +570,14 @@ export function BlenderCapture({
   genSerial: () => string
   operatorId?: string | null
   date: string
+  /**
+   * The capture session consuming these bags. Passed to markBagConsumed so
+   * `bag_tags.consumed_at_session` and `scan_events.session_id` are actually
+   * filled — every call site used to hardcode null, which is what left the
+   * genealogy chain with no way to tie a consumed bag to the bags produced
+   * alongside it. Nullable because a brand-new record has no session row yet.
+   */
+  sessionId?: string | null
 }) {
   const [tab, setTab] = useState<'debag' | 'bag'>('debag')
   // One "+ Add debagging bag" action opens this instead of each group having
@@ -717,7 +726,7 @@ export function BlenderCapture({
           location_updated_at: t,
         } as any, { onConflict: 'serial_number' }).catch(() => {})
       }
-      markBagConsumed(finalRow.serial, sectionId, null, n(finalRow.weight) || undefined, operatorId ?? null)
+      markBagConsumed(finalRow.serial, sectionId, sessionId ?? null, n(finalRow.weight) || undefined, operatorId ?? null)
     }
     setBagModal(null)
   }
@@ -791,7 +800,7 @@ export function BlenderCapture({
     // audit-trail miss is a lesser problem than an unfindable bag).
     const { error: tagErr } = await getDb().schema('production').from('bag_tags').upsert({
       serial_number: serial, section_id: sectionId, session_id: null,
-      product_type: bomId ? `Blend ${bomId}` : 'Blended Batch', variant: variantForDb(variantWord),
+      product_type: blenderProductType(bomId), variant: variantForDb(variantWord),
       weight_kg: n(weight), lot_number: lot,
       acumatica_id: bomId || null, status: 'in_stock', consumed: false, printed_at: now,
       is_open: isOpenBagWeight(n(weight)),
@@ -831,7 +840,7 @@ export function BlenderCapture({
       const b = value.outputs.find(o => o.id === id)
       if (b) {
         printLabelAuto({
-          id: b.id, serial_number: b.serial, product_type: bomId ? `Blend ${bomId}` : 'Blended Batch',
+          id: b.id, serial_number: b.serial, product_type: blenderProductType(bomId),
           variant: variantShort, grade: 'A', weight_kg: n(b.weight), lot_number: b.lot ?? assignment?.lot_number ?? '',
           section_id: sectionId, section_name: SECTION_CONFIG[sectionId]?.name ?? sectionId,
           created_at: b.logged_at ?? nowISO(), printed: true,

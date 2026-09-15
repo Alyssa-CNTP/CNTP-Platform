@@ -2,6 +2,91 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-15 — Alyssa (Bag record: batch identity and serial identity, and the chain between sections)
+
+**Files changed:** `app/(app)/tags/page.tsx`, `components/production/BagSerialIdentity.tsx` (new), `components/shared/Explain.tsx` (new), `components/production/BatchConsolidation.tsx`, `lib/core/blend-code.ts` (new), `lib/core/blend-code.test.ts` (new), `lib/core/capture-rows/index.ts`, `lib/core/capture-rows/capture-rows.test.ts`, `lib/production/bag-lineage.ts` (new), `lib/production/bag-lineage.test.ts` (new), `lib/production/scan-utils.ts`, `app/(app)/production/capture/[section]/page.tsx`, `components/production/capture/{Blender,Refining,Granule,Pasteuriser}Capture.tsx`, `components/production/capture/CaptureOverview.tsx`, `app/api/production/live/bag/[serial]/route.ts`, `supabase/migrations/20260915_003_bag_lineage.sql` (new)
+
+Two complaints, one root: Blender bags did not read as proper bags in Bag Tracking, and
+nothing linked a bag to the section before it.
+
+**The record now opens onto two tabs.** It used to open onto a details grid with a button
+out to `/traceability`, which meant the batch view was somewhere an operator had to know to
+go. **Batch identity** mounts the same `BatchConsolidation` surface `/traceability` mounts —
+one component, so the two screens cannot drift into disagreeing about a batch. **Unique
+serial** is this physical bag: its own bulk density and leaf shade, the in-process run that
+was on the line when it was filled and that run's violations, Granule Line samples taken
+against it, what it was made from, what was made from it, and its events. The modal widened
+2xl → 5xl to hold it. The genealogy chain is walkable — tapping a parent or child opens that
+bag, fetching it if it is not in the loaded list (a parent usually sits in another section).
+
+**The chain between sections is now recorded rather than re-derived.** The old genealogy
+block joined `bag_tags.session_id` against `scan_events.session_id` for `debagging_in`, and
+both are always null: every capture screen writes the tag with `session_id: null` (a tag
+outlives its session) and all eight `markBagConsumed()` call sites passed `sessionId = null`.
+Measured on staging: 9 `debagging_in` events, 0 with a session; 10 consumed bags, 0 with a
+consuming session. So the block could never populate, however the bag was entered. The
+session is now threaded through from all five capture screens, and
+`production.bag_lineage` (migration `20260915_003`) records `(child, parent)` links
+directly — appended at session save and on every bag-to-bag transfer, voided never deleted.
+It keeps the two kinds of parentage apart deliberately: a transfer is exact ("40 kg came out
+of that bag"), while line consumption is only true at session granularity, because on a
+continuous line you cannot say which input bag became which output bag. The write is a
+read-then-insert diff rather than an upsert — the unique index is an expression index a
+column-list `ON CONFLICT` cannot name, and resolving an arbiter through PostgREST's cached
+metadata is what emptied Sieving Tower's bagging rows for a day.
+
+**A hand-typed input bag keeps its serial.** `buildDebagRows` nulled `bag_serial_no`
+whenever `inputMode` was `'manual'`, to dodge an FK failure against `bag_tags`. That column
+is the only thing joining a consumed bag to the session that consumed it, and the FK worry
+is stale twice over: the capture screens already register a manual bag in `bag_tags` before
+`persist()` runs, and `persist()` re-checks every claimed serial against `bag_tags` and
+demotes the genuinely-untagged ones to `notes` itself. Scanned bags were never affected —
+this restores the typed ones, which Refining 2 relies on for bought-in material. Sieving
+still nulls it unconditionally, correctly: farm bags have no upstream serial.
+
+**Blender bags are named the way the floor names them.** `product_type` was
+`Blend 25SGNAT26C-1` — the packed BOM id, which nobody uses. `lib/core/blend-code.ts` parses
+it into `SG-NAT26-1`: strip the range prefix (`25`, `25BL`), take the blend type from a
+configured list (longest first, so `SFC` beats `SC`/`SE`), keep digits welded to the type
+(`SFC30`, `SG14` are different blends, not different customers), and strip the trailing
+variant — but only `O`/`C`/`RO`/`RC`, because the letter before them is a **grade**, and
+treating `BO` as a variant would rename `25SE40F60CBO` from `F60CB` to `F60C`. A run suffix
+stays (`25SGNAT26C` and `25SGNAT26C-1` are two BOMs). An unrecognised type comes back
+verbatim with `configured: false` rather than a guessed hyphen — the same contract
+`resolveTypeCode` has, and for the same reason: once it is printed on a bag, a guessed name
+is indistinguishable from a real one. 36 of the 40 live blend codes parse; the other 4 are
+flagged, not invented. The variant is untouched on the label — it renders from `bag.variant`
+in its own corner badge, independent of the product name.
+
+**Every calculated figure on the batch tab now says how it was calculated.** A new
+`Explain` info button sits beside yield, output, input, bulk density, leaf shade, QC, the
+output mix and the reconciliation variance columns, giving the actual derivation — including
+the parts most often mistaken for bugs: output excludes bucket-elevator carry-over because
+that is work in progress; yield counts streams B+C+D and not A; the ±15 kg reconciliation
+flag is not the ±1% mass-balance tolerance. Deliberately a popover, not a `title` attribute,
+which does not appear on the floor's tablets.
+
+**Two dead queries found in passing, both failing silently.** The record's Quality block
+queried `pasteuriser_runs`, `lab_results` and `raw_material_entries` through `getDb()`, which
+is pinned to the `production` schema — all three 404 and the `catch` swallowed it, so the
+block always read "no quality records" (the real tables are `qms.quality_records` and
+`qms.lab_results`). And `/api/production/live/bag/[serial]` selected `bag_tags.qc_grade`, a
+column that does not exist, so it answered `found: false` for every bag; it also
+destructured `params` synchronously, which Next 16 route handlers deliver as a Promise.
+
+**Gates:** `lint:boundaries` clean, 1250 unit tests pass, `lint:hooks` clean, build green,
+typecheck 30 → 28 (baseline 34).
+
+**Not yet done — two manual steps:**
+- **Migration `20260915_003_bag_lineage.sql` is not applied.** Run it in the staging SQL
+  editor. Until then `v_bag_lineage` is absent and the chain reads empty rather than erroring.
+- **`NEXT_PUBLIC_FF_DB_SERIAL_ALLOCATION` is not set**, so the Blender still mints legacy
+  serials (`25SGNAT26C-1-1-20`) rather than `BL-{BLEND}-{DDMMYYYY}-{n}-{NNN}`. Setting it to
+  include `blender,smallblender` in the staging environment is what switches that on; the
+  counter table is already provisioned.
+
+---
+
 ## 2026-09-15 — Gustav (A warehouse site IS the take-in station)
 
 **Files changed:** `components/layout/Sidebar.tsx`, `app/(app)/take-in/layout.tsx`, `app/(app)/take-in/page.tsx`, `app/(app)/take-in/site/[code]/layout.tsx` (new), `app/(app)/take-in/site/[code]/page.tsx` (new), the five chain screens moved under `site/[code]/`, `app/(app)/notebooks/site/[code]/page.tsx`, `lib/takein/db.ts`, `components/takein/SiteTakeInTabs.tsx` (removed)

@@ -499,7 +499,7 @@ function OutputWeightGroup({
 // ── Main component ────────────────────────────────────────────────────────────
 
 export function RefiningCapture({
-  sectionId, assignment, variantWord, locked, value, onChange, genSerial, operatorId, date,
+  sectionId, assignment, variantWord, locked, value, onChange, genSerial, operatorId, date, sessionId,
 }: {
   sectionId: string
   assignment: ShiftAssignment | null
@@ -509,6 +509,8 @@ export function RefiningCapture({
   onChange: (d: RefiningData) => void
   genSerial: () => string
   operatorId?: string | null
+  /** The consuming session — see the note on BlenderCapture's sessionId. */
+  sessionId?: string | null
   // The SESSION's date (YYYY-MM-DD), never the device clock. The afternoon
   // shift runs to 01h00, so wall-clock time would roll the serial's date stem
   // to tomorrow mid-run and restart the sequence inside one production day.
@@ -575,7 +577,7 @@ export function RefiningCapture({
           location_updated_at: t,
         } as any, { onConflict: 'serial_number' }).catch(() => {})
       }
-      markBagConsumed(row.serial, sectionId, null, n(row.weight) || undefined, operatorId ?? null)
+      markBagConsumed(row.serial, sectionId, sessionId ?? null, n(row.weight) || undefined, operatorId ?? null)
     }
   }
 
@@ -607,7 +609,7 @@ export function RefiningCapture({
       deliveryDate: bagDate, inputMode: 'system', secured: true, logged_at: t,
     }
     patch({ inputs: [...locked_, row] })
-    markBagConsumed(bag.serial_number, sectionId, null, bag.weight_kg ?? undefined, operatorId ?? null)
+    markBagConsumed(bag.serial_number, sectionId, sessionId ?? null, bag.weight_kg ?? undefined, operatorId ?? null)
     setShowSystemPick(false)
   }
 
@@ -636,7 +638,7 @@ export function RefiningCapture({
       deliveryDate: bagDate, inputMode: 'scan', secured: true, logged_at: t,
     }
     patch({ inputs: [...locked_, row] })
-    markBagConsumed(tag.serial_number, sectionId, null, n(row.weight) || undefined, operatorId ?? null)
+    markBagConsumed(tag.serial_number, sectionId, sessionId ?? null, n(row.weight) || undefined, operatorId ?? null)
     setScanModal(null); setScanSerial('')
   }
 

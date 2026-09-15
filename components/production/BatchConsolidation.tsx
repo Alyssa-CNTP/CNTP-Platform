@@ -14,6 +14,7 @@ import {
   Save, Loader2, ChevronDown, ChevronRight, Layers,
 } from 'lucide-react'
 import { sectionMeta } from '@/lib/production/capture-config'
+import Explain from '@/components/shared/Explain'
 
 const C = { brand: '#1A3A0E', accent: '#5A8A2A', azure: '#2A7CB8', warn: '#B85C0A', err: '#B81C1C', ok: '#1A7A3C', gray: '#96A88A' }
 const TOL_KG = 15
@@ -30,11 +31,18 @@ interface BatchResp {
 }
 interface ReconLine { lineKey: string; lineLabel: string; unit: string; systemValue: number | null; paperworkValue: number | null; acumaticaValue: number | null; note?: string | null }
 
-function KpiTile({ label, value, icon: Icon, tone }: { label: string; value: string; icon: typeof Scale; tone: 'ok' | 'warn' | 'err' | 'info' }) {
+function KpiTile({ label, value, icon: Icon, tone, explain }: {
+  label: string; value: string; icon: typeof Scale; tone: 'ok' | 'warn' | 'err' | 'info'
+  /** How this figure was derived — see components/shared/Explain. */
+  explain?: React.ReactNode
+}) {
   const accent = { ok: C.ok, warn: C.warn, err: C.err, info: C.azure }[tone]
   return (
-    <div className="rounded-xl border border-surface-rule p-3" style={{ borderLeft: `3px solid ${accent}` }}>
-      <div className="flex items-center justify-between"><Icon size={13} style={{ color: accent }} /></div>
+    <div className="rounded-xl border border-surface-rule p-3 relative" style={{ borderLeft: `3px solid ${accent}` }}>
+      <div className="flex items-center justify-between">
+        <Icon size={13} style={{ color: accent }} />
+        {explain && <Explain label={label.toLowerCase()} align="right">{explain}</Explain>}
+      </div>
       <div className="text-[19px] leading-none font-semibold mt-1.5" style={{ color: accent }}>{value}</div>
       <div className="text-[10px] uppercase tracking-wide text-text-muted mt-1">{label}</div>
     </div>
@@ -162,18 +170,50 @@ export default function BatchConsolidation({ batchKey }: { batchKey: string }) {
 
       {/* KPI row */}
       <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
-        <KpiTile label="Yield" tone={(b.yieldPct ?? 0) >= 70 ? 'ok' : 'warn'} value={b.yieldPct != null ? `${b.yieldPct}%` : '—'} icon={Percent} />
-        <KpiTile label="Output" tone="info" value={kg(b.totalOutputKg)} icon={Boxes} />
-        <KpiTile label="Input" tone="info" value={kg(b.totalInputKg)} icon={Scale} />
-        <KpiTile label="Bulk density" tone="info" value={q.bulkDensity != null ? String(q.bulkDensity) : '—'} icon={FlaskConical} />
-        <KpiTile label="Leaf shade" tone="info" value={q.leafShade || '—'} icon={FlaskConical} />
+        <KpiTile label="Yield" tone={(b.yieldPct ?? 0) >= 70 ? 'ok' : 'warn'} value={b.yieldPct != null ? `${b.yieldPct}%` : '—'} icon={Percent}
+          explain={<>
+            <p><strong>Total output ÷ total input × 100</strong>, summed across every capture session on this batch, then rounded to one decimal.</p>
+            <p>Output counts the graded product streams (<code>B + C + D</code> on the mass balance), not stream A — A is the run&apos;s own re-circulated material, and counting it would let a batch appear to yield more than it was fed.</p>
+            <p>Derived in SQL by <code>production.v_session_yield</code>, so this screen, the analytics report and the production order cannot disagree.</p>
+          </>} />
+        <KpiTile label="Output" tone="info" value={kg(b.totalOutputKg)} icon={Boxes}
+          explain={<>
+            <p>The sum of every output bag captured against this batch, across all its sessions.</p>
+            <p><strong>Excludes material left in the bucket elevator for tomorrow</strong> — that is work in progress, reported separately as carry-over, not as product. Including it is what used to make every afternoon shift look short.</p>
+            <p>Half-bag top-ups count only the <strong>increment</strong> added, never the whole bag: the bag may have been started on an earlier day and already counted then.</p>
+          </>} />
+        <KpiTile label="Input" tone="info" value={kg(b.totalInputKg)} icon={Scale}
+          explain={<>
+            <p>Every bag debagged into this batch&apos;s sessions, at its nett weight, plus machine spillage and bucket-elevator carry-over consumed from a previous day.</p>
+            <p>Carry-over is matched on <strong>variant family only</strong> — conventional and organic are separate physical pools and are never pooled together.</p>
+          </>} />
+        <KpiTile label="Bulk density" tone="info" value={q.bulkDensity != null ? String(q.bulkDensity) : '—'} icon={FlaskConical}
+          explain={<>
+            <p>The <strong>most recent</strong> final QC reading for this lot — not an average across the run.</p>
+            <p>It comes from Quality&apos;s sieving runs (<code>qms.sd_runs</code>), matched to this batch by normalised lot number, so <code>GS-0098</code>, <code>gs 0098</code> and <code>GS_0098</code> all resolve to one batch.</p>
+            <p>An individual bag can differ from this. For one bag&apos;s own reading, open the <strong>Unique serial</strong> tab.</p>
+          </>} />
+        <KpiTile label="Leaf shade" tone="info" value={q.leafShade || '—'} icon={FlaskConical}
+          explain={<>
+            <p>The most recent final-QC leaf shade recorded against this lot, on the same latest-value basis as bulk density.</p>
+            <p>Per-bag shade lives on the <strong>Unique serial</strong> tab — a lot runs for hours and its shade moves within one batch.</p>
+          </>} />
         <KpiTile label="QC" tone={q.hasQuality ? (q.allPassed === false ? 'err' : 'ok') : 'warn'}
-          value={q.hasQuality ? (q.allPassed === false ? 'Fail' : 'Pass') : 'No data'} icon={CheckCircle2} />
+          value={q.hasQuality ? (q.allPassed === false ? 'Fail' : 'Pass') : 'No data'} icon={CheckCircle2}
+          explain={<>
+            <p><strong>Fail</strong> if <em>any</em> QC run on this lot failed; <strong>Pass</strong> only when every run passed.</p>
+            <p><strong>No data</strong> means no quality record matched this lot — usually a lot typed differently on the Quality side, not an untested batch. Worth checking the spelling before treating it as missing.</p>
+            <p>Across {q.sdRunCount} sieving run{q.sdRunCount === 1 ? '' : 's'} for this batch.</p>
+          </>} />
       </div>
 
       {/* Output mix + Quality/Machine */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <Section title="Output mix" icon={Layers}>
+        <Section title="Output mix" icon={Layers}
+          right={<Explain label="the output mix" align="right">
+            <p>Each product&apos;s kg as a share of this batch&apos;s <strong>total captured output</strong>, not of its input — so the shares always add to 100% whatever the yield was.</p>
+            <p>Summed per product across every session on the batch, from <code>production.v_output_stream</code>.</p>
+          </Explain>}>
           {mix.length ? (
             <div className="space-y-1.5">
               {mix.map(x => (
@@ -213,7 +253,14 @@ export default function BatchConsolidation({ batchKey }: { batchKey: string }) {
             {saving ? <Loader2 size={13} className="animate-spin" /> : <Save size={13} />} {saved ? 'Saved' : 'Save'}
           </button>
         }>
-        <p className="text-[11px] text-text-muted mb-2">Type the paperwork and Acumatica figures; variance vs the system figure flags anything beyond ±{TOL_KG} kg. Acumatica auto-fills once the production-order GI sync is built.</p>
+        <p className="text-[11px] text-text-muted mb-2 flex items-start gap-1.5">
+          <span>Type the paperwork and Acumatica figures; variance vs the system figure flags anything beyond ±{TOL_KG} kg. Acumatica auto-fills once the production-order GI sync is built.</span>
+          <Explain label="the variance columns">
+            <p><strong>Δ paper</strong> = paperwork − system. <strong>Δ acu</strong> = Acumatica − system. A positive number means that source is higher than what was captured.</p>
+            <p>Flagged amber beyond <strong>±{TOL_KG} kg</strong>. This is a <em>reconciliation</em> threshold for comparing three independent records of the same batch — it is not the mass-balance tolerance, which is ±1% of a session&apos;s own input and is checked per session, not per batch.</p>
+            <p>The system column is read-only: it is what capture recorded. The other two are typed and stored as an audit record of the comparison.</p>
+          </Explain>
+        </p>
         <div className="overflow-x-auto">
           <table className="w-full text-[12px]">
             <thead>

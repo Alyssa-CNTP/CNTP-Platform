@@ -2,6 +2,7 @@
 import { useEffect, useRef, useCallback } from 'react'
 import * as React from 'react'
 import { getDb } from '@/lib/supabase/db'
+import { recordBagLineage } from '@/lib/production/bag-lineage'
 
 // ── sanitizeSerial — keystroke-level cleanup for every "scan or type serial"
 // input across capture. Real serials in this app are digits/dashes (section
@@ -244,6 +245,28 @@ export async function transferBagWeight(
       operator_id: operatorId ?? null, scanned_at: now,
     },
   ] as any)
+
+  // A transfer is the one kind of parentage that is EXACT: this many kg came
+  // out of that specific bag. Recorded separately from the session-granular
+  // 'consumed_into' links a capture save writes, so the bag record can tell
+  // "drawn from bag X" apart from "made during a shift that also consumed bag
+  // X". Best-effort for the same reason the scan events above are — the weight
+  // has already moved, and losing the link is a reporting problem, not a stock
+  // one.
+  await recordTransferLineage(targetSerial, sourceSerial, sectionId, sessionId, amountKg, operatorId)
+}
+
+/** Shared by the two transfer paths — see the note at each call site. */
+async function recordTransferLineage(
+  targetSerial: string, sourceSerial: string, sectionId: string,
+  sessionId: string | null, amountKg: number, operatorId?: string | null,
+): Promise<void> {
+  const err = await recordBagLineage(getDb(), sessionId || '', [{
+    childSerial: targetSerial, parentSerial: sourceSerial,
+    sectionId, sessionId: sessionId || null,
+    relation: 'transferred_from', parentKg: amountKg, operatorId: operatorId ?? null,
+  }])
+  if (err) console.warn('transfer lineage not recorded', targetSerial, err)
 }
 
 // ── Standalone createBagFromTransfer — a re-bag whose target is a BRAND ─────
@@ -321,6 +344,10 @@ export async function createBagFromTransfer(
       operator_id: operatorId ?? null, scanned_at: now,
     },
   ] as any)
+
+  // Exact parentage, as above — and more load-bearing here, because this bag
+  // is BRAND new and a transfer is the only thing it was ever made from.
+  await recordTransferLineage(target.serialNumber, sourceSerial, sectionId, sessionId, amountKg, operatorId)
 }
 
 // ── addFreshWeightToBag — the common Half-bag Top-up case: today's own

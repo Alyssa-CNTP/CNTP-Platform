@@ -11,6 +11,7 @@ import { useState, useMemo, useEffect } from 'react'
 import { Printer, Copy, CheckCircle2, AlertTriangle, Package, PackageCheck,
   ChevronDown, ChevronRight, Filter, X, Scale, Hash } from 'lucide-react'
 import { fetchTopUpEventsForSerials, fetchFreshTopUpsForSection, type TopUpEvent, type FreshTopUpRow } from '@/lib/production/scan-utils'
+import { blenderProductType } from '@/lib/core/blend-code'
 import { type SievingData } from '@/components/production/capture/SievingCapture'
 import { type RefiningData } from '@/components/production/capture/RefiningCapture'
 import { dustProductType, type GranuleData } from '@/components/production/capture/GranuleCapture'
@@ -168,14 +169,17 @@ function buildProductGroups(prods: Production[], kind: SectionKind): ProductGrou
   prods.forEach((p) => {
     const d = p.data as any
     if (kind === 'blender') {
-      // BlenderData: the output is the blend itself — labeled "Blend {bomId}",
-      // the same convention BlenderCapture uses when it upserts these bags to
-      // bag_tags. productType/destination aren't per-bag on a BlenderOutputBag
+      // BlenderData: the output is the blend itself, named the way the floor
+      // names it — SFC-KUN25, not the packed BOM id 25SFCKUN25C. One helper
+      // (blenderProductType) is used here AND where BlenderCapture upserts
+      // these bags to bag_tags, so the overview, the label and the bag record
+      // cannot end up with three spellings of one bag.
+      // productType/destination aren't per-bag on a BlenderOutputBag
       // (unlike every other section's output shape) so those are supplied here;
       // `lot` IS per-bag (resolved once at creation — see autoLot() in
       // BlenderCapture) — falls back to the blend code for bags logged before
       // that field existed.
-      const label = d.bomId ? `Blend ${d.bomId}` : 'Blended Batch'
+      const label = blenderProductType(d.bomId)
       ;(d.outputs ?? []).forEach((b: any) => addBag(p, {
         productType: label, weight: b.weight, serial: b.serial,
         batch: b.lot || d.bomId || undefined, destination: p.variant, logged_at: b.logged_at,
