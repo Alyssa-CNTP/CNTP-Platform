@@ -6,20 +6,35 @@
 
 export type DepotCode = string
 
-export interface Depot {
-  id:                    string
-  code:                  DepotCode
+/** A receiving site, as the whole platform knows it.
+ *
+ *  THE REGISTRY IS `notebooks.locations` — the same five sites that drive the
+ *  Warehousing tabs (BH, GD, GT, VD, VT). Take-in adds only its own per-site
+ *  configuration on top, through the `takein.sites` view. There is deliberately
+ *  no second site list: an earlier version of this module created one in
+ *  `logistics.warehouses` and immediately drifted, which is how two of the five
+ *  ended up recorded as "to be named" when they were the Teeverwerkers. */
+export interface Site {
+  code:                  string
   name:                  string
-  type:                  'raw' | 'finished' | 'export' | 'mixed'
-  address:               string | null
+  short_name:            string | null
+  sort_order:            number
   active:                boolean
   takes_farmer_delivery: boolean
+  /** Site code and batch series are DIFFERENT THINGS and both are real: the
+   *  site GD mints the `GS-` series, the site VD mints `MAT-`. That is what the
+   *  signed Afleweringsbewyse show, so the series is a property of the site
+   *  rather than a second name for it. */
   batch_prefix:          string | null
   batch_seq:             number
   grn_prefix:            string | null
   grn_seq:               number
   doc_prefix:            string | null
   doc_seq:               number
+  /** True while the series is a placeholder rather than the site's own paper
+   *  book. A guessed series printed on a bag is indistinguishable from a real
+   *  one, so the screens say so instead of letting it pass. */
+  series_provisional:    boolean
 }
 
 export interface Producer {

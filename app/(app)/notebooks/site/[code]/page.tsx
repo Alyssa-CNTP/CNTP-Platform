@@ -13,6 +13,9 @@ import * as Tabs from '@radix-ui/react-tabs'
 import { ArrowLeft, Plus, BookOpen, Search, Loader2 } from 'lucide-react'
 import { useAuth } from '@/lib/auth/context'
 import NotesTable, { type NoteRow } from '@/components/notebooks/NotesTable'
+import SiteTakeInTabs from '@/components/takein/SiteTakeInTabs'
+import { loadSites, seesSite } from '@/lib/takein/db'
+import type { Site } from '@/lib/takein/types'
 import {
   type DocType, type DocStatus, type NotebookLocation,
   DOC_TYPES, DOC_TYPE_LABELS, STATUS_LABELS,
@@ -21,8 +24,13 @@ import {
 export default function SiteNotebooksPage() {
   const { code: rawCode } = useParams<{ code: string }>()
   const code = rawCode.toUpperCase()
-  const { p } = useAuth()
+  const { p, depotCodes } = useAuth()
   const canCreate = p('can_create_notebook_doc')
+
+  // The farmer intake chain for this site. Absent unless the user holds the
+  // take-in module AND is scoped to this site AND the site takes deliveries —
+  // Blackheath is the consolidated view, farmers do not deliver there.
+  const [takeInSite, setTakeInSite] = useState<Site | null>(null)
 
   const [locations, setLocations] = useState<NotebookLocation[] | null>(null)
   const [docType, setDocType] = useState<DocType>('GRN')
@@ -34,6 +42,21 @@ export default function SiteNotebooksPage() {
   const [total, setTotal]     = useState(0)
   const [loading, setLoading] = useState(true)
   const [error, setError]     = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!p('can_access_takein')) { setTakeInSite(null); return }
+    let live = true
+    loadSites()
+      .then(all => {
+        if (!live) return
+        const s = all.find(x => x.code === code)
+        setTakeInSite(s && s.takes_farmer_delivery && seesSite(depotCodes, code) ? s : null)
+      })
+      // A take-in failure must not take the GRN book down with it: this site's
+      // books are what the page is for, and they do not depend on take-in.
+      .catch(() => { if (live) setTakeInSite(null) })
+    return () => { live = false }
+  }, [code, depotCodes.join(','), p])
 
   useEffect(() => {
     fetch('/api/notebooks/locations')
@@ -104,6 +127,14 @@ export default function SiteNotebooksPage() {
           </Link>
         )}
       </div>
+
+      {takeInSite && (
+        <SiteTakeInTabs
+          code={takeInSite.code}
+          batchPrefix={takeInSite.batch_prefix}
+          seriesProvisional={takeInSite.series_provisional}
+        />
+      )}
 
       <Tabs.Root value={docType} onValueChange={v => setDocType(v as DocType)}>
         <Tabs.List className="flex gap-1.5 mb-4" aria-label="Book">

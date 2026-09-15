@@ -16,10 +16,11 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { useSearchParams } from 'next/navigation'
 import { useAuth } from '@/lib/auth/context'
-import { takeinDb, loadDepots, visibleDepots, errMsg } from '@/lib/takein/db'
+import { takeinDb, loadSites, errMsg, scopedSites } from '@/lib/takein/db'
 import { stageOf, isFinalised, nettKg, type Stage } from '@/lib/core/takein/grading'
-import type { Depot, BatchEvent, LabRow, FrozenFigures, PanelOutcome } from '@/lib/takein/types'
+import type { Site, BatchEvent, LabRow, FrozenFigures, PanelOutcome } from '@/lib/takein/types'
 import { Loader2, AlertTriangle, Search } from 'lucide-react'
 
 interface Doc {
@@ -29,7 +30,7 @@ interface Doc {
   void_category: string | null; void_reason: string | null
 }
 interface Row {
-  id: string; batch_no: string; warehouse_id: string; delivered_on: string
+  id: string; batch_no: string; location_code: string; delivered_on: string
   begin_kg: number | null; end_kg: number | null; bags: number
   weighbridge_no: string | null; producer_lot: string | null; tea_court: string | null
   driver: string | null; vehicle: string | null
@@ -59,7 +60,9 @@ type ShowFilter = 'open' | 'done' | 'void' | 'all'
 export default function HistoryPage() {
   const router = useRouter()
   const { depotCodes } = useAuth()
-  const [depots, setDepots] = useState<Depot[]>([])
+  // Set when this screen was opened from a site's page in Warehousing.
+  const siteParam = useSearchParams().get('site')
+  const [sites, setSites] = useState<Site[]>([])
   const [rows, setRows]     = useState<Row[]>([])
   const [events, setEvents] = useState<BatchEvent[]>([])
   const [q, setQ]           = useState('')
@@ -71,13 +74,13 @@ export default function HistoryPage() {
   const load = useCallback(async () => {
     setLoading(true); setErr('')
     try {
-      const all = await loadDepots()
-      const mine = visibleDepots(all, depotCodes)
-      setDepots(mine)
+      const all = await loadSites()
+      const mine = scopedSites(all, depotCodes, siteParam)
+      setSites(mine)
       if (!mine.length) { setRows([]); return }
       const { data, error } = await takeinDb().from('batches')
         .select(`
-          id, batch_no, warehouse_id, delivered_on, begin_kg, end_kg, bags,
+          id, batch_no, location_code, delivered_on, begin_kg, end_kg, bags,
           weighbridge_no, producer_lot, tea_court, driver, vehicle,
           returned_at, returned_reason, panel_outcome, panel_grade, panel_reason, panel_covered,
           contract:contract_id ( contract_no, variant,
@@ -88,14 +91,14 @@ export default function HistoryPage() {
           lab_results ( source, sieve_json, moisture, density, shade, aroma, colour, taste,
                         agrees, residue_group, pa_group )
         `)
-        .in('warehouse_id', mine.map(d => d.id))
+        .in('location_code', mine.map(d => d.code))
         .order('delivered_on', { ascending: false })
         .limit(1000)
       if (error) throw error
       setRows((data as unknown as Row[]) ?? [])
     } catch (e: unknown) { setErr(errMsg(e, 'Could not load history.')) }
     finally { setLoading(false) }
-  }, [depotCodes.join(',')])
+  }, [depotCodes.join(','), siteParam])
 
   useEffect(() => { void load() }, [load])
 
@@ -165,7 +168,7 @@ export default function HistoryPage() {
         <Kpi label="Open"     value={String(counts.open)}   unit="still need someone" tone={counts.open ? 'warn' : 'ok'} />
         <Kpi label="Finalised" value={String(counts.done)}  unit="paid-ready, rejected or returned" tone="ok" />
         <Kpi label="Voided documents" value={String(counts.voided)} unit="kept, never deleted" tone={counts.voided ? 'warn' : undefined} />
-        <Kpi label="Season"   value={String(counts.total)}  unit={`deliveries at ${depots.map(d => d.code).join(' + ') || '—'}`} />
+        <Kpi label="Season"   value={String(counts.total)}  unit={`deliveries at ${sites.map(d => d.code).join(' + ') || '—'}`} />
       </div>
 
       <section className="rounded-2xl border border-surface-rule bg-surface-card px-4 py-4">
@@ -218,7 +221,7 @@ export default function HistoryPage() {
                     <td className="px-4 py-2.5">
                       <span className="font-mono text-[12px] font-semibold text-text">{r.batch_no}</span>
                       <span className="block font-mono text-[10px] text-text-faint">
-                        {depots.find(d => d.id === r.warehouse_id)?.code}
+                        {sites.find(d => d.code === r.location_code)?.code}
                       </span>
                     </td>
                     <td className="px-4 py-2.5">

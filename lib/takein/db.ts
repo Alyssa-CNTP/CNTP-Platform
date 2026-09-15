@@ -10,17 +10,19 @@
 // view, and farmers do not deliver there.
 
 import { getDb } from '@/lib/supabase/db'
-import type { Depot } from './types'
+import type { Site } from './types'
 
 /** The `takein` schema. The default browser client is locked to `production`. */
 export function takeinDb() {
   return getDb().schema('takein' as never)
 }
 
-/** The shared depot registry lives in `logistics`, so take-in and warehousing
- *  agree on what a depot is rather than keeping two lists. */
-export function depotDb() {
-  return getDb().schema('logistics' as never)
+/** The site registry lives in `notebooks` — the same five sites that drive the
+ *  Warehousing tabs. Take-in reads them through its own `takein.sites` view,
+ *  which joins that registry to the per-site take-in configuration, so there is
+ *  one list of sites on the platform and not two. */
+export function sitesDb() {
+  return takeinDb()
 }
 
 /** A thrown value's message, or `fallback` when it carries none.
@@ -49,11 +51,11 @@ export function errMsg(e: unknown, fallback: string): string {
   return fallback
 }
 
-export async function loadDepots(): Promise<Depot[]> {
-  const { data, error } = await depotDb()
-    .from('warehouses').select('*').eq('active', true).order('code')
+export async function loadSites(): Promise<Site[]> {
+  const { data, error } = await takeinDb()
+    .from('sites').select('*').eq('active', true).order('sort_order')
   if (error) throw error
-  return (data as Depot[]) ?? []
+  return (data as Site[]) ?? []
 }
 
 /**
@@ -65,23 +67,42 @@ export async function loadDepots(): Promise<Depot[]> {
  * likely to be one of those than a depot clerk. A clerk is scoped the moment
  * their account is made, on Users & Access.
  */
-export function visibleDepots(depots: Depot[], userDepotCodes: string[] | null | undefined): Depot[] {
+export function visibleSites(sites: Site[], userDepotCodes: string[] | null | undefined): Site[] {
   // Trimmed, because a whitespace-only entry is noise rather than a depot. Left
   // untrimmed it is truthy, so it counts as a scope, matches no depot code and
   // silently blanks the user's dashboard — which reads exactly like the module
   // being broken rather than like a bad row.
   const codes = (userDepotCodes ?? []).map(c => (c ?? '').trim()).filter(Boolean)
-  if (!codes.length) return depots
-  return depots.filter(d => codes.includes(d.code))
+  if (!codes.length) return sites
+  return sites.filter(d => codes.includes(d.code))
 }
 
-export function seesDepot(userDepotCodes: string[] | null | undefined, code: string): boolean {
-  const codes = (userDepotCodes ?? []).filter(Boolean)
+/**
+ * Narrow a user's visible sites to ONE, when the screen was reached from that
+ * site's page in Warehousing (`?site=GD`).
+ *
+ * It narrows and never widens: a site the user is not scoped to is ignored
+ * rather than granted, so a hand-typed query string cannot reach another
+ * depot's deliveries. An unknown or absent code leaves the scope alone.
+ */
+export function scopedSites(
+  sites: Site[], userDepotCodes: string[] | null | undefined, siteParam?: string | null,
+): Site[] {
+  const allowed = visibleSites(sites, userDepotCodes)
+  const want = (siteParam ?? '').trim().toUpperCase()
+  if (!want) return allowed
+  const one = allowed.filter(s => s.code.toUpperCase() === want)
+  return one.length ? one : allowed
+}
+
+export function seesSite(userDepotCodes: string[] | null | undefined, code: string): boolean {
+  const codes = (userDepotCodes ?? []).map(c => (c ?? '').trim()).filter(Boolean)
   return !codes.length || codes.includes(code)
 }
 
-/** Depots that actually take a farmer delivery — Blackheath does not. */
-export const deliveryDepots = (depots: Depot[]) => depots.filter(d => d.takes_farmer_delivery)
+/** Sites that actually take a farmer delivery — Blackheath does not; it is the
+ *  consolidated view over the other four. */
+export const deliverySites = (sites: Site[]) => sites.filter(d => d.takes_farmer_delivery)
 
 // ════════════════════════════════════════════════════════════════════════════
 // NUMBER ALLOCATION — always through the database
@@ -90,26 +111,26 @@ export const deliveryDepots = (depots: Depot[]) => depots.filter(d => d.takes_fa
 // from prod_bagging (ARCHITECTURE.md §5). These wrap the RPCs so no screen is
 // ever tempted to compute a number itself.
 
-export async function allocateBatchNo(warehouseId: string): Promise<string> {
+export async function allocateBatchNo(locationCode: string): Promise<string> {
   const { data, error } = await getDb()
-    .schema('takein' as never).rpc('next_batch_no', { p_warehouse: warehouseId })
+    .schema('takein' as never).rpc('next_batch_no', { p_location: locationCode })
   if (error) throw error
   return data as string
 }
 
 /** A returned load hands its number back; the next delivery at that depot
  *  takes it, so the sequence on the shelf stays unbroken. */
-export async function releaseBatchNo(warehouseId: string, batchNo: string): Promise<void> {
+export async function releaseBatchNo(locationCode: string, batchNo: string): Promise<void> {
   const { error } = await getDb()
-    .schema('takein' as never).rpc('release_batch_no', { p_warehouse: warehouseId, p_batch_no: batchNo })
+    .schema('takein' as never).rpc('release_batch_no', { p_location: locationCode, p_batch_no: batchNo })
   if (error) throw error
 }
 
 /** GRN and Ontvangsnota numbers are NEVER recycled — they have been printed
  *  and signed, and a second document carrying one could not be told apart. */
-export async function allocateDocNo(warehouseId: string, kind: 'grn' | 'doc'): Promise<string> {
+export async function allocateDocNo(locationCode: string, kind: 'grn' | 'doc'): Promise<string> {
   const { data, error } = await getDb()
-    .schema('takein' as never).rpc('next_doc_no', { p_warehouse: warehouseId, p_kind: kind })
+    .schema('takein' as never).rpc('next_doc_no', { p_location: locationCode, p_kind: kind })
   if (error) throw error
   return data as string
 }

@@ -21,9 +21,10 @@
 
 import type { LabRow, PanelOutcome } from '@/lib/takein/types'
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { useAuth } from '@/lib/auth/context'
-import { takeinDb, loadDepots, visibleDepots, allocateDocNo, logBatchEvent, releaseBatchNo, errMsg } from '@/lib/takein/db'
-import { RECEIVING_CHECKS, type Depot } from '@/lib/takein/types'
+import { takeinDb, loadSites, allocateDocNo, logBatchEvent, releaseBatchNo, errMsg, scopedSites } from '@/lib/takein/db'
+import { RECEIVING_CHECKS, type Site } from '@/lib/takein/types'
 import { grossKg, nettKg, weighbridgeReversed, isFinalised, stageOf } from '@/lib/core/takein/grading'
 import { Loader2, AlertTriangle, Lock, FileText, Undo2, Plus, X } from 'lucide-react'
 
@@ -35,7 +36,7 @@ interface Doc {
   void_category: string | null; void_reason: string | null
 }
 interface Row {
-  id: string; batch_no: string; warehouse_id: string; contract_id: string
+  id: string; batch_no: string; location_code: string; contract_id: string
   delivered_on: string; begin_kg: number | null; end_kg: number | null; bags: number
   weighbridge_no: string | null; driver: string | null; vehicle: string | null
   producer_lot: string | null; tea_court: string | null; harvest_year: number | null
@@ -69,12 +70,14 @@ const LAND_TONE = ['bg-ok-bg text-ok', 'bg-info-bg text-info', 'bg-warn-bg text-
 
 export default function IntakePage() {
   const { p, fullName, user, depotCodes } = useAuth()
+  // Set when this screen was opened from a site's page in Warehousing.
+  const siteParam = useSearchParams().get('site')
   const canCapture = p('can_capture_takein_intake')
   const canVoid    = p('can_void_takein_document')
   const canReturn  = p('can_return_takein_load')
   const actor = { id: user?.id ?? null, name: fullName ?? 'Unknown' }
 
-  const [depots, setDepots] = useState<Depot[]>([])
+  const [sites, setSites] = useState<Site[]>([])
   const [rows, setRows]     = useState<Row[]>([])
   const [selId, setSelId]   = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -85,13 +88,13 @@ export default function IntakePage() {
   const load = useCallback(async () => {
     setLoading(true); setErr('')
     try {
-      const all = await loadDepots()
-      const mine = visibleDepots(all, depotCodes)
-      setDepots(mine)
+      const all = await loadSites()
+      const mine = scopedSites(all, depotCodes, siteParam)
+      setSites(mine)
       if (!mine.length) { setRows([]); return }
       const { data, error } = await takeinDb().from('batches')
         .select(`
-          id, batch_no, warehouse_id, contract_id, delivered_on, begin_kg, end_kg, bags,
+          id, batch_no, location_code, contract_id, delivered_on, begin_kg, end_kg, bags,
           weighbridge_no, driver, vehicle, producer_lot, tea_court, harvest_year,
           checks_json, qc_comment, returned_at, returned_reason,
           panel_outcome, panel_grade, panel_reason, panel_covered,
@@ -103,7 +106,7 @@ export default function IntakePage() {
           lab_results ( source, sieve_json, moisture, density, shade, aroma, colour, taste,
                         agrees, residue_group, pa_group )
         `)
-        .in('warehouse_id', mine.map(d => d.id))
+        .in('location_code', mine.map(d => d.code))
         .order('delivered_on', { ascending: false })
         .limit(300)
       if (error) throw error
@@ -112,7 +115,7 @@ export default function IntakePage() {
       setSelId(cur => cur && list.some(r => r.id === cur) ? cur : (list[0]?.id ?? null))
     } catch (e: unknown) { setErr(errMsg(e, 'Could not load deliveries.')) }
     finally { setLoading(false) }
-  }, [depotCodes.join(',')])
+  }, [depotCodes.join(','), siteParam])
 
   useEffect(() => { void load() }, [load])
 
@@ -128,7 +131,7 @@ export default function IntakePage() {
   }), [rows, selId])
 
   const b = useMemo(() => rows.find(r => r.id === selId) ?? null, [rows, selId])
-  const depot = useMemo(() => depots.find(d => d.id === b?.warehouse_id) ?? null, [depots, b])
+  const site = useMemo(() => sites.find(d => d.code === b?.location_code) ?? null, [sites, b])
 
   const grn      = b?.documents?.find(d => d.kind === 'grn' && !d.voided_at) ?? null
   const voided   = b?.documents?.filter(d => !!d.voided_at) ?? []
@@ -150,10 +153,10 @@ export default function IntakePage() {
   }
 
   async function issueGrn() {
-    if (!b || !depot || !ready) return
+    if (!b || !site || !ready) return
     setBusy(true)
     try {
-      const no = await allocateDocNo(depot.id, 'grn')
+      const no = await allocateDocNo(site.code, 'grn')
       const { error } = await takeinDb().from('documents').insert({
         batch_id: b.id, kind: 'grn', doc_no: no,
         issued_by: user?.id ?? null, issued_by_name: actor.name,
@@ -201,7 +204,7 @@ export default function IntakePage() {
           returned_stage: 'grn', returned_category: category, returned_reason: reason,
         }).eq('id', b.id)
         if (error) throw error
-        if (depot) await releaseBatchNo(depot.id, b.batch_no)
+        if (site) await releaseBatchNo(site.code, b.batch_no)
         await logBatchEvent(b.id, 'load_returned',
           `RETURNED to producer at receiving (${category.replace(/_/g, ' ')}) — ${reason}`
           + ` · batch number ${b.batch_no} released`, actor)
@@ -270,7 +273,7 @@ export default function IntakePage() {
                   <strong>⚑ Returned to the producer.</strong> {b.returned_reason}
                   <div className="mt-1 text-[11px]">
                     The load never became stock. It does not count against {b.contract?.contract_no},
-                    no COA is issued, and batch number {b.batch_no} has been released back to the depot.
+                    no COA is issued, and batch number {b.batch_no} has been released back to the site.
                   </div>
                 </div>
               )}
@@ -395,9 +398,9 @@ export default function IntakePage() {
                       <p className="text-[12px] leading-relaxed text-text-muted">
                         The material is received and weighed <strong className="text-text">now</strong>; the
                         grade is not known for weeks. The GRN is made out on the system and the deliverer
-                        signs it here before leaving. The next number at {depot?.name} is{' '}
+                        signs it here before leaving. The next number at {site?.name} is{' '}
                         <span className="font-mono font-semibold text-text">
-                          {depot?.grn_prefix}{(depot?.grn_seq ?? 0) + 1}
+                          {site?.grn_prefix}{(site?.grn_seq ?? 0) + 1}
                         </span>.
                         {!ready && (
                           <><br /><br /><strong className="text-text">Blocked until:</strong>{' '}
@@ -467,14 +470,14 @@ export default function IntakePage() {
       {dialog && b && (
         <ReasonDialog
           title={dialog.mode === 'void' ? `Void GRN ${grn?.doc_no ?? ''}` : `Return ${b.batch_no} to the producer`}
-          sub={`${depot?.name ?? ''} · ${b.contract?.producer?.name ?? ''}`}
+          sub={`${site?.name ?? ''} · ${b.contract?.producer?.name ?? ''}`}
           body={dialog.mode === 'void'
             ? `This cannot be undone. The GRN is withdrawn and the weighbridge readings unlock.${
                 grn?.signed_at ? ` It has already been signed by ${grn.signed_by} — the producer holds a copy, so tell them.` : ''
-              } ${grn?.doc_no} is NOT reissued; the next GRN takes ${depot?.grn_prefix}${(depot?.grn_seq ?? 0) + 1}.`
+              } ${grn?.doc_no} is NOT reissued; the next GRN takes ${site?.grn_prefix}${(site?.grn_seq ?? 0) + 1}.`
             : `The material goes back on the truck. It is not graded, it never counts against ${b.contract?.contract_no}, and no COA is issued.${
                 grn ? ` GRN ${grn.doc_no} is voided with the same reason.` : ''
-              } Batch number ${b.batch_no} is released and goes to the next delivery at ${depot?.name}.`}
+              } Batch number ${b.batch_no} is released and goes to the next delivery at ${site?.name}.`}
           options={dialog.mode === 'void' ? VOID_REASONS : RETURN_REASONS}
           confirmLabel={dialog.mode === 'void' ? 'Void the GRN' : 'Return the load'}
           busy={busy}
@@ -645,7 +648,7 @@ function SignBox({ disabled, onSign }: { disabled: boolean; onSign: (n: string) 
     <div className="rounded-xl border border-surface-rule bg-surface-raised px-3 py-3">
       <p className="mb-2 text-[12px] text-text-muted">
         The GRN is made out but <strong className="text-text">not yet signed</strong>. The deliverer
-        signs it here, on this device, before leaving the depot.
+        signs it here, on this device, before leaving the site.
       </p>
       <div className="flex flex-wrap items-end gap-2">
         <label className="flex-1">

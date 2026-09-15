@@ -7,14 +7,15 @@
 // rather than a second copy of the rules that can drift from it.
 //
 // A booking becomes a delivery here too — "arrived, open delivery" carries the
-// producer, contract, depot, day and expected load straight onto the batch, so
+// producer, contract, site, day and expected load straight onto the batch, so
 // nobody retypes them at the gate onto the wrong contract.
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { useSearchParams } from 'next/navigation'
 import { useAuth } from '@/lib/auth/context'
-import { takeinDb, loadDepots, visibleDepots, deliveryDepots, allocateBatchNo, logBatchEvent, errMsg } from '@/lib/takein/db'
-import type { Depot, Contract } from '@/lib/takein/types'
+import { takeinDb, loadSites, allocateBatchNo, logBatchEvent, errMsg, deliverySites, scopedSites } from '@/lib/takein/db'
+import type { Site, Contract } from '@/lib/takein/types'
 import { Loader2, AlertTriangle, X, Truck } from 'lucide-react'
 
 // ── the rules, in one place ─────────────────────────────────────────────────
@@ -49,7 +50,7 @@ const sizeOf = (bags: number) =>
   : { hours: 2, label: '2-hour slot', alert: true }
 
 interface Booking {
-  id: string; warehouse_id: string; contract_id: string | null
+  id: string; location_code: string; contract_id: string | null
   booked_date: string; start_hour: number; hours: number; bags: number
   expected_kg: number | null; land_name: string | null; note: string | null
   kind: 'farmer' | 'shipping'; status: string; alert: boolean; batch_id: string | null
@@ -59,12 +60,14 @@ interface Booking {
 export default function SchedulePage() {
   const router = useRouter()
   const { p, fullName, user, depotCodes } = useAuth()
+  // Set when this screen was opened from a site's page in Warehousing.
+  const siteParam = useSearchParams().get('site')
   const mayBook = p('can_book_takein')
   const isMgr   = p('can_override_takein_booking')
   const actor   = { id: user?.id ?? null, name: fullName ?? 'Unknown' }
 
-  const [depots, setDepots]     = useState<Depot[]>([])
-  const [depotId, setDepotId]   = useState('')
+  const [sites, setSites]     = useState<Site[]>([])
+  const [siteCode, setSiteCode] = useState('')
   const [contracts, setContracts] = useState<Contract[]>([])
   const [bookings, setBookings] = useState<Booking[]>([])
   const [week, setWeek]         = useState(() => mondayOf(new Date()))
@@ -76,18 +79,18 @@ export default function SchedulePage() {
   const load = useCallback(async () => {
     setLoading(true); setErr('')
     try {
-      const all = await loadDepots()
-      const mine = deliveryDepots(visibleDepots(all, depotCodes))
-      setDepots(mine)
-      const wh = depotId && mine.some(d => d.id === depotId) ? depotId : (mine[0]?.id ?? '')
-      setDepotId(wh)
+      const all = await loadSites()
+      const mine = deliverySites(scopedSites(all, depotCodes, siteParam))
+      setSites(mine)
+      const wh = siteCode && mine.some(d => d.code === siteCode) ? siteCode : (mine[0]?.code ?? '')
+      setSiteCode(wh)
       if (!wh) { setBookings([]); return }
 
       const db = takeinDb()
       const [{ data: bk, error }, { data: ct }] = await Promise.all([
         db.from('bookings')
           .select('*, contract:contract_id ( contract_no, producer:producer_id ( name ) )')
-          .eq('warehouse_id', wh).neq('status', 'cancelled')
+          .eq('location_code', wh).neq('status', 'cancelled')
           .gte('booked_date', iso(addD(week, -7))).lte('booked_date', iso(addD(week, 13))),
         db.from('contracts').select('*, producer:producer_id ( name )')
           .eq('status', 'released').order('contract_no'),
@@ -97,7 +100,7 @@ export default function SchedulePage() {
       setContracts((ct as unknown as Contract[]) ?? [])
     } catch (e: unknown) { setErr(errMsg(e, 'Could not load the calendar.')) }
     finally { setLoading(false) }
-  }, [depotCodes.join(','), depotId, week.getTime()])
+  }, [depotCodes.join(','), siteParam, siteCode, week.getTime()])
 
   useEffect(() => { void load() }, [load])
 
@@ -147,12 +150,12 @@ export default function SchedulePage() {
     const r: Refusal[] = []
     const add = (kind: string, msg: string) => r.push({ kind, msg })
 
-    if (!isWorkday(ds)) add('closed', 'The depot does not take deliveries at weekends.')
+    if (!isWorkday(ds)) add('closed', 'The site does not take deliveries at weekends.')
     else {
       const ls = dayLastStart(ds), cl = dayClose(ds)
       if (start < BK.open) add('closed', `Slots open at ${hhmm(BK.open)}.`)
       else if (start > ls) add('closed', `Latest start on ${DAY[dow(ds)-1]} is ${hhmm(ls)}.`)
-      else if (start + hours > cl) add('closed', `A ${hours}-hour load from ${hhmm(start)} runs past ${hhmm(cl)} — the depot closes.`)
+      else if (start + hours > cl) add('closed', `A ${hours}-hour load from ${hhmm(start)} runs past ${hhmm(cl)} — the site closes.`)
     }
     if (new Date(`${ds}T${pad(start)}:00:00`).getTime() - now.getTime() < BK.noticeH * 3600e3)
       add('notice', `Bookings need ${BK.noticeH} hours' notice.`)
@@ -179,12 +182,12 @@ export default function SchedulePage() {
     date: string; hour: number; contractId: string; bags: number; kg: number
     land: string; note: string; kind: 'farmer' | 'shipping'; override: string
   }) {
-    if (!depotId) return
+    if (!siteCode) return
     setBusy(true)
     try {
       const s = sizeOf(form.bags)
       const { error } = await takeinDb().from('bookings').insert({
-        warehouse_id: depotId,
+        location_code: siteCode,
         contract_id: form.kind === 'shipping' ? null : form.contractId,
         booked_date: form.date, start_hour: form.hour, hours: s.hours,
         bags: form.bags, expected_kg: form.kg || form.bags * BK.bagNominal,
@@ -204,10 +207,10 @@ export default function SchedulePage() {
     if (!b.contract_id) return
     setBusy(true)
     try {
-      const batchNo = await allocateBatchNo(b.warehouse_id)
+      const batchNo = await allocateBatchNo(b.location_code)
       const db = takeinDb()
       const { data, error } = await db.from('batches').insert({
-        batch_no: batchNo, warehouse_id: b.warehouse_id, contract_id: b.contract_id,
+        batch_no: batchNo, location_code: b.location_code, contract_id: b.contract_id,
         booking_id: b.id, delivered_on: b.booked_date, bags: b.bags,
         harvest_year: new Date(b.booked_date).getFullYear(),
         checks_json: [false, false, false, false, false, false],
@@ -238,9 +241,9 @@ export default function SchedulePage() {
       <Loader2 className="h-4 w-4 animate-spin" /> Loading the calendar…
     </div>
   )
-  if (!depots.length) return (
+  if (!sites.length) return (
     <div className="rounded-2xl border border-surface-rule bg-surface-card px-4 py-8 text-center text-[12px] text-text-muted">
-      No delivery depot is in scope for your account.
+      No delivery site is in scope for your account.
     </div>
   )
 
@@ -263,10 +266,10 @@ export default function SchedulePage() {
             </span>
           </span>
           <div className="flex flex-wrap items-center gap-1.5">
-            {depots.length > 1 && (
-              <select value={depotId} onChange={e => setDepotId(e.target.value)}
+            {sites.length > 1 && (
+              <select value={siteCode} onChange={e => setSiteCode(e.target.value)}
                 className="rounded-lg border border-surface-rule bg-surface-card px-2.5 py-1.5 text-[12px] text-text">
-                {depots.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
+                {sites.map(d => <option key={d.code} value={d.code}>{d.name}</option>)}
               </select>
             )}
             <button onClick={() => setWeek(w => addD(w, -7))} className="rounded-lg border border-surface-rule px-2.5 py-1.5 text-[12px] font-semibold text-text">‹ Prev</button>
@@ -407,7 +410,7 @@ export default function SchedulePage() {
               ))}
               {!bookings.filter(b => days.includes(b.booked_date)).length && (
                 <tr><td colSpan={6} className="px-4 py-8 text-center text-[12px] text-text-muted">
-                  Nothing booked this week at this depot.
+                  Nothing booked this week at this site.
                 </td></tr>
               )}
             </tbody>
@@ -534,13 +537,13 @@ function BookDialog({ slot, contracts, isMgr, busy, check, onCancel, onConfirm }
                 placeholder="e.g. Producer already loaded and on the road"
                 className="w-full rounded-lg border border-surface-rule bg-surface-card px-2.5 py-1.5 text-[13px] text-text" />
               <span className="mt-0.5 block text-[10px] text-text-faint">
-                Recorded on the booking. A closed depot is not something an override can change.
+                Recorded on the booking. A closed site is not something an override can change.
               </span>
             </label>
           )}
           {!v.ok && v.closed && (
             <p className="text-[11px] text-text-muted">
-              The depot is shut at that time, or the slot is already taken — not something an override can change.
+              The site is shut at that time, or the slot is already taken — not something an override can change.
             </p>
           )}
         </div>

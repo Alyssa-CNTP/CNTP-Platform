@@ -126,19 +126,20 @@ from (values
 join takein.contracts c on c.contract_no = v.contract_no;
 
 -- ── a few bookings, so Intake has something to open ─────────────────────────
+-- Sites are notebooks.locations codes: GD Graafwater Depot, VD Vanrhynsdorp
+-- Depot. The batch SERIES those sites mint (GS-, MAT-) is a separate thing.
 -- Sized by the same rule the screen uses: <=30 bags one hour, <=80 two hours,
 -- above that two hours with the manager alert raised.
-insert into takein.bookings (warehouse_id, contract_id, booked_date, start_hour, hours,
+insert into takein.bookings (location_code, contract_id, booked_date, start_hour, hours,
                              bags, expected_kg, land_name, kind, status, alert)
-select w.id, c.id, v.d::date, v.h, v.hrs, v.bags, v.kg, v.land, 'farmer', 'booked', v.alert
+select v.site, c.id, v.d::date, v.h, v.hrs, v.bags, v.kg, v.land, 'farmer', 'booked', v.alert
 from (values
-  ('GS',  'D26-001', current_date + 1, 10, 2, 48,  16800, 'Hetley',      false),
-  ('GS',  'D26-003', current_date + 1, 13, 2, 95,  33250, 'Bo-Kraal',    true ),
-  ('MAT', 'D26-004', current_date + 2, 10, 1, 24,   8400, 'Sandberg Wes',false),
-  ('GS',  'D26-002', current_date + 2, 13, 2, 62,  21700, 'Driehoek Oos',false),
-  ('MAT', 'D26-004', current_date + 7, 10, 2, 74,  25900, 'Sandberg Oos',false)
-) as v(depot, contract_no, d, h, hrs, bags, kg, land, alert)
-join logistics.warehouses w on w.code = v.depot
-join takein.contracts     c on c.contract_no = v.contract_no;
+  ('GD',  'D26-001', current_date + 1, 10, 2, 48,  16800, 'Hetley',      false),
+  ('GD',  'D26-003', current_date + 1, 13, 2, 95,  33250, 'Bo-Kraal',    true ),
+  ('VD', 'D26-004', current_date + 2, 10, 1, 24,   8400, 'Sandberg Wes',false),
+  ('GD',  'D26-002', current_date + 2, 13, 2, 62,  21700, 'Driehoek Oos',false),
+  ('VD', 'D26-004', current_date + 7, 10, 2, 74,  25900, 'Sandberg Oos',false)
+) as v(site, contract_no, d, h, hrs, bags, kg, land, alert)
+join takein.contracts c on c.contract_no = v.contract_no;
 
 commit;

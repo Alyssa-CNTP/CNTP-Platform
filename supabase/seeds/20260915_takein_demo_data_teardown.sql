@@ -5,7 +5,7 @@
 -- results and the audit trail — and resets each depot's counters to 0.
 --
 -- RUN THIS BEFORE THE FIRST LIVE TAKE-IN, then set batch_seq / grn_seq /
--- doc_seq to the last number in each depot's paper book. Leaving demo batches
+-- doc_seq to the last number in each site's paper book. Leaving demo batches
 -- behind would put invented deliveries in Settlement and in the season KPIs.
 --
 -- takein.batch_events has UPDATE and DELETE revoked from `authenticated` on
@@ -36,6 +36,6 @@ delete from takein.contracts  where contract_no    like 'D26-%';
 delete from takein.producers   where acumatica_code like 'V-DEMO%';
 
 delete from takein.released_batch_nos;
-update logistics.warehouses set batch_seq = 0, grn_seq = 0, doc_seq = 0;
+update takein.site_config set batch_seq = 0, grn_seq = 0, doc_seq = 0;
 
 commit;

@@ -8,7 +8,7 @@
 // it independently of the sidebar, and the rand values themselves come from
 // takein.contract_pricing behind row-level security.
 //
-// A user can therefore run an entire depot and still not open this page.
+// A user can therefore run an entire site and still not open this page.
 //
 // EVERY PAID KILOGRAM IS THE KILOGRAM ON THE PRODUCER'S AFLEWERINGSBEWYS. The
 // figure is read from the frozen snapshot on that document, never from the live
@@ -17,14 +17,15 @@
 // raised — payable, but nobody has agreed the weight in writing.
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { useAuth } from '@/lib/auth/context'
-import { takeinDb, loadDepots, visibleDepots, errMsg } from '@/lib/takein/db'
+import { takeinDb, loadSites, errMsg, scopedSites } from '@/lib/takein/db'
 import { stageOf, roundHalfUp } from '@/lib/core/takein/grading'
-import type { Depot, ContractPricing, FrozenFigures, LabRow, PanelOutcome } from '@/lib/takein/types'
+import type { Site, ContractPricing, FrozenFigures, LabRow, PanelOutcome } from '@/lib/takein/types'
 import { Loader2, AlertTriangle, Lock, Banknote } from 'lucide-react'
 
 interface Row {
-  id: string; batch_no: string; warehouse_id: string; contract_id: string
+  id: string; batch_no: string; location_code: string; contract_id: string
   delivered_on: string; begin_kg: number | null; end_kg: number | null; bags: number
   returned_at: string | null
   panel_outcome: PanelOutcome | null; panel_grade: string | null
@@ -37,9 +38,11 @@ interface Row {
 
 export default function SettlementPage() {
   const { p, depotCodes } = useAuth()
+  // Set when this screen was opened from a site's page in Warehousing.
+  const siteParam = useSearchParams().get('site')
   const canSeePrice = p('can_view_contract_pricing')
 
-  const [depots, setDepots] = useState<Depot[]>([])
+  const [sites, setSites] = useState<Site[]>([])
   const [rows, setRows]     = useState<Row[]>([])
   const [pricing, setPricing] = useState<Record<string, ContractPricing>>({})
   const [loading, setLoading] = useState(true)
@@ -48,21 +51,21 @@ export default function SettlementPage() {
   const load = useCallback(async () => {
     setLoading(true); setErr('')
     try {
-      const all = await loadDepots()
-      const mine = visibleDepots(all, depotCodes)
-      setDepots(mine)
+      const all = await loadSites()
+      const mine = scopedSites(all, depotCodes, siteParam)
+      setSites(mine)
       if (!mine.length) { setRows([]); return }
       const db = takeinDb()
       const { data, error } = await db.from('batches')
         .select(`
-          id, batch_no, warehouse_id, contract_id, delivered_on, begin_kg, end_kg, bags,
+          id, batch_no, location_code, contract_id, delivered_on, begin_kg, end_kg, bags,
           returned_at, panel_outcome, panel_grade, panel_reason, panel_covered,
           contract:contract_id ( contract_no, variant, producer:producer_id ( name ) ),
           documents ( kind, doc_no, frozen, voided_at ),
           lab_results ( source, sieve_json, moisture, density, shade, aroma, colour, taste,
                         agrees, residue_group, pa_group )
         `)
-        .in('warehouse_id', mine.map(d => d.id))
+        .in('location_code', mine.map(d => d.code))
         .order('delivered_on', { ascending: false })
         .limit(1000)
       if (error) throw error
@@ -76,7 +79,7 @@ export default function SettlementPage() {
       } else setPricing({})
     } catch (e: unknown) { setErr(errMsg(e, 'Could not load settlement.')) }
     finally { setLoading(false) }
-  }, [depotCodes.join(','), canSeePrice])
+  }, [depotCodes.join(','), siteParam, canSeePrice])
 
   useEffect(() => { void load() }, [load])
 
@@ -140,7 +143,7 @@ export default function SettlementPage() {
         <span>
           <strong>Sensitive.</strong> This page is every producer&rsquo;s money in one table. It carries
           its own permission and the rand values come from a table behind row-level security — someone
-          can run an entire depot and still not open this.
+          can run an entire site and still not open this.
         </span>
       </div>
 

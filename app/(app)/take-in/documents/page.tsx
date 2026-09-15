@@ -20,9 +20,10 @@
 //     Afleweringsbewys: two documents about one delivery, not two receipts.
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { useAuth } from '@/lib/auth/context'
-import { takeinDb, loadDepots, visibleDepots, allocateDocNo, logBatchEvent, errMsg } from '@/lib/takein/db'
-import type { Depot, FrozenFigures, LabRow, PanelOutcome } from '@/lib/takein/types'
+import { takeinDb, loadSites, allocateDocNo, logBatchEvent, errMsg, scopedSites } from '@/lib/takein/db'
+import type { Site, FrozenFigures, LabRow, PanelOutcome } from '@/lib/takein/types'
 import {
   sieveTable, nettKg, grossKg, stageOf, prelimGroup, prelimPanel, panelBinding,
   isFinalised, shadeScore,
@@ -34,7 +35,7 @@ interface Doc {
   frozen: FrozenFigures | null; voided_at: string | null
 }
 interface Row {
-  id: string; batch_no: string; warehouse_id: string; contract_id: string
+  id: string; batch_no: string; location_code: string; contract_id: string
   begin_kg: number | null; end_kg: number | null; bags: number
   returned_at: string | null; returned_reason: string | null
   panel_outcome: PanelOutcome | null; panel_grade: string | null
@@ -54,11 +55,13 @@ type PanelTermRow = { contract_id: string; term_key: string; binding: boolean }
 
 export default function DocumentsPage() {
   const { p, fullName, user, depotCodes } = useAuth()
+  // Set when this screen was opened from a site's page in Warehousing.
+  const siteParam = useSearchParams().get('site')
   const canIssue = p('can_issue_takein_documents')
   const canVoid  = p('can_void_takein_document')
   const actor = { id: user?.id ?? null, name: fullName ?? 'Unknown' }
 
-  const [depots, setDepots] = useState<Depot[]>([])
+  const [sites, setSites] = useState<Site[]>([])
   const [rows, setRows]     = useState<Row[]>([])
   const [terms, setTerms]   = useState<Record<string, Record<string, boolean>>>({})
   const [selId, setSelId]   = useState<string | null>(null)
@@ -70,21 +73,21 @@ export default function DocumentsPage() {
   const load = useCallback(async () => {
     setLoading(true); setErr('')
     try {
-      const all = await loadDepots()
-      const mine = visibleDepots(all, depotCodes)
-      setDepots(mine)
+      const all = await loadSites()
+      const mine = scopedSites(all, depotCodes, siteParam)
+      setSites(mine)
       if (!mine.length) { setRows([]); return }
       const db = takeinDb()
       const { data, error } = await db.from('batches')
         .select(`
-          id, batch_no, warehouse_id, contract_id, begin_kg, end_kg, bags,
+          id, batch_no, location_code, contract_id, begin_kg, end_kg, bags,
           returned_at, returned_reason, panel_outcome, panel_grade, panel_reason, panel_covered,
           contract:contract_id ( contract_no, variant, producer:producer_id ( name ) ),
           documents ( id, kind, doc_no, issued_at, issued_by_name, frozen, voided_at ),
           lab_results ( source, sieve_json, moisture, density, shade, aroma, colour, taste,
                         agrees, residue_group, pa_group, residue_name, residue_level, pa_level )
         `)
-        .in('warehouse_id', mine.map(d => d.id))
+        .in('location_code', mine.map(d => d.code))
         .order('delivered_on', { ascending: false })
         .limit(300)
       if (error) throw error
@@ -98,12 +101,12 @@ export default function DocumentsPage() {
       setTerms(map)
     } catch (e: unknown) { setErr(errMsg(e, 'Could not load documents.')) }
     finally { setLoading(false) }
-  }, [depotCodes.join(',')])
+  }, [depotCodes.join(','), siteParam])
 
   useEffect(() => { void load() }, [load])
 
   const b = useMemo(() => rows.find(r => r.id === selId) ?? null, [rows, selId])
-  const depot = useMemo(() => depots.find(d => d.id === b?.warehouse_id) ?? null, [depots, b])
+  const site = useMemo(() => sites.find(d => d.code === b?.location_code) ?? null, [sites, b])
   const live = (k: string) => b?.documents?.find(d => d.kind === k && !d.voided_at) ?? null
   const grn = live('grn'), afl = live('afleweringsbewys'), coa = live('coa')
 
@@ -138,10 +141,10 @@ export default function DocumentsPage() {
   }
 
   async function issueAfl() {
-    if (!b || !depot || !aflReady) return
+    if (!b || !site || !aflReady) return
     setBusy(true)
     try {
-      const no = await allocateDocNo(depot.id, 'doc')
+      const no = await allocateDocNo(site.code, 'doc')
       const frozen = snapshot()
       const { error } = await takeinDb().from('documents').insert({
         batch_id: b.id, kind: 'afleweringsbewys', doc_no: no,

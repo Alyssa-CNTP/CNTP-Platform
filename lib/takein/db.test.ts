@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { errMsg, visibleDepots } from './db'
+import { errMsg, visibleSites, scopedSites } from './db'
 
 // A PostgrestError as supabase-js actually throws it: a plain object, NOT an
 // Error instance. The original errMsg tested `instanceof Error`, so every one
@@ -44,21 +44,48 @@ describe('errMsg', () => {
 // Empty means EVERY depot. That is what makes Blackheath and Management work
 // without enumerating depots, and it is the rule most likely to be "tidied"
 // into a deny-by-default that silently blanks their dashboard.
-describe('visibleDepots', () => {
-  const depots = [
-    { code: 'GS' }, { code: 'MAT' }, { code: 'BH' },
-  ] as unknown as Parameters<typeof visibleDepots>[0]
+describe('visibleSites', () => {
+  const sites = [
+    { code: 'GD' }, { code: 'VD' }, { code: 'BH' },
+  ] as unknown as Parameters<typeof visibleSites>[0]
 
-  it('shows every depot when the user is scoped to none', () => {
-    expect(visibleDepots(depots, []).map(d => d.code)).toEqual(['GS', 'MAT', 'BH'])
-    expect(visibleDepots(depots, undefined).map(d => d.code)).toEqual(['GS', 'MAT', 'BH'])
+  it('shows every site when the user is scoped to none', () => {
+    expect(visibleSites(sites, []).map((d: { code: string }) => d.code)).toEqual(['GD', 'VD', 'BH'])
+    expect(visibleSites(sites, undefined).map((d: { code: string }) => d.code)).toEqual(['GD', 'VD', 'BH'])
   })
 
   it('narrows to the codes the user holds', () => {
-    expect(visibleDepots(depots, ['GS']).map(d => d.code)).toEqual(['GS'])
+    expect(visibleSites(sites, ['GD']).map((d: { code: string }) => d.code)).toEqual(['GD'])
   })
 
   it('ignores blank codes rather than treating them as a scope', () => {
-    expect(visibleDepots(depots, ['', '  ']).map(d => d.code)).toEqual(['GS', 'MAT', 'BH'])
+    expect(visibleSites(sites, ['', '  ']).map((d: { code: string }) => d.code)).toEqual(['GD', 'VD', 'BH'])
+  })
+})
+
+// Reached from a site's page in Warehousing (`?site=GD`). It must NARROW and
+// never widen: a hand-typed query string is not a grant.
+describe('scopedSites', () => {
+  const sites = [
+    { code: 'GD' }, { code: 'VD' }, { code: 'GT' },
+  ] as unknown as Parameters<typeof scopedSites>[0]
+
+  it('narrows to the requested site', () => {
+    expect(scopedSites(sites, [], 'GD').map((d: { code: string }) => d.code)).toEqual(['GD'])
+  })
+
+  it('ignores case and surrounding space', () => {
+    expect(scopedSites(sites, [], ' gd ').map((d: { code: string }) => d.code)).toEqual(['GD'])
+  })
+
+  it('REFUSES to widen past what the user is scoped to', () => {
+    // A Graafwater clerk hand-typing ?site=VD must not reach Vanrhynsdorp.
+    expect(scopedSites(sites, ['GD'], 'VD').map((d: { code: string }) => d.code)).toEqual(['GD'])
+  })
+
+  it('leaves the scope alone for an absent or unknown code', () => {
+    expect(scopedSites(sites, [], null).map((d: { code: string }) => d.code)).toEqual(['GD', 'VD', 'GT'])
+    expect(scopedSites(sites, [], 'ZZ').map((d: { code: string }) => d.code)).toEqual(['GD', 'VD', 'GT'])
+    expect(scopedSites(sites, [], '').map((d: { code: string }) => d.code)).toEqual(['GD', 'VD', 'GT'])
   })
 })
