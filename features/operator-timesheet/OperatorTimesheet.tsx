@@ -238,8 +238,12 @@ export function OperatorTimesheet({
   // this component first loaded with, so a keystroke in the sign-off name field
   // cannot re-key the sheet mid-shift and orphan every row already written.
   const ledgerScope = useRef<StoppageScope | null>(null)
+  const [noteSaved, setNoteSaved] = useState(false)
   /** The note as last written, so blur only writes when it actually changed. */
   const savedNote = useRef<string>('')
+  /** What is in the note box right now, so the unmount flush is not reading a
+   *  stale closure. */
+  const noteRef = useRef<string>('')
 
   // The identity fields the loader needs, held in a ref rather than named in
   // the load effect's dependency list.
@@ -322,6 +326,7 @@ export function OperatorTimesheet({
         setStoppages(rows)
         setNote(sheet?.notes ?? '')
         savedNote.current = sheet?.notes ?? ''
+        noteRef.current = sheet?.notes ?? ''
         setConfirmed(!!sheet?.confirmed)
         cb.current.onConfirmedChange?.(!!sheet?.confirmed)
 
@@ -384,6 +389,33 @@ export function OperatorTimesheet({
       setSaveError(errMessage(e) ?? 'Could not save that stoppage.')
     }
   }, [])
+
+
+  /**
+   * Save the shift note. One path, used by blur, by the Log button, and by the
+   * unmount flush below — so a note cannot be lost by leaving in a way that
+   * happens not to fire blur, which is how it was being lost.
+   */
+  const commitNote = useCallback(async () => {
+    const s = ledgerScope.current
+    const v = noteRef.current
+    if (!s || locked || confirmed || v === (savedNote.current ?? '')) return
+    try {
+      await saveTimesheetNote(s, v)
+      savedNote.current = v
+      setSaveError(null)
+      setNoteSaved(true)
+      window.setTimeout(() => setNoteSaved(false), 1800)
+    } catch (e) {
+      setSaveError(errMessage(e) ?? 'Could not save your note.')
+    }
+  }, [locked, confirmed])
+
+  // Leaving saves. Switching back to Capture unmounts this panel, and unmount
+  // never fires blur — which is exactly how the note was being lost.
+  const commitNoteRef = useRef(commitNote)
+  commitNoteRef.current = commitNote
+  useEffect(() => () => { void commitNoteRef.current() }, [])
 
   /**
    * Apply an operator edit to one stoppage.
@@ -680,6 +712,7 @@ export function OperatorTimesheet({
 
   const readOnly = locked || confirmed
 
+
   return (
     <div className="space-y-3">
       {/* ── Headline ─────────────────────────────────────────────────────── */}
@@ -968,23 +1001,32 @@ export function OperatorTimesheet({
           shift report and the production order.
         </p>
         <textarea
-          value={note} onChange={e => setNote(e.target.value)} disabled={readOnly} rows={2}
-          // Persisted on blur, not only at confirm. A note that lives in React
-          // state until sign-off is the same failure as the stoppages were:
-          // the operator types it, moves back to Capture, and it is gone.
-          onBlur={async () => {
-            const s = ledgerScope.current
-            if (!s || readOnly || note === (savedNote.current ?? '')) return
-            try {
-              await saveTimesheetNote(s, note)
-              savedNote.current = note
-              setSaveError(null)
-            } catch (e) {
-              setSaveError(errMessage(e) ?? 'Could not save your note.')
-            }
-          }}
+          value={note} onChange={e => { noteRef.current = e.target.value; setNote(e.target.value) }} disabled={readOnly} rows={2}
+          // Saved on blur AND on unmount AND by the button below. The comment
+          // here used to say blur fixed "the operator types it, moves back to
+          // Capture, and it is gone" — it did not, because moving back to
+          // Capture UNMOUNTS this and unmounting never fires blur.
+          onBlur={() => { void commitNote() }}
           placeholder="e.g. Tower ran slow all morning after the belt change…"
           className={`${TEXT} resize-none disabled:bg-stone-50 disabled:text-stone-500`} />
+        {!readOnly && (
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => { void commitNote() }}
+              disabled={note === (savedNote.current ?? '')}
+              className={`px-3 py-1.5 rounded-xl text-[12px] font-medium transition-colors ${
+                note !== (savedNote.current ?? '')
+                  ? 'bg-brand text-white hover:bg-brand-mid'
+                  : noteSaved ? 'bg-ok/10 text-ok' : 'bg-stone-100 text-stone-400 cursor-default'
+              }`}>
+              {note !== (savedNote.current ?? '') ? 'Log note' : noteSaved ? 'Saved' : 'Log note'}
+            </button>
+            {note !== (savedNote.current ?? '') && (
+              <span className="text-[11px] text-text-muted">Not saved yet</span>
+            )}
+          </div>
+        )}
       </div>
 
       {/* ── Confirm ──────────────────────────────────────────────────────── */}
@@ -1051,6 +1093,91 @@ function TimeField({ label, value, onChange, disabled, hint, placeholderNow }: {
       {placeholderNow && (
         <p className="text-[10px] text-text-muted">Left blank = now, set at sign-off.</p>
       )}
+    </div>
+  )
+}
+
+/**
+ * The description on a stoppage, with a button that actually logs it.
+ *
+ * ── What went wrong ────────────────────────────────────────────────────────
+ *
+ * This was a bare uncontrolled input that wrote on BLUR, and the comment on it
+ * conceded the risk: "the only thing at risk is a note that never reaches
+ * blur". Switching tabs on the capture screen UNMOUNTS the timesheet, and
+ * unmounting does not fire blur — so an operator who typed what happened and
+ * then went back to capture lost it. Silently, with the field looking exactly
+ * as it did before they typed.
+ *
+ * ── What is deliberately unchanged ─────────────────────────────────────────
+ *
+ * Still uncontrolled, still keyed on `${id}:${notes}`, still saving on blur.
+ * The original reasoning holds and is not being undone: a controlled input
+ * mirroring `s.notes` into state is the derive-state-from-props trap, and the
+ * key is what lets a note set from elsewhere still land. Nothing about the
+ * ledger, the anchor or the save path moves.
+ *
+ * Three things are ADDED, and only these:
+ *   1. A Log button — an explicit save, so nothing depends on blur happening.
+ *   2. A flush on unmount, so leaving the tab saves instead of discarding.
+ *   3. A brief "Saved" acknowledgement, because a write with no feedback is
+ *      indistinguishable from the loss this fixes.
+ */
+function NoteField({ initial, placeholder, invalid, onSave }: {
+  initial: string
+  placeholder: string
+  invalid: boolean
+  onSave: (v: string) => void
+}) {
+  const ref = useRef<HTMLInputElement | null>(null)
+  const [dirty, setDirty] = useState(false)
+  const [saved, setSaved] = useState(false)
+
+  // Read through a ref so the flush below sees what is in the box RIGHT NOW,
+  // not what a stale closure captured.
+  const latest = useRef(initial)
+  const savedValue = useRef(initial)
+
+  const commit = useCallback(() => {
+    const v = (latest.current ?? '').trim()
+    if (v === savedValue.current) return
+    savedValue.current = v
+    onSave(v)
+    setDirty(false)
+    setSaved(true)
+    window.setTimeout(() => setSaved(false), 1800)
+  }, [onSave])
+
+  // The whole point: unmounting saves. Switching tabs, closing the panel and
+  // navigating away all unmount, and none of them fire blur.
+  const commitRef = useRef(commit)
+  commitRef.current = commit
+  useEffect(() => () => { commitRef.current() }, [])
+
+  return (
+    <div className="flex items-center gap-2">
+      <input
+        ref={ref}
+        type="text"
+        defaultValue={initial}
+        onChange={e => { latest.current = e.target.value; setDirty(e.target.value.trim() !== savedValue.current) }}
+        onBlur={commit}
+        onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); commit(); ref.current?.blur() } }}
+        placeholder={placeholder}
+        className={`${TEXT} ${invalid ? 'border-err' : ''}`} />
+      <button
+        type="button"
+        onClick={commit}
+        disabled={!dirty}
+        className={`shrink-0 px-3 py-2 rounded-xl text-[12px] font-medium transition-colors ${
+          dirty
+            ? 'bg-brand text-white hover:bg-brand-mid'
+            : saved
+              ? 'bg-ok/10 text-ok'
+              : 'bg-stone-100 text-stone-400 cursor-default'
+        }`}>
+        {dirty ? 'Log' : saved ? 'Saved' : 'Log'}
+      </button>
     </div>
   )
 }
@@ -1148,15 +1275,12 @@ function StoppageRow({
           // note, so a note set from elsewhere (logging from a job card) still
           // lands, and typing cannot remount mid-word because `s.notes` does
           // not move until blur.
-          <input
+          <NoteField
             key={`${s.id}:${s.notes ?? ''}`}
-            type="text" defaultValue={s.notes ?? ''}
-            onBlur={e => {
-              const v = e.target.value
-              if (v !== (s.notes ?? '')) onPatch({ notes: v || null })
-            }}
+            initial={s.notes ?? ''}
             placeholder={NOTE_HINT[s.kind] ?? 'What happened?'}
-            className={`${TEXT} ${problem ? 'border-err' : ''}`} />
+            invalid={!!problem}
+            onSave={v => { if (v !== (s.notes ?? '')) onPatch({ notes: v || null }) }} />
         )
       )}
 
