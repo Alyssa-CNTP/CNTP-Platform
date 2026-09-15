@@ -80,6 +80,33 @@ interface LineageRow {
   child_lot:           string | null
 }
 
+/**
+ * A Granule Line sample taken against one bag.
+ *
+ * The Granule Line's QC does not go through qms.sd_runs, so none of it reaches
+ * v_bag_qc_status — that view's product normaliser only knows Fine Leaf,
+ * Coarse Leaf, Indent Sticks and Blocks. Its samples live in
+ * qms.granule_samples instead, keyed on the bag serial, and carry the two
+ * numbers this tab exists to show: moisture and untapped bulk density, per
+ * bag, with that sample's own spec violations.
+ *
+ * Matched on `bulk_bag_serial` OR `bag_serial` — the screen writes whichever
+ * applies to the sample's bag type, and 192 of 199 rows on staging use the
+ * bulk one. Checking only one would silently hide the other.
+ */
+interface GranuleSample {
+  id:               number
+  time_taken:       string | null
+  dryer_no:         string | null
+  bag_type:         string | null
+  moisture:         number | null
+  untapped:         number | null
+  tapped:           number | null
+  bulk_density:     number | null
+  dryer_temp:       number | null
+  spec_violations:  unknown
+}
+
 interface BagQc {
   product:               string | null
   qc_required:           boolean | null
@@ -175,6 +202,7 @@ export default function BagSerialIdentity({ tag, onOpenSerial }: {
   const [parents,  setParents]  = useState<LineageRow[]>([])
   const [children, setChildren] = useState<LineageRow[]>([])
   const [qc,       setQc]       = useState<BagQc | null>(null)
+  const [granule,  setGranule]  = useState<GranuleSample[]>([])
 
   const [loadingEvents,  setLoadingEvents]  = useState(true)
   const [loadingLineage, setLoadingLineage] = useState(true)
@@ -239,6 +267,18 @@ export default function BagSerialIdentity({ tag, onOpenSerial }: {
     return () => { live = false }
   }, [serial])
 
+  // ── Granule per-bag samples ───────────────────────────────────────────────
+  useEffect(() => {
+    let live = true
+    getDb().schema('qms').from('granule_samples')
+      .select('id,time_taken,dryer_no,bag_type,moisture,untapped,tapped,bulk_density,dryer_temp,spec_violations')
+      .or(`bulk_bag_serial.eq.${serial},bag_serial.eq.${serial}`)
+      .order('id', { ascending: true })
+      .then(({ data }: any) => { if (live) setGranule((data ?? []) as GranuleSample[]) },
+            () => { if (live) setGranule([]) })
+    return () => { live = false }
+  }, [serial])
+
   const violations = Array.isArray(qc?.inprocess_violations) ? (qc!.inprocess_violations as any[]) : []
   const hasFinalQc = qc?.qc_done && (qc.final_bulk_density != null || qc.final_leaf_shade != null)
 
@@ -269,10 +309,50 @@ export default function BagSerialIdentity({ tag, onOpenSerial }: {
               ))}
             </div>
 
+            {/* Granule Line samples taken against this bag. Its QC never goes
+                through sd_runs, so without this a Granule bag would show four
+                dashes and read as untested when it has been sampled hourly. */}
+            {granule.length > 0 && (
+              <div className="mt-3 space-y-1.5">
+                <p className="text-[10px] text-stone-400 italic">
+                  {granule.length} Granule Line sample{granule.length === 1 ? '' : 's'} taken against this bag:
+                </p>
+                {granule.map(s => {
+                  const v = Array.isArray(s.spec_violations) ? (s.spec_violations as any[]) : []
+                  return (
+                    <div key={s.id} className={`rounded-lg border px-3 py-2 ${v.length ? 'border-amber-200 bg-amber-50' : 'border-stone-100 bg-stone-50'}`}>
+                      <div className="flex items-center gap-2 flex-wrap text-[11px]">
+                        {s.time_taken && <span className="font-mono text-stone-500">{s.time_taken}</span>}
+                        {s.dryer_no && <span className="text-stone-500">Dryer {s.dryer_no}</span>}
+                        {s.bag_type && <span className="text-stone-400">{s.bag_type}</span>}
+                        {s.moisture != null && <span className="font-mono text-stone-700">Moisture {s.moisture}%</span>}
+                        {(s.untapped ?? s.bulk_density) != null && (
+                          <span className="font-mono text-stone-700">BD {s.untapped ?? s.bulk_density}</span>
+                        )}
+                        {s.dryer_temp != null && <span className="font-mono text-stone-400">{s.dryer_temp}°</span>}
+                        {v.length > 0 && (
+                          <span className="ml-auto inline-flex items-center gap-1 font-mono text-[9px] font-bold px-1.5 py-0.5 rounded border bg-amber-100 text-amber-700 border-amber-200">
+                            <AlertTriangle size={9} /> {v.length} out of spec
+                          </span>
+                        )}
+                      </div>
+                      {v.length > 0 && (
+                        <ul className="mt-1 space-y-0.5">
+                          {v.map((x: any, i) => (
+                            <li key={i} className="text-[11px] text-amber-700">· {x?.issue ?? JSON.stringify(x)}</li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+
             {/* Why there is no stamp, in the bag's own terms. "No QC" and "no
                 QC is required for this product" are different facts and an
                 operator chasing a missing stamp needs to know which. */}
-            {!hasFinalQc && (
+            {!hasFinalQc && granule.length === 0 && (
               <p className="text-[11px] text-stone-400 italic mt-2">
                 {qc == null
                   ? 'This bag has no bagging record in Quality yet.'
