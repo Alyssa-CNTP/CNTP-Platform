@@ -62,7 +62,7 @@ export default function MaintenanceQcPage() {
   const fmtTime = (d: Date) => d.toLocaleTimeString('en-ZA', { hour: '2-digit', minute: '2-digit' })
 
   return (
-    <div className="p-4 sm:p-6 max-w-[1200px] mx-auto">
+    <div className="p-4 sm:p-6 max-w-[1400px] mx-auto">
       <div className="flex items-start justify-between mb-5 flex-wrap gap-3">
         <div>
           <h1 className="text-2xl font-semibold text-text flex items-center gap-2">
@@ -87,33 +87,51 @@ export default function MaintenanceQcPage() {
 
       {error && <div className="card p-3 text-[12px] text-err border border-err/30 mb-3">{error}</div>}
 
+      {/* One page, no sideways scroll.
+          The QC-check button is the whole point of this screen and it used to
+          be the ninth column of a nine-column table inside an overflow-x-auto —
+          on any normal laptop it sat past the right edge, so the QC had to
+          scroll the table sideways on every single card to reach it.
+          `table-fixed` with explicit widths is what keeps it on screen: the
+          description is the only elastic column, and it truncates instead of
+          pushing the action off. The two columns that were only ever context —
+          the technician and the QC who has the card — moved under the
+          description, which is where they read naturally anyway. Nothing was
+          dropped; the table just stopped being wider than the page. */}
       <div className="rounded-xl border border-surface-rule bg-surface-card overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="data-table w-full">
-            <thead><tr>{['#', 'Type', 'Area / machine', 'Description', 'Technician', 'Finished', 'Waiting', 'QC', ''].map(h => <th key={h}>{h}</th>)}</tr></thead>
-            <tbody>{shown.map(r => {
-              const waiting = diffDays(r.completed_at ?? r.raised_at, new Date().toISOString())
-              return (
-                <tr key={r.id}>
-                  <td className="font-semibold text-accent whitespace-nowrap">{r.card_no}</td>
-                  <td><span className={`badge ${r.workflow === 'breakdown' ? 'badge-err' : 'badge-info'}`}>{r.workflow === 'breakdown' ? 'BD' : 'PL'}</span></td>
-                  <td className="whitespace-nowrap">{r.area}{r.machine ? <span className="text-text-faint"> · {r.machine}</span> : ''}</td>
-                  <td className="max-w-[280px] truncate" title={r.description}>{r.description}</td>
-                  <td className="whitespace-nowrap">{r.assigned_to ?? '—'}</td>
-                  <td className="whitespace-nowrap text-text-muted">{r.completed_at ? fmtDT(r.completed_at) : '—'}</td>
-                  <td className={`tabular-nums ${waiting > 1 ? 'text-warn font-semibold' : 'text-text-muted'}`}>{waiting}d</td>
-                  <td className="whitespace-nowrap text-text-muted">{r.qc_name || <span className="text-text-faint">—</span>}</td>
-                  <td>
-                    <Link href={`/maintenance/job-cards/${r.id}`}
-                      className="inline-flex items-center gap-1 bg-brand text-white rounded-lg px-3 py-1.5 text-[12px] font-semibold hover:brightness-110 transition whitespace-nowrap">
-                      QC check <ArrowRight size={13} />
-                    </Link>
-                  </td>
-                </tr>
-              )
-            })}</tbody>
-          </table>
-        </div>
+        <table className="data-table w-full table-fixed">
+          <colgroup>
+            <col className="w-[92px]" /><col className="w-[48px]" /><col className="w-[190px]" />
+            <col /><col className="w-[130px]" /><col className="w-[64px]" /><col className="w-[104px]" />
+          </colgroup>
+          <thead><tr>{['#', 'Type', 'Area / machine', 'Description', 'Finished', 'Waiting', ''].map(h => <th key={h}>{h}</th>)}</tr></thead>
+          <tbody>{shown.map(r => {
+            const waiting = diffDays(r.completed_at ?? r.raised_at, new Date().toISOString())
+            return (
+              <tr key={r.id}>
+                <td className="font-semibold text-accent truncate">{r.card_no}</td>
+                <td><span className={`badge ${r.workflow === 'breakdown' ? 'badge-err' : 'badge-info'}`}>{r.workflow === 'breakdown' ? 'BD' : 'PL'}</span></td>
+                <td className="truncate" title={`${r.area}${r.machine ? ' · ' + r.machine : ''}`}>
+                  {r.area}{r.machine ? <span className="text-text-faint"> · {r.machine}</span> : ''}
+                </td>
+                <td className="min-w-0">
+                  <div className="truncate" title={r.description}>{r.description}</div>
+                  <div className="truncate text-[11px] text-text-faint">
+                    {r.assigned_to ?? 'unassigned'}{r.qc_name ? ` · QC ${r.qc_name}` : ''}
+                  </div>
+                </td>
+                <td className="truncate text-text-muted">{r.completed_at ? fmtDT(r.completed_at) : '—'}</td>
+                <td className={`tabular-nums ${waiting > 1 ? 'text-warn font-semibold' : 'text-text-muted'}`}>{waiting}d</td>
+                <td>
+                  <Link href={`/maintenance/job-cards/${r.id}`}
+                    className="inline-flex items-center gap-1 bg-brand text-white rounded-lg px-2.5 py-1.5 text-[12px] font-semibold hover:brightness-110 transition whitespace-nowrap">
+                    QC check <ArrowRight size={13} />
+                  </Link>
+                </td>
+              </tr>
+            )
+          })}</tbody>
+        </table>
         {!loading && shown.length === 0 && (
           <div className="p-6 text-center text-[13px] text-text-faint">
             {rows.length === 0 ? 'Nothing waiting for QC — all finished job cards have been checked.' : 'No cards match your search.'}
