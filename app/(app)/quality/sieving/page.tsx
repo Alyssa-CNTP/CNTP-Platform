@@ -159,6 +159,66 @@ const SIEVING_SPECS_DB: Record<string,any> = {
   },
 }
 
+// ─── Spec shapes ──────────────────────────────────────────────────────────────
+// SIEVING_SPECS_DB above is still Record<string,any> (pre-existing), but
+// everything that READS a spec goes through these, so a mesh key or a range is
+// not an `any` travelling between functions.
+/** A `[min, max]` bound. Either side may be null — that is a half-open spec,
+ *  which sdChk already handles (`range[0]!==null&&n<range[0]`), and it is also
+ *  what a half-typed row looks like while the editor is open. */
+type SpecRange = [number | null, number | null]
+/** One `${grade}|${variant}` row: mesh label → range. A missing key means the
+ *  fraction has no spec and is not checked — see sdChk. */
+type SpecRow   = Record<string, SpecRange | undefined>
+/** A product's whole spec table, keyed `${grade}|${variant}`. */
+type SpecTable = Record<string, SpecRow>
+interface SpecDef {
+  sieves: string[]; labels: string[]
+  meshForORG: string[]; meshForCON: string[]
+  hasLeafShade?: boolean; hasNeedleCount?: boolean; needle_max?: number
+  qcFieldsFinalOnly?: boolean; noLotNumber?: boolean; noBulkDensity?: boolean
+  hasFineLeafPct?: boolean
+  volumetrics?: string; bulk_bags?: string; temp_range?: string; leaf_shade?: string
+  variants: SpecTable
+}
+interface SpecOverrideRow { product: string; specs: SpecTable; updated_by: string | null; updated_at: string | null }
+interface SpecMetaRow { updated_by: string | null; updated_at: string | null }
+interface SpecSaveState { state: 'idle' | 'saving' | 'saved' | 'error'; message?: string }
+
+/** A row of qms.v_pending_bag_qc / qms.v_part_bags_awaiting_fill. Only the
+ *  columns this screen actually reads are named. */
+interface BagQcRow {
+  bagging_id: string
+  bag_serial_no: string | null
+  lot_number: string | null
+  product: string
+  variant: string | null
+  kg: number | null
+  destination: string | null
+  bagged_at: string | null
+  inprocess_run_id: string | null
+  inprocess_at: string | null
+  inprocess_out_of_spec: boolean | null
+  inprocess_violations: string[] | null
+  // Added by 20260915_003 — absent on a database that has not had it.
+  bag_weight_kg?: number | null
+  full_bag_kg?: number | null
+}
+
+// Key-order-insensitive JSON, for comparing a spec table against one that has
+// been round-tripped through Postgres. jsonb does not preserve key order (it
+// sorts by key length, then bytewise), so a plain JSON.stringify comparison
+// reports a spec as changed purely because the database handed the same object
+// back in a different order.
+function canonicalJson(v: unknown): string {
+  if (Array.isArray(v)) return `[${v.map(canonicalJson).join(',')}]`
+  if (v && typeof v === 'object') {
+    const o = v as Record<string, unknown>
+    return `{${Object.keys(o).sort().map(k => `${JSON.stringify(k)}:${canonicalJson(o[k])}`).join(',')}}`
+  }
+  return JSON.stringify(v) ?? 'null'
+}
+
 const SD_GRADES   = ['Export','Export Blend','Domestic']
 const SD_VARIANTS = ['Conventional','Organic','RA-Organic','RA-Conventional','FT-Conventional','FT-Organic']
 const SD_PRODUCTS = Object.keys(SIEVING_SPECS_DB)
@@ -292,7 +352,7 @@ function sortMesh(mesh: string[]): string[] {
   })
 }
 // Every mesh this product can ever use, in sieve order.
-function allMeshFor(specDef: any): string[] {
+function allMeshFor(specDef: SpecDef): string[] {
   return sortMesh([...specDef.meshForORG, ...specDef.meshForCON])
 }
 // The meshes a given `${grade}|${variant}` key is ACTUALLY checked against.
@@ -306,7 +366,7 @@ function allMeshFor(specDef: any): string[] {
 // encoding for "no spec" — sdChk returns neutral) and a phantom '>12 (%)':
 // [0,1]. The edit saved; it just had no effect anyone could see, which reads
 // exactly like a save that did not happen.
-function meshForSpecKey(specDef: any, specKey: string): string[] {
+function meshForSpecKey(specDef: SpecDef, specKey: string): string[] {
   const variant = specKey.split('|')[1] || ''
   return sortMesh(sdIsOrg(variant) ? specDef.meshForORG : specDef.meshForCON)
 }
@@ -323,15 +383,19 @@ function meshForSpecKey(specDef: any, specKey: string): string[] {
 //
 // Returns null when there is nothing to say: no shade typed, no grade picked,
 // no spec set for the combination, or the shade is inside the band.
-function shadeGradeIssue(activeSpecs: Record<string,any>, grade: string, variant: string, leafShade: any):
-  { shade: number; band: [number,number]; fits: string[] } | null {
+function shadeGradeIssue(activeSpecs: SpecTable, grade: string, variant: string, leafShade: string | number | null | undefined):
+  { shade: number; band: SpecRange; fits: string[] } | null {
   if (!grade || !variant || leafShade === '' || leafShade == null) return null
   const shade = parseInt(String(leafShade), 10)
   if (isNaN(shade)) return null
   const b = (activeSpecs[`${grade}|${variant}`] || {})['Leaf Shade']
-  // [0,0] is the app's "no spec" encoding — see sdChk.
-  if (!Array.isArray(b) || (b[0] === 0 && b[1] === 0)) return null
-  if (shade >= b[0] && shade <= b[1]) return null
+  // [0,0] is the app's "no spec" encoding — see sdChk. A half-open band (one
+  // side null) cannot say which grade a shade belongs to, so it says nothing
+  // rather than guessing at the missing end.
+  if (!Array.isArray(b)) return null
+  const [lo, hi] = b
+  if (lo == null || hi == null || (lo === 0 && hi === 0)) return null
+  if (shade >= lo && shade <= hi) return null
   // Which grade the measured shade WOULD fit. The usual cause is the grade
   // being mis-picked rather than the shade mis-read — the grade is three
   // buttons and the bag tag only says what production intended — so naming the
@@ -339,11 +403,13 @@ function shadeGradeIssue(activeSpecs: Record<string,any>, grade: string, variant
   // actually wrong is a question for production, and stays a human step.
   const fits = SD_GRADES.filter(g => {
     const gb = (activeSpecs[`${g}|${variant}`] || {})['Leaf Shade']
-    return Array.isArray(gb) && !(gb[0] === 0 && gb[1] === 0) && shade >= gb[0] && shade <= gb[1]
+    if (!Array.isArray(gb)) return false
+    const [glo, ghi] = gb
+    return glo != null && ghi != null && !(glo === 0 && ghi === 0) && shade >= glo && shade <= ghi
   })
-  return { shade, band: [b[0], b[1]], fits }
+  return { shade, band: [lo, hi], fits }
 }
-function shadeGradeMessage(iss: { shade: number; band: [number,number]; fits: string[] }, grade: string): string {
+function shadeGradeMessage(iss: { shade: number; band: SpecRange; fits: string[] }, grade: string): string {
   return `Leaf shade ${iss.shade} is outside the ${grade} spec of ${iss.band[0]}–${iss.band[1]}`
     + (iss.fits.length
         ? ` — shade ${iss.shade} is ${iss.fits.join(' / ')} material. Check with production what this batch is, then set the grade or re-read the shade.`
@@ -402,23 +468,27 @@ function mapDbRow(r: any) {
 
 // ─── Spec Editor ─────────────────────────────────────────────────────────────
 
-function SievingSpecEditor({ product, specDef, customSpecs, savedMeta, saveState, onSave, onClose }: any) {
+interface SievingSpecEditorProps {
+  product: string
+  specDef: SpecDef
+  customSpecs: SpecTable
+  savedMeta?: SpecMetaRow
+  saveState?: SpecSaveState
+  onSave: (specs: SpecTable) => void
+  onClose: () => void
+}
+
+function SievingSpecEditor({ product, specDef, customSpecs, savedMeta, saveState, onSave, onClose }: SievingSpecEditorProps) {
   const allMesh = allMeshFor(specDef)
-  const [draft, setDraft] = useState(JSON.parse(JSON.stringify(customSpecs)))
+  const [draft, setDraft] = useState<SpecTable>(() => JSON.parse(JSON.stringify(customSpecs)))
   const [newGrade, setNewGrade] = useState(SD_GRADES[0])
   const [newVariant, setNewVariant] = useState(SD_VARIANTS[0])
   // track renamed keys: originalKey -> newKey parts
   const [renames, setRenames] = useState<Record<string,{grade:string,variant:string}>>(
     () => Object.fromEntries(Object.keys(customSpecs).map(k => { const [g,v]=k.split('|'); return [k,{grade:g||'',variant:v||''}] }))
   )
-  // What was on screen when the editor opened, so "has anything changed?" is a
-  // fact rather than a guess. Closing the editor throws the draft away — it is
-  // component state — and nothing used to say so, which is one of the two ways
-  // a spec edit could vanish without any error appearing.
-  const [baseline, setBaseline] = useState(() => JSON.stringify(customSpecs))
-
-  function applyRenames(d: any) {
-    const out: any = {}
+  function applyRenames(d: SpecTable): SpecTable {
+    const out: SpecTable = {}
     Object.keys(d).forEach(k => {
       const r = renames[k]
       const newKey = r ? `${r.grade}|${r.variant}` : k
@@ -427,15 +497,34 @@ function SievingSpecEditor({ product, specDef, customSpecs, savedMeta, saveState
     return out
   }
   const pending = applyRenames(draft)
-  const pendingJson = JSON.stringify(pending)
-  const dirty = pendingJson !== baseline
-  // Once the parent has written AND read the row back, what is on screen is
-  // what the database holds — so it is no longer "unsaved". Without this the
-  // editor kept offering to save the change it had just saved, which is the
-  // same ambiguity ("did that take?") this whole panel exists to remove.
-  useEffect(() => {
-    if (saveState?.state === 'saved') setBaseline(pendingJson)
-  }, [saveState?.state, pendingJson])
+  // "Has anything changed?" is measured against the SAVED spec — the
+  // `customSpecs` prop, which the parent replaces with what it read back out of
+  // the database after a save. So a successful save turns this false by itself:
+  // no snapshot to keep in step, and no setState-in-an-effect to keep it there.
+  // Closing the editor still throws the draft away (it is component state), and
+  // tryClose below is what now says so.
+  //
+  // Compared canonically because the round-trip goes through jsonb, which
+  // reorders keys — see canonicalJson.
+  const dirty = canonicalJson(pending) !== canonicalJson(customSpecs)
+
+  // One bound of one fraction of one row. Both the mesh cells and the Leaf
+  // Shade cell go through this rather than repeating the same nested update
+  // twice — the second copy is exactly where the two would drift.
+  function setBound(rowKey: string, fraction: string, side: 0 | 1, value: number | null) {
+    setDraft(d => {
+      const nd: SpecTable = JSON.parse(JSON.stringify(d))
+      const row = nd[rowKey]
+      if (!row) return d
+      const range: SpecRange = row[fraction] ?? [null, null]
+      range[side] = value
+      // Both sides cleared = no spec for this fraction, so the key goes rather
+      // than lingering as [null,null].
+      if (range[0] == null && range[1] == null) delete row[fraction]
+      else row[fraction] = range
+      return nd
+    })
+  }
 
   function tryClose() {
     if (dirty && !confirm('Close without saving? The spec changes on screen will be lost.')) return
@@ -526,15 +615,7 @@ function SievingSpecEditor({ product, specDef, customSpecs, savedMeta, saveState
                           placeholder={j===0?'min':'max'}
                           onChange={e=>{
                             const raw = e.target.value
-                            const v = raw==='' ? null : parseFloat(raw)
-                            setDraft((d:any)=>{
-                              const nd=JSON.parse(JSON.stringify(d))
-                              if(!nd[vk][m]) nd[vk][m]=[null,null]
-                              nd[vk][m][j]=v
-                              // Both sides cleared = no spec for this fraction.
-                              if(nd[vk][m][0]==null && nd[vk][m][1]==null) delete nd[vk][m]
-                              return nd
-                            })
+                            setBound(vk, m, j as 0|1, raw==='' ? null : parseFloat(raw))
                           }} style={{width:40,padding:'2px 3px',border:'1px solid #d1d5db',borderRadius:3,fontSize:10,textAlign:'center'}}/>
                       ))}
                     </div>
@@ -549,14 +630,7 @@ function SievingSpecEditor({ product, specDef, customSpecs, savedMeta, saveState
                           placeholder={j===0?'min':'max'}
                           onChange={e=>{
                             const raw = e.target.value
-                            const v = raw==='' ? null : parseFloat(raw)
-                            setDraft((d:any)=>{
-                              const nd=JSON.parse(JSON.stringify(d))
-                              if(!nd[vk]['Leaf Shade']) nd[vk]['Leaf Shade']=[null,null]
-                              nd[vk]['Leaf Shade'][j]=v
-                              if(nd[vk]['Leaf Shade'][0]==null && nd[vk]['Leaf Shade'][1]==null) delete nd[vk]['Leaf Shade']
-                              return nd
-                            })
+                            setBound(vk, 'Leaf Shade', j as 0|1, raw==='' ? null : parseFloat(raw))
                           }} style={{width:40,padding:'2px 3px',border:'1px solid #d1d5db',borderRadius:3,fontSize:10,textAlign:'center'}}/>
                       ))}
                     </div>
@@ -587,7 +661,7 @@ function SievingSpecEditor({ product, specDef, customSpecs, savedMeta, saveState
           // one, so a new row starts from the IPS values rather than from a
           // grid of zeroes that reads as a spec but checks nothing.
           const seed = SIEVING_SPECS_DB[product]?.variants?.[key]
-          setDraft((d:any)=>({...d,[key]: seed ? JSON.parse(JSON.stringify(seed)) : {}}))
+          setDraft(d=>({...d,[key]: seed ? JSON.parse(JSON.stringify(seed)) : {}}))
           setRenames(prev=>({...prev,[key]:{grade:newGrade,variant:newVariant}}))
         }} style={{padding:'5px 16px',borderRadius:5,border:'none',background:'#7c3aed',color:'#fff',fontSize:11,fontWeight:700,cursor:'pointer'}}>
           Add Row
@@ -1224,8 +1298,8 @@ export default function SievingPage() {
   // Who saved the override now in force for each product, and when — shown in
   // the editor and on the spec panel, so "is my change actually live?" is
   // answerable from the screen instead of from the database.
-  const [specMeta, setSpecMeta] = useState<Record<string,{updated_by:string|null;updated_at:string|null}>>({})
-  const [specSaveState, setSpecSaveState] = useState<{state:'idle'|'saving'|'saved'|'error';message?:string}>({ state: 'idle' })
+  const [specMeta, setSpecMeta] = useState<Record<string, SpecMetaRow>>({})
+  const [specSaveState, setSpecSaveState] = useState<SpecSaveState>({ state: 'idle' })
   const [specLoadError, setSpecLoadError] = useState('')
   const [loading,   setLoading]   = useState(true)
   const [saving,    setSaving]    = useState(false)
@@ -1358,7 +1432,7 @@ export default function SievingPage() {
       // migration — not an error worth surfacing to a QC mid-shift.
       if (cancelled || error || !data) return
       const m = new Map<string, { reason: string; waived_by: string; n: number }>()
-      for (const w of data as any[]) {
+      for (const w of data as { reason: string; waived_by: string }[]) {
         const k = `${w.reason}|${w.waived_by}`
         const cur = m.get(k)
         if (cur) cur.n++
@@ -1380,7 +1454,7 @@ export default function SievingPage() {
   // burned by exactly that before (the timed-out fetch that read as an empty
   // queue for a full shift). Nothing has to be done to these: each one joins
   // the real queue by itself the moment it reaches full.
-  const [partBags, setPartBags] = useState<any[]>([])
+  const [partBags, setPartBags] = useState<BagQcRow[]>([])
   const [showPartBags, setShowPartBags] = useState(false)
   const loadPartBags = useCallback(async () => {
     const { data, error } = await db.schema('qms').from('v_part_bags_awaiting_fill')
@@ -1389,7 +1463,7 @@ export default function SievingPage() {
     // that is not worth a red banner in front of a QC mid-shift, and the queue
     // itself is unaffected.
     if (error || !data) return
-    setPartBags(data.filter((r: any) => String(r.bag_serial_no ?? '').trim()))
+    setPartBags((data as BagQcRow[]).filter(r => String(r.bag_serial_no ?? '').trim()))
   }, [db])
   useEffect(() => { loadPartBags() }, [loadPartBags])
 
@@ -1518,17 +1592,17 @@ export default function SievingPage() {
       if (cancelled) return
       setOlderSearchLoading(false)
       if (error) { setOlderSearchNote(`Could not check older history for this batch (${error.message}) — only the last 3 months is shown.`); return }
-      const older = (data ?? []).map(mapDbRow)
+      const older = ((data ?? []) as unknown[]).map(mapDbRow)
       if (!older.length) return
       // Counted here rather than inside the setRuns updater: an updater must
       // stay pure (React can call it twice), so it cannot also be where a
       // message is set.
       setRuns(prev => {
         const next = { ...prev }
-        older.forEach((mapped: any) => {
+        older.forEach(mapped => {
           const p = mapped.product || 'Fine Leaf'
           const list = next[p] ? [...next[p]] : []
-          if (list.some((x: any) => String(x.id) === String(mapped.id))) return
+          if (list.some(x => String(x.id) === String(mapped.id))) return
           list.push(mapped); next[p] = list
         })
         return next
@@ -1545,7 +1619,7 @@ export default function SievingPage() {
   // save path had.
   useEffect(() => {
     db.schema('qms').from('sieving_spec_overrides').select('product,specs,updated_by,updated_at')
-      .then(({ data, error }: { data: any[] | null; error: any }) => {
+      .then(({ data, error }: { data: SpecOverrideRow[] | null; error: { message?: string } | null }) => {
         if (error) { setSpecLoadError(error.message || 'Could not load the saved specifications.'); return }
         setSpecLoadError('')
         if (!data || data.length === 0) return
@@ -1559,8 +1633,8 @@ export default function SievingPage() {
           return updated
         })
         setSpecMeta(Object.fromEntries(data
-          .filter((r: any) => r.product)
-          .map((r: any) => [r.product, { updated_by: r.updated_by ?? null, updated_at: r.updated_at ?? null }])))
+          .filter(r => r.product)
+          .map(r => [r.product, { updated_by: r.updated_by ?? null, updated_at: r.updated_at ?? null }])))
       })
   }, [db])
 
@@ -1616,8 +1690,8 @@ export default function SievingPage() {
   // The range still governs the chart and the un-searched table.
   const searching  = Boolean(searchText.trim())
   const searchBase = searching ? productRuns : rangeRuns
-  const filteredRuns = (filter==='all' ? searchBase : searchBase.filter((r:any) => r.runType===filter))
-    .filter((r:any) => !searching || rowSearchText(r).includes(searchText.trim().toLowerCase()))
+  const filteredRuns = (filter==='all' ? searchBase : searchBase.filter(r => r.runType===filter))
+    .filter(r => !searching || rowSearchText(r).includes(searchText.trim().toLowerCase()))
     .slice().sort((a:any,b:any) => {
       const va = sortKeyVal(a, sdSort.key), vb = sortKeyVal(b, sdSort.key)
       const cmp = typeof va === 'number' && typeof vb === 'number' ? va - vb : String(va).localeCompare(String(vb))
@@ -1626,7 +1700,7 @@ export default function SievingPage() {
   // Every distinct date the search matched, oldest first — the answer to
   // "when did this batch run?" without reading the table.
   const searchDates = searching
-    ? [...new Set(filteredRuns.map((r:any) => r.date).filter(Boolean))].sort()
+    ? [...new Set(filteredRuns.map(r => r.date).filter(Boolean))].sort()
     : []
 
   const activeMesh  = sdGetMesh(activeProduct, form.variant)
@@ -1871,8 +1945,8 @@ export default function SievingPage() {
     // Leaf result against a batch that bag was never part of — which is exactly
     // how a Fine Leaf batch number ends up on a Coarse Leaf entry.
     if (f.runType === 'final' && f.lotNumber?.trim()) {
-      const bag = pendingBags.find((b:any) => String(b.bagging_id) === String(f.baggingId))
-        || (f.serialNumber?.trim() ? pendingBags.find((b:any) => String(b.bag_serial_no||'').toUpperCase() === f.serialNumber.trim().toUpperCase()) : null)
+      const bag = pendingBags.find(b => String(b.bagging_id) === String(f.baggingId))
+        || (f.serialNumber?.trim() ? pendingBags.find(b => String(b.bag_serial_no||'').toUpperCase() === f.serialNumber.trim().toUpperCase()) : null)
       const bagLot = (bag?.lot_number || '').trim()
       if (bagLot && lotKeyOf(bagLot) !== lotKeyOf(f.lotNumber)) {
         errs.lotNumber = `Bag ${bag.bag_serial_no || ''} is on batch ${bagLot}, not ${f.lotNumber.trim()}. Pick the right bag, or correct the batch number to the bag's own.`
@@ -2053,7 +2127,7 @@ export default function SievingPage() {
   // takes a bag out of the sampling queue without a sample. It is undone by
   // deleting the waiver row, which puts the bag straight back.
   const [waiving, setWaiving] = useState(false)
-  async function waiveBagQc(bag: any) {
+  async function waiveBagQc(bag: BagQcRow) {
     const serial = String(bag?.bag_serial_no ?? '').trim().toUpperCase()
     if (!serial) { alert('This row has no serial number, so there is no bag to record a decision against.'); return }
     const who = myName || ''
@@ -2080,7 +2154,7 @@ export default function SievingPage() {
     } finally { setWaiving(false) }
   }
 
-  async function saveSpecs(newSpecs: any) {
+  async function saveSpecs(newSpecs: SpecTable) {
     const product = activeProduct
     setSpecSaveState({ state: 'saving' })
     // Persist to Supabase so every PC shares the same specs. A schema
@@ -2100,15 +2174,16 @@ export default function SievingPage() {
       if (error) { setSpecSaveState({ state: 'error', message: error.message }); return }
       const { data, error: readErr } = await getDb().schema('qms').from('sieving_spec_overrides')
         .select('product,specs,updated_by,updated_at').eq('product', product).maybeSingle()
-      if (readErr || !data?.specs) {
+      const row = data as SpecOverrideRow | null
+      if (readErr || !row?.specs) {
         setSpecSaveState({ state: 'error', message: readErr?.message || 'The database accepted the save but the row could not be read back.' })
         return
       }
-      setCustomSpecs(prev => ({ ...prev, [product]: (data as any).specs }))
-      setSpecMeta(prev => ({ ...prev, [product]: { updated_by: (data as any).updated_by, updated_at: (data as any).updated_at } }))
+      setCustomSpecs(prev => ({ ...prev, [product]: row.specs }))
+      setSpecMeta(prev => ({ ...prev, [product]: { updated_by: row.updated_by, updated_at: row.updated_at } }))
       setSpecSaveState({ state: 'saved' })
-    } catch (e: any) {
-      setSpecSaveState({ state: 'error', message: e?.message || 'Could not reach the database.' })
+    } catch (e) {
+      setSpecSaveState({ state: 'error', message: e instanceof Error ? e.message : 'Could not reach the database.' })
     }
   }
 
@@ -2362,7 +2437,7 @@ export default function SievingPage() {
                   </div>
                   {showPartBags && (
                     <div style={{marginTop:8,display:'flex',flexDirection:'column',gap:6}}>
-                      {partBags.map((b:any,i:number)=>(
+                      {partBags.map((b,i)=>(
                         <div key={b.bag_serial_no ?? i} style={{fontSize:11,color:'#374151',borderTop:'1px solid #eff6ff',paddingTop:6}}>
                           <strong>{b.bag_serial_no}</strong> · {b.product || '—'} · lot {b.lot_number || '—'}
                           <br/><span style={{color:'#6b7280'}}>

@@ -58,6 +58,21 @@ interface ScanEvent {
   scanned_at:    string
 }
 
+// Only the columns the Quality panel reads, from each of its five sources.
+interface SdFinalRun {
+  id: number | string; date: string | null; product: string | null
+  grade: string | null; variant: string | null; qc_name: string | null
+  pass_status: string | null; bulk_density: string | null; leaf_shade: string | null
+  violations: string[] | null
+}
+interface SdInProcessRun {
+  id: number | string; date: string | null; product: string | null
+  qc_name: string | null; pass_status: string | null
+}
+interface PasteuriserRun  { id: string | number; run_date: string | null; status: string | null }
+interface LabResult       { id: string | number; sample_date: string | null; result_status: string | null }
+interface RawMaterialRow  { id: string | number; received_date: string | null; grade: string | null }
+
 interface QualityRow {
   source: string
   ref:    string
@@ -420,9 +435,9 @@ function TagDetail({ tag, allTags, operatorId, onClose, onChanged }: TagDetailPr
       hasLot ? db.schema('qms').from('sd_runs')
         .select('id,date,time_of_run,product,qc_name,pass_status')
         .eq('run_type', 'in-process').ilike('lot_number', lot).order('date', { ascending: false }).limit(5) : none,
-    ]).then(([past, lab, raw, bagQc, inproc]: any[]) => {
+    ]).then(([past, lab, raw, bagQc, inproc]: { data: unknown[] | null }[]) => {
       const rows: QualityRow[] = []
-      ;(bagQc?.data ?? []).forEach((r: any) => {
+      ;((bagQc?.data ?? []) as SdFinalRun[]).forEach(r => {
         const pass = r.pass_status === 'Fail' ? 'Fail' : 'Pass'
         const bits = [
           `${pass} — ${r.product ?? ''} ${r.grade ?? ''} ${r.variant ?? ''}`.replace(/\s+/g, ' ').trim(),
@@ -434,10 +449,10 @@ function TagDetail({ tag, allTags, operatorId, onClose, onChanged }: TagDetailPr
         rows.push({ source: 'Sieving Tower — this bag', ref: String(r.id ?? ''), date: r.date ?? '',
           detail: bits.join(' · '), href: '/quality/sieving', thisBag: true, status: pass })
       })
-      ;(inproc?.data ?? []).forEach((r: any) => rows.push({ source: 'Sieving Tower in-process', ref: String(r.id ?? ''), date: r.date ?? '', detail: `${r.pass_status ?? '—'} · ${r.product ?? ''}${r.qc_name ? ` · QC ${r.qc_name}` : ''}`, href: '/quality/sieving' }))
-      ;(past?.data ?? []).forEach((r: any) => rows.push({ source: 'Pasteuriser run', ref: String(r.id ?? '').slice(0, 8), date: r.run_date ?? '', detail: `Status: ${r.status ?? 'unknown'}`, href: '/quality/pasteuriser' }))
-      ;(lab?.data  ?? []).forEach((r: any) => rows.push({ source: 'Lab result',  ref: String(r.id ?? '').slice(0, 8), date: r.sample_date ?? '', detail: `Result: ${r.result_status ?? 'pending'}`, href: '/quality/lab-results' }))
-      ;(raw?.data  ?? []).forEach((r: any) => rows.push({ source: 'Raw material', ref: String(r.id ?? '').slice(0, 8), date: r.received_date ?? '', detail: `Grade ${r.grade ?? '—'}`, href: '/quality/raw-material' }))
+      ;((inproc?.data ?? []) as SdInProcessRun[]).forEach(r => rows.push({ source: 'Sieving Tower in-process', ref: String(r.id ?? ''), date: r.date ?? '', detail: `${r.pass_status ?? '—'} · ${r.product ?? ''}${r.qc_name ? ` · QC ${r.qc_name}` : ''}`, href: '/quality/sieving' }))
+      ;((past?.data ?? []) as PasteuriserRun[]).forEach(r => rows.push({ source: 'Pasteuriser run', ref: String(r.id ?? '').slice(0, 8), date: r.run_date ?? '', detail: `Status: ${r.status ?? 'unknown'}`, href: '/quality/pasteuriser' }))
+      ;((lab?.data  ?? []) as LabResult[]).forEach(r => rows.push({ source: 'Lab result',  ref: String(r.id ?? '').slice(0, 8), date: r.sample_date ?? '', detail: `Result: ${r.result_status ?? 'pending'}`, href: '/quality/lab-results' }))
+      ;((raw?.data  ?? []) as RawMaterialRow[]).forEach(r => rows.push({ source: 'Raw material', ref: String(r.id ?? '').slice(0, 8), date: r.received_date ?? '', detail: `Grade ${r.grade ?? '—'}`, href: '/quality/raw-material' }))
       // This bag's own result first, whatever its date — everything below it
       // belongs to the lot, not the bag.
       rows.sort((a, b) => (b.thisBag ? 1 : 0) - (a.thisBag ? 1 : 0) || (b.date || '').localeCompare(a.date || ''))
