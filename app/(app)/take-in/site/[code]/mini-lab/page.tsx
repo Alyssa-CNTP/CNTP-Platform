@@ -22,10 +22,10 @@
 import type { LabRow, PanelOutcome } from '@/lib/takein/types'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
-import { useSearchParams } from 'next/navigation'
+import { useParams, useSearchParams } from 'next/navigation'
 import { useAuth } from '@/lib/auth/context'
 import { getDb } from '@/lib/supabase/db'
-import { takeinDb, loadSites, logBatchEvent, releaseBatchNo, errMsg, scopedSites } from '@/lib/takein/db'
+import { takeinDb, loadSites, logBatchEvent, releaseBatchNo, errMsg, scopedSites, siteCodeFrom } from '@/lib/takein/db'
 import { SIEVE_FRACTIONS, type Site } from '@/lib/takein/types'
 import {
   sieveTable, shadeScore, stageOf, prelimGroup, panelTriggers, isFinalised,
@@ -69,8 +69,9 @@ function blankLabRow(source: LabRow['source']): LabRow {
 
 export default function MiniLabPage() {
   const { p, fullName, user, depotCodes } = useAuth()
-  // Set when this screen was opened from a site's page in Warehousing.
-  const siteParam = useSearchParams().get('site')
+  // This screen is always working on one site — the code is in the route.
+  const routeCode = useParams<{ code: string }>().code
+  const siteParam = siteCodeFrom(routeCode, useSearchParams().get('site'))
   const canCapture = p('can_capture_takein_minilab')
   const canReturn  = p('can_return_takein_load')
   const actor = { id: user?.id ?? null, name: fullName ?? 'Unknown' }

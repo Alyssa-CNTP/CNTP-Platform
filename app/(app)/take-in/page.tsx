@@ -12,9 +12,9 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
-import { useSearchParams } from 'next/navigation'
+import { useParams, useSearchParams } from 'next/navigation'
 import { useAuth } from '@/lib/auth/context'
-import { takeinDb, loadSites, errMsg, scopedSites } from '@/lib/takein/db'
+import { takeinDb, loadSites, errMsg, scopedSites, siteCodeFrom } from '@/lib/takein/db'
 import { stageOf, isFinalised, type Stage } from '@/lib/core/takein/grading'
 import type { Site, LabRow, PanelOutcome } from '@/lib/takein/types'
 import { Loader2, AlertTriangle, ArrowRight } from 'lucide-react'
@@ -40,7 +40,11 @@ const STAGE_LABEL: Record<Stage, string> = {
 export default function TakeInOverviewPage() {
   const { depotCodes } = useAuth()
   // Set when this screen was opened from a site's page in Warehousing.
-  const siteParam = useSearchParams().get('site')
+  // Serves two routes. At /take-in there is no code, so it stays the
+  // consolidated view over every site in scope; at /take-in/site/GD the route
+  // carries the code and the same screen narrows to that one site.
+  const siteParam = siteCodeFrom(useParams<{ code?: string }>().code,
+                                 useSearchParams().get('site'))
   const [sites, setSites]   = useState<Site[]>([])
   const [rows, setRows]       = useState<Row[]>([])
   const [loading, setLoading] = useState(true)

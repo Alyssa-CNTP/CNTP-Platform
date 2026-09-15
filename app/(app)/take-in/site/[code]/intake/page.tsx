@@ -21,9 +21,9 @@
 
 import type { LabRow, PanelOutcome } from '@/lib/takein/types'
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { useSearchParams } from 'next/navigation'
+import { useParams, useSearchParams } from 'next/navigation'
 import { useAuth } from '@/lib/auth/context'
-import { takeinDb, loadSites, allocateDocNo, logBatchEvent, releaseBatchNo, errMsg, scopedSites } from '@/lib/takein/db'
+import { takeinDb, loadSites, allocateDocNo, logBatchEvent, releaseBatchNo, errMsg, scopedSites, siteCodeFrom } from '@/lib/takein/db'
 import { RECEIVING_CHECKS, type Site } from '@/lib/takein/types'
 import { grossKg, nettKg, weighbridgeReversed, isFinalised, stageOf } from '@/lib/core/takein/grading'
 import { Loader2, AlertTriangle, Lock, FileText, Undo2, Plus, X } from 'lucide-react'
@@ -70,8 +70,9 @@ const LAND_TONE = ['bg-ok-bg text-ok', 'bg-info-bg text-info', 'bg-warn-bg text-
 
 export default function IntakePage() {
   const { p, fullName, user, depotCodes } = useAuth()
-  // Set when this screen was opened from a site's page in Warehousing.
-  const siteParam = useSearchParams().get('site')
+  // This screen is always working on one site — the code is in the route.
+  const routeCode = useParams<{ code: string }>().code
+  const siteParam = siteCodeFrom(routeCode, useSearchParams().get('site'))
   const canCapture = p('can_capture_takein_intake')
   const canVoid    = p('can_void_takein_document')
   const canReturn  = p('can_return_takein_load')
