@@ -34,13 +34,15 @@ const inputs = [
 ]
 const IN_KG = 9450
 
-// Real, except 15IGIS-C nudged 718 → 722 so this fixture balances.
+// Real items, all under one lot so this fixture stays clean; 15IGIS-C nudged
+// 718 → 722 so it balances. The lot split and the unlotted outputs get their
+// own blocks below.
 const outputs = [
-  { acumaticaId: '10LGBLC-C',  productType: 'Coarse Leaf', kg: 2422 },
-  { acumaticaId: '10LGBLF-C',  productType: 'Fine Leaf',   kg: 5205 },
-  { acumaticaId: '15IGBL-C-C', productType: 'RB Blocks',   kg: 451 },
-  { acumaticaId: '15IGDB-C',   productType: 'Brown Dust',  kg: 600 },
-  { acumaticaId: '15IGIS-C',   productType: 'Indent Dust', kg: 722 },
+  { acumaticaId: '10LGBLC-C',  productType: 'Coarse Leaf', kg: 2422, lotNumber: 'GS-0426' },
+  { acumaticaId: '10LGBLF-C',  productType: 'Fine Leaf',   kg: 5205, lotNumber: 'GS-0426' },
+  { acumaticaId: '15IGBL-C-C', productType: 'RB Blocks',   kg: 451,  lotNumber: 'GS-0426' },
+  { acumaticaId: '15IGDB-C',   productType: 'Brown Dust',  kg: 600,  lotNumber: 'GS-0426' },
+  { acumaticaId: '15IGIS-C',   productType: 'Indent Dust', kg: 722,  lotNumber: 'GS-0426' },
 ]
 const OUT_KG = 9400
 
@@ -308,7 +310,7 @@ describe('buildPostingDocument — what stops a post', () => {
 
   it('names the bags that carry no Acumatica code', () => {
     const d = buildPostingDocument(args({
-      outputs: [...outputs, { acumaticaId: null, productType: 'Fine Leaf', kg: 100 }],
+      outputs: [...outputs, { acumaticaId: null, productType: 'Fine Leaf', kg: 100, lotNumber: 'GS-0426' }],
       totals: { totalInputKg: IN_KG, totalOutputKg: OUT_KG + 100, toleranceKg: IN_KG * 0.01 },
     }))
     expect(codes(d)).toContain('missing-item-code')
@@ -317,7 +319,7 @@ describe('buildPostingDocument — what stops a post', () => {
 
   it('never silently drops a coded bag because an uncoded one was present', () => {
     const d = buildPostingDocument(args({
-      outputs: [...outputs, { acumaticaId: null, productType: 'Fine Leaf', kg: 100 }],
+      outputs: [...outputs, { acumaticaId: null, productType: 'Fine Leaf', kg: 100, lotNumber: 'GS-0426' }],
       totals: { totalInputKg: IN_KG, totalOutputKg: OUT_KG + 100, toleranceKg: IN_KG * 0.01 },
     }))
     expect(d.byproductLines).toHaveLength(5)
@@ -378,8 +380,11 @@ describe('buildPostingDocument — spillage', () => {
 // ---------------------------------------------------------------------------
 // The real 11 September order, unretouched.
 //
-// This is the day the scoping rule was written for, so it is worth pinning
-// exactly what it does — including the fact that it does NOT post.
+// Two records, ST-110926-02 (morning) and ST-110926-03 (afternoon), one order
+// under S10LGBL-C. Re-read from production on 15 September: 15IGBL-C-C is two
+// 300 kg bags. It read 451 kg on the 14th, so a weight was corrected through
+// History in between — which is exactly why the document is built at post time
+// and why what was posted has to be recorded separately.
 // ---------------------------------------------------------------------------
 
 describe('buildPostingDocument — 11 September 2026, as it actually stands', () => {
@@ -389,15 +394,19 @@ describe('buildPostingDocument — 11 September 2026, as it actually stands', ()
     { lotNumber: null,      kgNett: 37,   isSpillage: true },
     { lotNumber: null,      kgNett: 32,   isSpillage: true },
   ]
+  // Every bag, with the input lot it carries forward. Blocks and the two dusts
+  // carry none — they come off the run, not off one farm bag.
   const realOutputs = [
-    { acumaticaId: '10LGBLC-C',  productType: 'Coarse Leaf', kg: 2422 },
-    { acumaticaId: '10LGBLF-C',  productType: 'Fine Leaf',   kg: 5205 },
-    { acumaticaId: '15IGBL-C-C', productType: 'RB Blocks',   kg: 451 },
-    { acumaticaId: '15IGDB-C',   productType: 'Brown Dust',  kg: 600 },
-    { acumaticaId: '15IGIS-C',   productType: 'Indent Dust', kg: 718 },
+    { acumaticaId: '10LGBLC-C',  productType: 'Coarse Leaf', kg: 600,  lotNumber: 'GS-0331' },
+    { acumaticaId: '10LGBLC-C',  productType: 'Coarse Leaf', kg: 1822, lotNumber: 'GS-0426' },
+    { acumaticaId: '10LGBLF-C',  productType: 'Fine Leaf',   kg: 1500, lotNumber: 'GS-0331' },
+    { acumaticaId: '10LGBLF-C',  productType: 'Fine Leaf',   kg: 3705, lotNumber: 'GS-0426' },
+    { acumaticaId: '15IGBL-C-C', productType: 'RB Blocks',   kg: 600,  lotNumber: null },
+    { acumaticaId: '15IGDB-C',   productType: 'Brown Dust',  kg: 600,  lotNumber: null },
+    { acumaticaId: '15IGIS-C',   productType: 'Indent Dust', kg: 718,  lotNumber: null },
   ]
-  const realIn = 9519   // 3150 + 6300 + 37 + 32
-  const realOut = 9396
+  const realIn = 9519    // 3150 + 6300 + 37 + 32
+  const realOut = 9545
 
   const real = buildPostingDocument({
     scope,
@@ -410,38 +419,43 @@ describe('buildPostingDocument — 11 September 2026, as it actually stands', ()
     operationNbr: '0050',
   })
 
-  it('merges the morning and the afternoon into two issue lines and five byproducts', () => {
+  it('merges the morning and the afternoon into two issue lines', () => {
     expect(real.issueLines.map(l => l.lotSerialNbr)).toEqual(['GS-0331', 'GS-0426'])
-    expect(real.byproductLines).toHaveLength(5)
-  })
-
-  it('raises 9 450 kg of lots against 9 396 kg of product', () => {
     expect(real.issueLines.reduce((s, l) => s + l.quantity, 0)).toBe(9450)
-    expect(real.byproductLines.reduce((s, l) => s + l.quantity, 0)).toBe(-9396)
   })
 
-  it('does NOT post: +123 kg against a ±95.2 kg tolerance', () => {
-    expect(codes(real)).toContain('balance-out-of-tolerance')
-    expect(real.postable).toBe(false)
+  it('splits the leaf byproducts by the lot they came from', () => {
+    // Seven lines, not the five you get collapsing on the item alone.
+    expect(real.byproductLines).toHaveLength(7)
+    const coarse = real.byproductLines.filter(l => l.inventoryId === '10LGBLC-C')
+    expect(coarse.map(l => [l.lotSerialNbr, l.quantity])).toEqual([
+      ['GS-0331', -600], ['GS-0426', -1822],
+    ])
   })
 
-  it('is nonetheless far better than either run alone', () => {
+  it('reports the blocks and dusts that have no lot to carry', () => {
+    expect(codes(real)).toContain('output-lot-missing')
+    expect(real.blockers.find(b => b.code === 'output-lot-missing')?.message)
+      .toContain('15IGBL-C-C')
+  })
+
+  it('balances once the two records are folded: -26 kg on 9 519', () => {
+    expect(codes(real)).not.toContain('balance-out-of-tolerance')
+    expect(real.byproductLines.reduce((s, l) => s + l.quantity, 0)).toBe(-9545)
+  })
+
+  it('is only in balance BECAUSE the records were folded', () => {
     // Split by run, the morning reads +835 kg on 3 187 (26%) and the afternoon
-    // −712 kg on 6 332 (−11%) — the bucket elevator carrying between shifts.
-    // Folded into one order they very nearly cancel. The posting scope is the
-    // only one at which this record's mass balance means anything.
+    // -712 kg on 6 332 (-11%) — the bucket elevator carrying between shifts.
+    // The posting scope is the only one at which this mass balance means
+    // anything at all.
     const morning = buildPostingDocument({
       scope, orderItem: 'S10LGBL-C', operationNbr: '0050',
       inputs: [realInputs[0], realInputs[2]],
-      outputs: [
-        { acumaticaId: '10LGBLC-C', productType: 'Coarse Leaf', kg: 600 },
-        { acumaticaId: '10LGBLF-C', productType: 'Fine Leaf',   kg: 1500 },
-        { acumaticaId: '15IGIS-C',  productType: 'Indent Dust', kg: 252 },
-      ],
+      outputs: [realOutputs[0], realOutputs[2]],
       totals: { totalInputKg: 3187, totalOutputKg: 2352, toleranceKg: 31.87 },
     })
     expect(codes(morning)).toContain('balance-out-of-tolerance')
-    expect(Math.abs(3187 - 2352) / 3187).toBeGreaterThan(0.2)   // 26%
-    expect(Math.abs(realIn - realOut) / realIn).toBeLessThan(0.02)   // 1.3%
+    expect(Math.abs(realIn - realOut) / realIn).toBeLessThan(0.01)
   })
 })

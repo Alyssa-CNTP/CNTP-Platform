@@ -91,6 +91,12 @@ export interface PostingOutputRow {
   acumaticaId: string | null
   productType: string | null
   kg: number
+  /**
+   * `bag_tags.lot_number` — the INPUT lot this bag was made from, carried
+   * forward. Null on outputs that cannot be attributed to one input: blocks
+   * and dusts come off the whole run, not off a single farm bag.
+   */
+  lotNumber?: string | null
 }
 
 /** The identity of the order being posted. */
@@ -142,6 +148,7 @@ export type PostingBlockerCode =
   | 'missing-item-code'
   | 'lot-missing'
   | 'lot-suspect'
+  | 'output-lot-missing'
   | 'no-inputs'
   | 'no-outputs'
   | 'line-total-mismatch'
@@ -351,8 +358,17 @@ export function buildPostingDocument(args: BuildPostingArgs): PostingDocument {
   }
   if (issueLines.length === 0) add('no-inputs', 'Nothing was debagged against this order.')
 
-  // ── Byproduct lines: one per Acumatica item, signed per section ───────────
-  const byItem = new Map<string, number>()
+  // ── Byproduct lines: one per (item, lot), signed per section ──────────────
+  //
+  // NOT one per item. An output bag carries the input lot it was made from —
+  // on 11 September the Coarse Leaf splits 600 kg under GS-0331 and 1 822 kg
+  // under GS-0426 — and collapsing those onto one line throws the traceability
+  // away at the last hop, which is the whole point of carrying the lot.
+  //
+  // Blocks and dusts have no lot: they come off the run rather than off a
+  // single farm bag. They group together under no lot and are reported, so the
+  // gap is a decision someone made rather than one nobody saw.
+  const byItemLot = new Map<string, { item: string; lot: string | null; kg: number }>()
   let missingCode = 0
   let outputKg = 0
 
@@ -361,17 +377,27 @@ export function buildPostingDocument(args: BuildPostingArgs): PostingDocument {
     outputKg += kg
     const id = (bag.acumaticaId ?? '').trim()
     if (!id) { missingCode += 1; continue }
-    byItem.set(id, q((byItem.get(id) ?? 0) + kg))
+    const lot = normalizeLotSerial(bag.lotNumber) || null
+    const key = `${id} ${lot ?? ''}`
+    const prev = byItemLot.get(key)
+    byItemLot.set(key, { item: id, lot, kg: q((prev?.kg ?? 0) + kg) })
   }
 
-  const byproductLines: PostingLine[] = [...byItem.entries()]
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([id, kg]) => ({
-      inventoryId: id,
+  const byproductLines: PostingLine[] = [...byItemLot.values()]
+    .sort((a, b) => a.item.localeCompare(b.item) || (a.lot ?? '').localeCompare(b.lot ?? ''))
+    .map(({ item, lot, kg }) => ({
+      inventoryId: item,
       quantity: q(kg * (sign ?? -1)),
       uom: 'KG' as const,
+      ...(lot ? { lotSerialNbr: lot } : {}),
       byproduct: true,
     }))
+
+  const unlotted = byproductLines.filter(l => !l.lotSerialNbr)
+  if (unlotted.length > 0) {
+    add('output-lot-missing',
+      `${unlotted.length} output ${unlotted.length === 1 ? 'line has' : 'lines have'} no lot to carry forward: ${unlotted.map(l => l.inventoryId).join(', ')}.`)
+  }
 
   if (missingCode > 0) {
     add('missing-item-code',
