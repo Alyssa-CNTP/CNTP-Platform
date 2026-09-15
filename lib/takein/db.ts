@@ -25,11 +25,28 @@ export function depotDb() {
 
 /** A thrown value's message, or `fallback` when it carries none.
  *
- *  `catch (e: any)` is the repo's commonest lint error; this is the same three
- *  lines written once so the take-in screens do not add 20 more of them. */
+ *  `catch (e: any)` is the repo's commonest lint error; this is the same lines
+ *  written once so the take-in screens do not add 20 more of them.
+ *
+ *  IT MUST NOT TEST `instanceof Error`. Supabase throws a PostgrestError, which
+ *  is a PLAIN OBJECT — `{ message, details, hint, code }` — so an instanceof
+ *  check reports false and the real message is replaced by the generic
+ *  fallback. That cost a whole debugging session: every take-in screen said
+ *  "Could not load contracts." while PostgREST was actually returning PGRST106,
+ *  "the schema must be one of the following", because a new schema had not been
+ *  added to the project's exposed-schema list. The code is the diagnosis, so it
+ *  is carried through rather than swallowed. */
 export function errMsg(e: unknown, fallback: string): string {
-  const m = e instanceof Error ? e.message : typeof e === 'string' ? e : ''
-  return m || fallback
+  if (typeof e === 'string' && e.trim()) return e.trim()
+  if (e && typeof e === 'object') {
+    const o = e as { message?: unknown; hint?: unknown; code?: unknown }
+    const msg  = typeof o.message === 'string' ? o.message.trim() : ''
+    const hint = typeof o.hint    === 'string' ? o.hint.trim()    : ''
+    const code = typeof o.code    === 'string' ? o.code.trim()    : ''
+    const parts = [msg || fallback, hint, code && `[${code}]`].filter(Boolean)
+    if (msg || hint || code) return parts.join(' — ')
+  }
+  return fallback
 }
 
 export async function loadDepots(): Promise<Depot[]> {
@@ -49,7 +66,11 @@ export async function loadDepots(): Promise<Depot[]> {
  * their account is made, on Users & Access.
  */
 export function visibleDepots(depots: Depot[], userDepotCodes: string[] | null | undefined): Depot[] {
-  const codes = (userDepotCodes ?? []).filter(Boolean)
+  // Trimmed, because a whitespace-only entry is noise rather than a depot. Left
+  // untrimmed it is truthy, so it counts as a scope, matches no depot code and
+  // silently blanks the user's dashboard — which reads exactly like the module
+  // being broken rather than like a bad row.
+  const codes = (userDepotCodes ?? []).map(c => (c ?? '').trim()).filter(Boolean)
   if (!codes.length) return depots
   return depots.filter(d => codes.includes(d.code))
 }
