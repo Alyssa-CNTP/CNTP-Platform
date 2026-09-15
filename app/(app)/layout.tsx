@@ -84,6 +84,15 @@ const ROUTE_GUARDS: Array<{
   // added later without its own rule) — unchanged from before.
   { prefix: '/quality',                departments: ['Quality'], permission: 'can_view_history', orPermission: true },
 
+  // Raw Material Take-In. Permission-only, NO department fallback — a depot
+  // clerk may hold no department this module would recognise, and the two
+  // sensitive corners (contract pricing, settlement) each carry their own key
+  // so they can be withheld from someone who otherwise runs the whole depot.
+  //
+  // Longest-prefix matching means /take-in/settlement wins over /take-in.
+  { prefix: '/take-in/settlement',   permission: 'can_view_takein_settlement' },
+  { prefix: '/take-in',              permission: 'can_access_takein' },
+
   // Supervisor hub — production supervisors + management.
   // can_read_production is listed (here and on the four rules below) because
   // these five routes had NO permission at all: department membership was the

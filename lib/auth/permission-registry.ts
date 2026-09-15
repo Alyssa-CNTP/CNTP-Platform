@@ -195,6 +195,47 @@ export const PERMISSION_MATRIX: ModuleDef[] = [
     ],
   },
   {
+    // Raw Material Take-In. Deliberately its own module rather than rows under
+    // Quality or Logistics: the people holding these keys are depot staff, and
+    // the two most sensitive keys here (contract pricing, settlement) must be
+    // grantable without handing over anything else.
+    //
+    // WHICH depots a user sees is a separate axis — shared.app_roles.depot_codes,
+    // edited on the same screen. A Graafwater clerk holding every key here
+    // still only sees Graafwater.
+    module: 'Raw Material Take-In', slug: 'takein',
+    resources: [
+      { key: 'takein.access', label: 'Take-In module', read: 'can_access_takein',
+        note: 'The door in. Depot scoping is set separately per user.' },
+      { key: 'takein.contracts', label: 'Contracts', write: 'can_manage_takein_contracts',
+        manage: [{ key: 'can_approve_takein_contracts', label: 'Approve kg & release for signing' }] },
+      { key: 'takein.pricing', label: 'Contract pricing (rand values)',
+        read: 'can_view_contract_pricing', write: 'can_set_contract_pricing',
+        note: 'SENSITIVE. Enforced by row-level security on takein.contract_pricing, '
+            + 'not merely hidden in the UI — a user without Read cannot select the row at all.' },
+      { key: 'takein.schedule', label: 'Delivery calendar', write: 'can_book_takein',
+        manage: [{ key: 'can_override_takein_booking', label: 'Book through a calendar rule (reason required)' }] },
+      { key: 'takein.intake', label: 'Intake — weighbridge, checklist, GRN',
+        write: 'can_capture_takein_intake',
+        manage: [
+          { key: 'can_void_takein_document', label: 'Void a GRN / withdraw a certificate' },
+          { key: 'can_return_takein_load', label: 'Return a load to the producer' },
+        ] },
+      { key: 'takein.minilab', label: 'Mini lab (Graafwater / Vanrhynsdorp)',
+        write: 'can_capture_takein_minilab' },
+      { key: 'takein.labs', label: 'Confirming & third-party lab results',
+        manage: [
+          { key: 'can_verify_takein_internal', label: 'Blackheath confirming reading' },
+          { key: 'can_capture_takein_external', label: 'Third-party residue / PA result' },
+        ] },
+      { key: 'takein.panel', label: 'Panel decisions', write: 'can_decide_takein_panel' },
+      { key: 'takein.documents', label: 'Afleweringsbewys & COA', write: 'can_issue_takein_documents' },
+      { key: 'takein.settlement', label: 'Settlement — what a producer is owed',
+        read: 'can_view_takein_settlement',
+        note: 'SENSITIVE. Grant sparingly — this is every producer\u2019s money in one table.' },
+    ],
+  },
+  {
     // Cross-department — Production/Quality/Management get it by department;
     // this permission grants it to anyone outside those departments.
     module: 'Logistics', slug: 'logistics',

@@ -222,6 +222,7 @@ export type PermissionKey =
   | 'can_read_staff_directory'
   | 'can_read_training'
   | 'can_read_roster'
+  | 'can_read_takein'
   // Write and delete, same scheme, one per module. There is no
   // can_write_all_modules or can_delete_all_modules and there should not be:
   // see the note above MODULE_GRANTS in permission-registry.ts.
@@ -243,6 +244,7 @@ export type PermissionKey =
   | 'can_write_staff_directory'
   | 'can_write_training'
   | 'can_write_roster'
+  | 'can_write_takein'
   | 'can_delete_quality'
   | 'can_delete_production'
   | 'can_delete_maintenance'
@@ -256,6 +258,27 @@ export type PermissionKey =
   | 'can_delete_staff_directory'
   | 'can_delete_training'
   | 'can_delete_roster'
+  | 'can_delete_takein'
+  // Raw Material Take-In — the farmer intake chain (contracts → schedule →
+  // intake → mini lab → documents → settlement). Depot scoping is a separate
+  // axis: shared.app_roles.depot_codes says WHICH depots, these keys say WHAT
+  // they may do.
+  | 'can_access_takein'            // the module at all
+  | 'can_manage_takein_contracts'  // create/edit a contract's terms and kg
+  | 'can_approve_takein_contracts' // the two-step kg approval + release
+  | 'can_view_contract_pricing'    // SEE the rand values (RLS-enforced, not just hidden)
+  | 'can_set_contract_pricing'     // SET them
+  | 'can_book_takein'              // make and cancel delivery bookings
+  | 'can_override_takein_booking'  // book through a calendar rule with a reason
+  | 'can_capture_takein_intake'    // weighbridge, checklist, raise the GRN
+  | 'can_void_takein_document'     // void a GRN / withdraw an Afleweringsbewys or COA
+  | 'can_return_takein_load'       // send a load back to the producer
+  | 'can_capture_takein_minilab'   // mini-lab sieve, moisture, density, shade
+  | 'can_verify_takein_internal'   // Blackheath's confirming reading
+  | 'can_capture_takein_external'  // third-party residue / PA result
+  | 'can_decide_takein_panel'      // sit on the panel
+  | 'can_issue_takein_documents'   // make out the Afleweringsbewys / COA
+  | 'can_view_takein_settlement'   // what a producer is owed — sensitive
   // Administration is deliberately absent: its resources are the audit log,
   // migrations, dev tools and user admin, none of which is a "read" anybody
   // should get from a view-everything toggle. It sets readGrant: false.
@@ -297,6 +320,12 @@ export const ALL_PERMISSION_KEYS: PermissionKey[] = [
   'can_access_logistics','can_sign_dispatch_doc','can_request_external_signature','can_verify_dispatch_doc',
   'can_access_notebooks','can_create_notebook_doc','can_sign_notebook_doc','can_void_notebook_doc',
   'can_access_maintenance',
+  'can_access_takein','can_manage_takein_contracts','can_approve_takein_contracts',
+  'can_view_contract_pricing','can_set_contract_pricing',
+  'can_book_takein','can_override_takein_booking',
+  'can_capture_takein_intake','can_void_takein_document','can_return_takein_load',
+  'can_capture_takein_minilab','can_verify_takein_internal','can_capture_takein_external',
+  'can_decide_takein_panel','can_issue_takein_documents','can_view_takein_settlement',
   'can_raise_breakdown','can_raise_planned','can_allocate_jobs','can_qc_jobs','can_verify_jobs',
   'can_access_hr',
   'can_view_staff','can_edit_staff_profiles','can_manage_competencies',
@@ -324,6 +353,7 @@ export const ALL_PERMISSION_KEYS: PermissionKey[] = [
   'can_read_staff_directory','can_write_staff_directory','can_delete_staff_directory',
   'can_read_training',   'can_write_training',   'can_delete_training',
   'can_read_roster',     'can_write_roster',     'can_delete_roster',
+  'can_read_takein',     'can_write_takein',     'can_delete_takein',
 ]
 
 // Roster section keys (match ROSTER_CATEGORIES in lib/production/roster-config.ts).
