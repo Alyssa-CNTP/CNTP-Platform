@@ -85,6 +85,21 @@ export function visibleSites(sites: Site[], userDepotCodes: string[] | null | un
  * rather than granted, so a hand-typed query string cannot reach another
  * depot's deliveries. An unknown or absent code leaves the scope alone.
  */
+/**
+ * The site a take-in screen is working on, from the route.
+ *
+ * `/take-in/site/GD/intake` puts the code in the path; the older `?site=GD`
+ * form is still read so a bookmark or a link from elsewhere keeps working.
+ * The path wins, because it is the thing the sidebar and the tab bar build.
+ */
+export function siteCodeFrom(
+  routeCode: string | string[] | undefined, queryCode?: string | null,
+): string | null {
+  const fromRoute = Array.isArray(routeCode) ? routeCode[0] : routeCode
+  const code = (fromRoute ?? queryCode ?? '').trim().toUpperCase()
+  return code || null
+}
+
 export function scopedSites(
   sites: Site[], userDepotCodes: string[] | null | undefined, siteParam?: string | null,
 ): Site[] {

@@ -116,6 +116,45 @@ laptop it sat past the right edge, so the QC had to scroll sideways on every car
 screen exists for. `table-fixed` with explicit widths keeps it on screen; the technician and QC names
 moved under the description. Nothing was dropped — the table just stopped being wider than the page.
 
+## 2026-09-15 — Gustav (A warehouse site IS the take-in station)
+
+**Files changed:** `components/layout/Sidebar.tsx`, `app/(app)/take-in/layout.tsx`, `app/(app)/take-in/page.tsx`, `app/(app)/take-in/site/[code]/layout.tsx` (new), `app/(app)/take-in/site/[code]/page.tsx` (new), the five chain screens moved under `site/[code]/`, `app/(app)/notebooks/site/[code]/page.tsx`, `lib/takein/db.ts`, `components/takein/SiteTakeInTabs.tsx` (removed)
+
+The previous attempt bolted a link strip onto the Warehousing site pages and left the
+take-in module standing beside them. That was half the job: it still had one Raw Material
+Take-In tab that answered for every site at once, and a separate set of warehouse tabs that
+answered for none of them.
+
+**A site is now the station.** `/take-in/site/GD` carries Graafwater Depot's whole intake
+chain — Overview, Schedule, Intake & GRN, Mini Lab, Documents, History — and Warehousing in
+the sidebar points straight at it. The five chain screens **moved** under `site/[code]/`
+rather than being copied; each reads its site from the route segment, with the older
+`?site=` form still honoured so existing links keep working.
+
+**Blackheath is deliberately not the same shape.** Farmers do not deliver there, so it gets
+no Schedule, Intake or Mini Lab — it is the consolidated view over the other four, and where
+the two company-wide pieces live: the contract register and settlement. Offering a
+weighbridge tab at a site with no weighbridge is how an operator captures a delivery against
+the wrong depot.
+
+**The GRN / Delivery Note books came off the site pages.** The take-in chain issues the GRN
+itself now, so the books were a second place the same delivery would get written down.
+`/notebooks` still exists and keeps every record it had — it is just no longer the way into a
+site. Checked before removing: one draft note at Blackheath, nothing else in any book.
+
+The all-sites overview and a single site's overview are **the same screen**. It reads the
+code from the route and narrows itself, so there is one set of KPIs and one definition of
+"needs someone" rather than two that drift.
+
+One thing worth naming: the module shell skips its own header on a site route, and that
+check sits **after** every hook rather than as an early return above them. A conditional hook
+call is the error-#310 class that took capture down for two days.
+
+Typecheck 35 and lint 3016, both equal to staging. 1194/1194 tests, build exit 0, all nine
+take-in routes emitted.
+
+---
+
 ## 2026-09-15 — Gustav (Take-in moves under Warehousing, and the duplicate site registry goes)
 
 **Files changed:** `supabase/migrations/20260915_002_takein_sites.sql` (new), `lib/takein/types.ts`, `lib/takein/db.ts`, `lib/takein/db.test.ts`, `components/takein/SiteTakeInTabs.tsx` (new), `app/(app)/notebooks/site/[code]/page.tsx`, and all eight `app/(app)/take-in/**` screens

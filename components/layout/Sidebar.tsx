@@ -72,15 +72,24 @@ export const NAV: NavItem[] = [
   { href: '/tags',                      label: 'Bag Tracking',               icon: Tag,             group: 'Operations', departments: ['Production','Quality'], permission: 'can_access_bag_tracking', orPermission: true },
   { href: '/stock-control',             label: 'Stock Control',              icon: Printer,         group: 'Operations', departments: ['Production','Management'], permission: 'can_read_production', orPermission: true },
 
-  // ── Warehousing — GRN / Delivery Note books, one tab per receiving site.
-  // More sites (and, per-site, more areas like tea courts vs depots) get added
-  // here as they come online; for now it's these five, each its own book pair.
-  { href: '/notebooks',                 label: 'All Sites',                  icon: BookOpen,        group: 'Warehousing', permission: 'can_access_notebooks' },
-  { href: '/notebooks/site/BH',         label: 'Blackheath',                 icon: Warehouse,       group: 'Warehousing', permission: 'can_access_notebooks' },
-  { href: '/notebooks/site/GD',         label: 'Graafwater Depot',           icon: Warehouse,       group: 'Warehousing', permission: 'can_access_notebooks' },
-  { href: '/notebooks/site/GT',         label: 'Graafwater Tea Court',       icon: Warehouse,       group: 'Warehousing', permission: 'can_access_notebooks' },
-  { href: '/notebooks/site/VD',         label: 'Vanrhynsdorp Depot',         icon: Warehouse,       group: 'Warehousing', permission: 'can_access_notebooks' },
-  { href: '/notebooks/site/VT',         label: 'Vanrhynsdorp Tea Court',     icon: Warehouse,       group: 'Warehousing', permission: 'can_access_notebooks' },
+  // ── Warehousing — each site IS its raw-material take-in and mini lab station.
+  // Clicking a site opens that site's own intake chain: schedule, weighbridge,
+  // GRN, mini lab, documents, history, all scoped to it.
+  //
+  // Blackheath is the odd one and deliberately so — farmers do not deliver
+  // there, so it is the consolidated view over the other four plus the
+  // company-wide contract register and settlement.
+  //
+  // These used to point at the GRN / Delivery Note books in /notebooks. The
+  // take-in chain issues the GRN itself now, so the books would have been a
+  // second place the same delivery gets written down. /notebooks still exists
+  // and keeps its records; it is just no longer the way into a site.
+  { href: '/take-in',                   label: 'All Sites',                  icon: BookOpen,        group: 'Warehousing', permission: 'can_access_takein' },
+  { href: '/take-in/site/BH',           label: 'Blackheath',                 icon: Warehouse,       group: 'Warehousing', permission: 'can_access_takein' },
+  { href: '/take-in/site/GD',           label: 'Graafwater Depot',           icon: Warehouse,       group: 'Warehousing', permission: 'can_access_takein' },
+  { href: '/take-in/site/GT',           label: 'Graafwater Tea Court',       icon: Warehouse,       group: 'Warehousing', permission: 'can_access_takein' },
+  { href: '/take-in/site/VD',           label: 'Vanrhynsdorp Depot',         icon: Warehouse,       group: 'Warehousing', permission: 'can_access_takein' },
+  { href: '/take-in/site/VT',           label: 'Vanrhynsdorp Tea Court',     icon: Warehouse,       group: 'Warehousing', permission: 'can_access_takein' },
 
   // ── HR — just two doors in. Staff Directory is people + how they sign in
   // (gated — it's OTHER people's data); Training is the whole qualification
@@ -105,21 +114,11 @@ export const NAV: NavItem[] = [
   { href: '/quality/lab-manager',       label: 'Lab Manager',                icon: ClipboardCheck,  group: 'Quality', departments: ['Quality'], permission: 'can_approve_runs' },
   { href: '/quality/maintenance-qc',    label: 'Maintenance QC',             icon: ClipboardCheck,  group: 'Quality', departments: ['Quality','Maintenance','Management'], permission: 'can_access_maintenance', orPermission: true },
 
-  // ── Raw Material Take-In — the farmer intake chain ──
-  // Its own group, not a row under Quality or Logistics: the people who live
-  // here are depot staff, and WHICH depot they see is scoped per user
-  // (public.users.depot_codes) rather than by department.
-  //
-  // Every entry is permission-gated with no department fallback — a depot clerk
-  // may hold no department this module would recognise, and Blackheath reaches
-  // it as the consolidation view rather than as Quality.
-  { href: '/take-in',                   label: 'Take-In Overview',           icon: Warehouse,       group: 'Raw Material Take-In', permission: 'can_access_takein' },
+  // Raw Material Take-In has no group of its own any more — a site IS the
+  // station, so the way in is Warehousing above. Only the two company-wide
+  // pieces stay reachable by name: the contract register, and settlement,
+  // which carries its own key because it is every producer's money.
   { href: '/take-in/contracts',         label: 'Contracts',                  icon: FileSignature,   group: 'Raw Material Take-In', permission: 'can_access_takein' },
-  { href: '/take-in/schedule',          label: 'Delivery Schedule',          icon: CalendarRange,   group: 'Raw Material Take-In', permission: 'can_access_takein' },
-  { href: '/take-in/intake',            label: 'Intake & GRN',               icon: PackageOpen,     group: 'Raw Material Take-In', permission: 'can_access_takein' },
-  { href: '/take-in/mini-lab',          label: 'Mini Lab',                   icon: Beaker,          group: 'Raw Material Take-In', permission: 'can_access_takein' },
-  { href: '/take-in/documents',         label: 'Documents',                  icon: FileText,        group: 'Raw Material Take-In', permission: 'can_access_takein' },
-  { href: '/take-in/history',           label: 'History',                    icon: Search,          group: 'Raw Material Take-In', permission: 'can_access_takein' },
   { href: '/take-in/settlement',        label: 'Settlement',                 icon: Banknote,        group: 'Raw Material Take-In', permission: 'can_view_takein_settlement' },
 
   // ── Maintenance — full module is Maintenance + Management; Production sees only Job Cards ──
