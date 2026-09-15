@@ -8,7 +8,7 @@
 // (takein.contract_pricing) behind row-level security, and this page only
 // selects it when the signed-in user holds can_view_contract_pricing. That is
 // not belt-and-braces theatre: Supabase RLS is ROW-level, so a policy cannot
-// hide a column from `select *`. Splitting the table is the only way a depot
+// hide a column from `select *`. Splitting the table is the only way a site
 // clerk can read the contract list while the money stays out of their reach —
 // if they craft the query by hand, the policy still refuses the row.
 //

@@ -2,6 +2,65 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-15 — Gustav (Take-in moves under Warehousing, and the duplicate site registry goes)
+
+**Files changed:** `supabase/migrations/20260915_002_takein_sites.sql` (new), `lib/takein/types.ts`, `lib/takein/db.ts`, `lib/takein/db.test.ts`, `components/takein/SiteTakeInTabs.tsx` (new), `app/(app)/notebooks/site/[code]/page.tsx`, and all eight `app/(app)/take-in/**` screens
+
+### The duplicate nobody asked for
+
+Take-in created `logistics.warehouses` as its own site registry, with codes `GS, MAT, BH, D4, D5`.
+**`notebooks.locations` already held the five receiving sites** — `BH, GD, GT, VD, VT` — and already
+drove the Warehousing tabs in the sidebar. Two registries for one set of physical sites is the exact
+coupling this document exists to prevent, and it had already drifted: the two sites recorded as "to be
+named" were the Graafwater and Vanrhynsdorp **Teeverwerkers** all along.
+
+`notebooks.locations` is now the single registry. Take-in keeps only `takein.site_config` — its own
+per-site counters and flags — joined through the `takein.sites` view, and `logistics.warehouses` /
+`logistics.locations` are dropped. The logistics schema was empty before take-in created them and its
+pages are commented out of the sidebar, so this returns it to the state it was in.
+
+**Site code and batch series are different things, and both are real.** The site `GD` mints the `GS-`
+series; the site `VD` mints `MAT-`. That is what the signed Afleweringsbewyse show (`GS-0293`,
+`MAT-0271`), so the series is a property of the site here, never a second name for it. `batches` and
+`bookings` now carry `location_code` against `notebooks.locations(code)`; the five seeded bookings were
+carried over (`GS → GD`, `MAT → VD`) rather than recreated.
+
+### Clicking a site gives you its intake chain
+
+`/notebooks/site/[code]` gains a **Farmer Take-In** strip above its GRN and DN books — Delivery
+Schedule, Intake & GRN, Mini Lab, Documents, History — so Graafwater Depot opens that site's whole
+working set in one place.
+
+**It links; it does not duplicate.** Each tab opens the one take-in screen with `?site=<code>`, and a
+new `scopedSites()` narrows that screen to the site. Copying eight screens per site is the duplication
+this module was asked not to create, and it is how two sites end up disagreeing about one delivery.
+
+`scopedSites()` **narrows and never widens** — a Graafwater clerk hand-typing `?site=VD` still sees
+Graafwater, because the query string is filtered against what the user is scoped to rather than
+replacing it. That case has its own test.
+
+The strip is absent unless the user holds `can_access_takein`, is scoped to that site, **and** the site
+takes farmer deliveries — Blackheath is the consolidated view and farmers do not deliver there. Its
+loader is wrapped so a take-in failure cannot take the GRN book down with it: this site's books are
+what the page is for and they do not depend on take-in.
+
+### All four outlying sites now take deliveries
+
+Graafwater Depot (`GS-`) and Vanrhynsdorp Depot (`MAT-`) keep the series from the signed notes. **The
+two Teeverwerkers are new and their series are PROVISIONAL** — `GT-` and `VT-` are placeholders, flagged
+`series_provisional` in the database and called out in an amber banner on the site's own page. A guessed
+series printed on a bag cannot be told apart from a real one once it is in the warehouse, so the screen
+says so rather than letting it pass. Set them from the paper books before the first live take-in.
+
+Verified on staging: per-site allocation is independent (`GS-0001`, `MAT-0001`, `GT-0001` all minted
+from 1), release-and-reuse still returns a number to its own site, Blackheath refuses with
+"Site BH has no batch series set", and every counter was reset to 0 afterwards.
+
+4 new tests (13 in `lib/takein/`). Typecheck 35, lint 3016 — both equal to staging. 1194/1194 tests,
+build exit 0.
+
+---
+
 ## 2026-09-15 — Gustav (Take-in: the screens could not reach their own schema, and the error said nothing)
 
 **Files changed:** `lib/takein/db.ts`, `lib/takein/db.test.ts` (new), `app/api/admin/users/[id]/route.ts`

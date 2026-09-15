@@ -54,7 +54,7 @@ export default function TakeInLayout({ children }: { children: React.ReactNode }
         <span className="inline-flex items-center gap-1.5 rounded-full border border-surface-rule
                          bg-surface-card px-3 py-1.5 font-mono text-[11px] text-text-muted">
           <Warehouse className="h-3.5 w-3.5" />
-          {depotCodes.length ? depotCodes.join(' · ') : 'All depots'}
+          {depotCodes.length ? depotCodes.join(' · ') : 'All sites'}
         </span>
       </header>
 

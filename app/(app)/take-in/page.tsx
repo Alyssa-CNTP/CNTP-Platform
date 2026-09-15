@@ -6,20 +6,21 @@
 //
 // Blackheath is the reason this page exists in this shape. Farmers do not
 // deliver there, so for that team every number on this page is somebody else's
-// depot. Scoped users see only their own; an unscoped user (Blackheath,
-// Management) sees each depot as its own column and the whole season as the
+// site. Scoped users see only their own; an unscoped user (Blackheath,
+// Management) sees each site as its own column and the whole season as the
 // total.
 
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
+import { useSearchParams } from 'next/navigation'
 import { useAuth } from '@/lib/auth/context'
-import { takeinDb, loadDepots, visibleDepots, errMsg } from '@/lib/takein/db'
+import { takeinDb, loadSites, errMsg, scopedSites } from '@/lib/takein/db'
 import { stageOf, isFinalised, type Stage } from '@/lib/core/takein/grading'
-import type { Depot, LabRow, PanelOutcome } from '@/lib/takein/types'
+import type { Site, LabRow, PanelOutcome } from '@/lib/takein/types'
 import { Loader2, AlertTriangle, ArrowRight } from 'lucide-react'
 
 interface Row {
-  id: string; batch_no: string; warehouse_id: string; delivered_on: string
+  id: string; batch_no: string; location_code: string; delivered_on: string
   begin_kg: number | null; end_kg: number | null; bags: number
   returned_at: string | null
   panel_outcome: PanelOutcome | null; panel_grade: string | null
@@ -38,32 +39,34 @@ const STAGE_LABEL: Record<Stage, string> = {
 
 export default function TakeInOverviewPage() {
   const { depotCodes } = useAuth()
-  const [depots, setDepots]   = useState<Depot[]>([])
+  // Set when this screen was opened from a site's page in Warehousing.
+  const siteParam = useSearchParams().get('site')
+  const [sites, setSites]   = useState<Site[]>([])
   const [rows, setRows]       = useState<Row[]>([])
   const [loading, setLoading] = useState(true)
   const [err, setErr]         = useState('')
 
-  useEffect(() => { void load() }, [depotCodes.join(',')])
+  useEffect(() => { void load() }, [depotCodes.join(','), siteParam])
 
   async function load() {
     setLoading(true); setErr('')
     try {
-      const all = await loadDepots()
-      const mine = visibleDepots(all, depotCodes)
-      setDepots(mine)
+      const all = await loadSites()
+      const mine = scopedSites(all, depotCodes, siteParam)
+      setSites(mine)
       if (!mine.length) { setRows([]); return }
 
       const { data, error } = await takeinDb()
         .from('batches')
         .select(`
-          id, batch_no, warehouse_id, delivered_on, begin_kg, end_kg, bags,
+          id, batch_no, location_code, delivered_on, begin_kg, end_kg, bags,
           returned_at, panel_outcome, panel_grade, panel_reason, panel_covered,
           contract:contract_id ( contract_no, variant, producer:producer_id ( name ) ),
           lab_results ( source, sieve_json, moisture, density, shade, aroma, colour, taste,
                         agrees, residue_group, pa_group ),
           documents ( kind, voided_at )
         `)
-        .in('warehouse_id', mine.map(d => d.id))
+        .in('location_code', mine.map(d => d.code))
         .order('delivered_on', { ascending: false })
         .limit(500)
       if (error) throw error
@@ -90,19 +93,19 @@ export default function TakeInOverviewPage() {
     return { row: r, stage: st.stage, final: isFinalised(st.stage, live('coa')) }
   }), [rows])
 
-  const byDepot = useMemo(() => depots.map(d => {
-    const mine = graded.filter(g => g.row.warehouse_id === d.id)
+  const bySite = useMemo(() => sites.map(d => {
+    const mine = graded.filter(g => g.row.location_code === d.code)
     return {
-      depot: d,
+      site: d,
       total:  mine.length,
       open:   mine.filter(g => !g.final).length,
       panel:  mine.filter(g => g.stage === 'panel').length,
       kg:     mine.filter(g => !['returned', 'rejected'].includes(g.stage))
                   .reduce((a, g) => a + Math.max(0, (g.row.begin_kg ?? 0) - (g.row.end_kg ?? 0)), 0),
     }
-  }), [depots, graded])
+  }), [sites, graded])
 
-  const totals = byDepot.reduce((a, d) => ({
+  const totals = bySite.reduce((a, d) => ({
     total: a.total + d.total, open: a.open + d.open,
     panel: a.panel + d.panel, kg: a.kg + d.kg,
   }), { total: 0, open: 0, panel: 0, kg: 0 })
@@ -131,39 +134,39 @@ export default function TakeInOverviewPage() {
         <Kpi label="Gross taken in" value={kg(totals.kg)}       unit="kg" tone="ok" />
       </div>
 
-      {/* ── per depot ── */}
+      {/* ── per site ── */}
       <section className="rounded-2xl border border-surface-rule bg-surface-card">
         <header className="flex items-center justify-between border-b border-surface-rule px-4 py-3">
-          <span className="font-display text-[14px] font-semibold text-text">By depot</span>
+          <span className="font-display text-[14px] font-semibold text-text">By site</span>
           <span className="text-[11px] text-text-muted">
             {depotCodes.length
-              ? 'Scoped to your depot'
-              : 'Every depot — farmers do not deliver to Blackheath, this is the consolidated view'}
+              ? 'Scoped to your site'
+              : 'Every site — farmers do not deliver to Blackheath, this is the consolidated view'}
           </span>
         </header>
         <div className="overflow-x-auto">
           <table className="w-full text-left">
             <thead>
               <tr className="border-b border-surface-rule bg-surface-raised">
-                {['Depot', 'Batch series', 'Deliveries', 'Open', 'Panel', 'Gross kg'].map(h => (
+                {['Site', 'Batch series', 'Deliveries', 'Open', 'Panel', 'Gross kg'].map(h => (
                   <th key={h} className="px-4 py-2.5 text-[11px] font-semibold uppercase tracking-wide text-text-muted">{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {byDepot.map(d => (
-                <tr key={d.depot.id} className="border-b border-surface-rule last:border-0">
+              {bySite.map(d => (
+                <tr key={d.site.code} className="border-b border-surface-rule last:border-0">
                   <td className="px-4 py-2.5">
-                    <span className="font-semibold text-[13px] text-text">{d.depot.name}</span>
-                    {!d.depot.takes_farmer_delivery && (
+                    <span className="font-semibold text-[13px] text-text">{d.site.name}</span>
+                    {!d.site.takes_farmer_delivery && (
                       <span className="ml-2 rounded-full bg-surface-dim px-2 py-0.5 font-mono text-[10px] text-text-muted">
                         no farmer delivery
                       </span>
                     )}
                   </td>
                   <td className="px-4 py-2.5 font-mono text-[12px] text-text-muted">
-                    {d.depot.batch_prefix
-                      ? <>{d.depot.batch_prefix}<span className="text-text">{String(d.depot.batch_seq + 1).padStart(4, '0')}</span> next</>
+                    {d.site.batch_prefix
+                      ? <>{d.site.batch_prefix}<span className="text-text">{String(d.site.batch_seq + 1).padStart(4, '0')}</span> next</>
                       : '—'}
                   </td>
                   <td className="px-4 py-2.5 font-mono text-[12px] text-text">{d.total}</td>
@@ -172,9 +175,9 @@ export default function TakeInOverviewPage() {
                   <td className="px-4 py-2.5 font-mono text-[12px] text-text">{kg(d.kg)}</td>
                 </tr>
               ))}
-              {!byDepot.length && (
+              {!bySite.length && (
                 <tr><td colSpan={6} className="px-4 py-8 text-center text-[12px] text-text-muted">
-                  No depot is in scope for your account. Ask an administrator to set your depots on Users &amp; Access.
+                  No site is in scope for your account. Ask an administrator to set your sites on Users &amp; Access.
                 </td></tr>
               )}
             </tbody>

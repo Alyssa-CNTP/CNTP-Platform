@@ -2,14 +2,14 @@
 
 // app/(app)/take-in/mini-lab/page.tsx
 //
-// The depot mini lab — Graafwater and Vanrhynsdorp. Sieve analysis, moisture,
+// The site mini lab — Graafwater and Vanrhynsdorp. Sieve analysis, moisture,
 // density and the sensory reading, against a batch.
 //
 // LEAF SHADE IS NOT REBUILT HERE. The Canon CR3 → ML classifier already exists
 // on Quality → Raw Material and writes qms.quality_records (workflow =
 // 'leaf_shade'). This page:
 //
-//   * reads THAT table, filtered to this batch's depot, and offers the shade it
+//   * reads THAT table, filtered to this batch's site, and offers the shade it
 //     already predicted so the operator does not retype it;
 //   * links the row it used onto takein.lab_results.quality_record_id, so the
 //     photo and the grading number stay tied together;
@@ -22,10 +22,11 @@
 import type { LabRow, PanelOutcome } from '@/lib/takein/types'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
+import { useSearchParams } from 'next/navigation'
 import { useAuth } from '@/lib/auth/context'
 import { getDb } from '@/lib/supabase/db'
-import { takeinDb, loadDepots, visibleDepots, logBatchEvent, releaseBatchNo, errMsg } from '@/lib/takein/db'
-import { SIEVE_FRACTIONS, type Depot } from '@/lib/takein/types'
+import { takeinDb, loadSites, logBatchEvent, releaseBatchNo, errMsg, scopedSites } from '@/lib/takein/db'
+import { SIEVE_FRACTIONS, type Site } from '@/lib/takein/types'
 import {
   sieveTable, shadeScore, stageOf, prelimGroup, panelTriggers, isFinalised,
 } from '@/lib/core/takein/grading'
@@ -38,7 +39,7 @@ interface ShadeRecord {
                observation?: string | null }
 }
 interface Row {
-  id: string; batch_no: string; warehouse_id: string; delivered_on: string
+  id: string; batch_no: string; location_code: string; delivered_on: string
   returned_at: string | null; returned_reason: string | null
   panel_outcome: PanelOutcome | null; panel_grade: string | null
   panel_reason: string | null; panel_covered: string[] | null
@@ -68,11 +69,13 @@ function blankLabRow(source: LabRow['source']): LabRow {
 
 export default function MiniLabPage() {
   const { p, fullName, user, depotCodes } = useAuth()
+  // Set when this screen was opened from a site's page in Warehousing.
+  const siteParam = useSearchParams().get('site')
   const canCapture = p('can_capture_takein_minilab')
   const canReturn  = p('can_return_takein_load')
   const actor = { id: user?.id ?? null, name: fullName ?? 'Unknown' }
 
-  const [depots, setDepots] = useState<Depot[]>([])
+  const [sites, setSites] = useState<Site[]>([])
   const [rows, setRows]     = useState<Row[]>([])
   const [shades, setShades] = useState<ShadeRecord[]>([])
   const [selId, setSelId]   = useState<string | null>(null)
@@ -84,22 +87,22 @@ export default function MiniLabPage() {
   const load = useCallback(async () => {
     setLoading(true); setErr('')
     try {
-      const all = await loadDepots()
-      // Only the depots that actually take a farmer delivery run a mini lab.
-      const mine = visibleDepots(all, depotCodes).filter(d => d.takes_farmer_delivery)
-      setDepots(mine)
+      const all = await loadSites()
+      // Only the sites that actually take a farmer delivery run a mini lab.
+      const mine = scopedSites(all, depotCodes, siteParam).filter(d => d.takes_farmer_delivery)
+      setSites(mine)
       if (!mine.length) { setRows([]); return }
 
       const { data, error } = await takeinDb().from('batches')
         .select(`
-          id, batch_no, warehouse_id, delivered_on, returned_at, returned_reason,
+          id, batch_no, location_code, delivered_on, returned_at, returned_reason,
           panel_outcome, panel_grade, panel_reason, panel_covered,
           contract:contract_id ( contract_no, variant, producer:producer_id ( name ) ),
           documents ( kind, doc_no, voided_at ),
           lab_results ( source, sieve_json, moisture, density, shade, aroma, colour, taste,
                         agrees, residue_group, pa_group, quality_record_id )
         `)
-        .in('warehouse_id', mine.map(d => d.id))
+        .in('location_code', mine.map(d => d.code))
         .order('delivered_on', { ascending: false })
         .limit(300)
       if (error) throw error
@@ -117,12 +120,12 @@ export default function MiniLabPage() {
       setShades((sh as unknown as ShadeRecord[]) ?? [])
     } catch (e: unknown) { setErr(errMsg(e, 'Could not load the mini lab.')) }
     finally { setLoading(false) }
-  }, [depotCodes.join(',')])
+  }, [depotCodes.join(','), siteParam])
 
   useEffect(() => { void load() }, [load])
 
   const b = useMemo(() => rows.find(r => r.id === selId) ?? null, [rows, selId])
-  const depot = useMemo(() => depots.find(d => d.id === b?.warehouse_id) ?? null, [depots, b])
+  const site = useMemo(() => sites.find(d => d.code === b?.location_code) ?? null, [sites, b])
   const mini  = b?.lab_results?.find((l: LabRow) => l.source === 'mini') ?? null
   const grn   = b?.documents?.find(d => d.kind === 'grn' && !d.voided_at) ?? null
   const afl   = b?.documents?.find(d => d.kind === 'afleweringsbewys' && !d.voided_at) ?? null
@@ -142,14 +145,14 @@ export default function MiniLabPage() {
     return !isFinalised(st.stage, hasCoa) || r.id === selId
   }), [rows, selId])
 
-  // Classifier rows for this batch, at this depot.
+  // Classifier rows for this batch, at this site.
   const shadeForBatch = useMemo(() => {
-    if (!b || !depot) return [] as ShadeRecord[]
-    const depotName = depot.name.replace(/\s*Depot$/i, '').trim()
+    if (!b || !site) return [] as ShadeRecord[]
+    const depotName = site.name.replace(/\s*Site$/i, '').trim()
     return shades.filter(s =>
       s.batch_number?.trim().toUpperCase() === b.batch_no.toUpperCase()
       && (s.data_json?.location ?? '').toLowerCase().includes(depotName.toLowerCase()))
-  }, [shades, b, depot])
+  }, [shades, b, site])
 
   const table = sieveTable(mini?.sieve_json ?? null)
   const gradingInput = b ? {
@@ -194,7 +197,7 @@ export default function MiniLabPage() {
   }
 
   async function doReturn(category: string, reason: string) {
-    if (!b || !depot) return
+    if (!b || !site) return
     setBusy(true)
     try {
       const db = takeinDb()
@@ -210,7 +213,7 @@ export default function MiniLabPage() {
         returned_stage: 'mini', returned_category: category, returned_reason: reason,
       }).eq('id', b.id)
       if (error) throw error
-      await releaseBatchNo(depot.id, b.batch_no)
+      await releaseBatchNo(site.code, b.batch_no)
       await logBatchEvent(b.id, 'load_returned',
         `RETURNED to producer at the mini lab (${category.replace(/_/g, ' ')}) — ${reason}`
         + ` · batch number ${b.batch_no} released`, actor)
@@ -226,9 +229,9 @@ export default function MiniLabPage() {
     </div>
   )
 
-  if (!depots.length) return (
+  if (!sites.length) return (
     <div className="rounded-2xl border border-surface-rule bg-surface-card px-4 py-8 text-center text-[12px] text-text-muted">
-      No mini-lab depot is in scope for your account. The mini lab runs at Graafwater and
+      No mini-lab site is in scope for your account. The mini lab runs at Graafwater and
       Vanrhynsdorp; Blackheath&rsquo;s confirming reading lives on Quality → Raw Material.
     </div>
   )
@@ -306,7 +309,7 @@ export default function MiniLabPage() {
                   <span className="font-display text-[14px] font-semibold text-text">
                     {b.batch_no} · sieving analysis
                   </span>
-                  <span className="text-[11px] text-text-muted">{depot?.name} · 400 g sample</span>
+                  <span className="text-[11px] text-text-muted">{site?.name} · 400 g sample</span>
                 </header>
                 <div className="overflow-x-auto">
                   <table className="w-full text-left">
@@ -380,7 +383,7 @@ export default function MiniLabPage() {
               <section className="rounded-2xl border border-surface-rule bg-surface-card">
                 <header className="flex items-center justify-between border-b border-surface-rule px-4 py-3">
                   <span className="inline-flex items-center gap-1.5 font-display text-[14px] font-semibold text-text">
-                    <Leaf className="h-4 w-4 text-accent" /> Leaf shade — {depot?.name}
+                    <Leaf className="h-4 w-4 text-accent" /> Leaf shade — {site?.name}
                   </span>
                   <Link href="/quality/raw-material"
                     className="inline-flex items-center gap-1 text-[11px] font-semibold text-brand hover:underline">
@@ -393,7 +396,7 @@ export default function MiniLabPage() {
                     and writes <span className="font-mono">qms.quality_records</span>. This panel reads that
                     same store — it is not a second copy. Upload the photo there against batch{' '}
                     <span className="font-mono text-text">{b.batch_no}</span> at{' '}
-                    <span className="font-mono text-text">{depot?.name.replace(/\s*Depot$/i, '')}</span>, then
+                    <span className="font-mono text-text">{site?.name.replace(/\s*Site$/i, '')}</span>, then
                     take the reading across.
                   </p>
                   {shadeForBatch.length ? (
@@ -430,7 +433,7 @@ export default function MiniLabPage() {
                     </ul>
                   ) : (
                     <p className="rounded-xl border border-surface-rule bg-surface-dim px-3 py-2.5 text-[12px] text-text-muted">
-                      No classifier record for {b.batch_no} at this depot yet. The shade can still be typed
+                      No classifier record for {b.batch_no} at this site yet. The shade can still be typed
                       above — the classifier is an aid, not a gate.
                     </p>
                   )}
@@ -474,7 +477,7 @@ export default function MiniLabPage() {
 
       {returning && b && (
         <MiniReturnDialog batchNo={b.batch_no} contractNo={b.contract?.contract_no ?? ''}
-          depotName={depot?.name ?? ''} grnNo={grn?.doc_no ?? null} busy={busy}
+          depotName={site?.name ?? ''} grnNo={grn?.doc_no ?? null} busy={busy}
           onCancel={() => setReturning(false)} onConfirm={doReturn} />
       )}
     </div>
