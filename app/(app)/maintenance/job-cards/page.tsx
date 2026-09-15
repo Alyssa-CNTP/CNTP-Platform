@@ -101,6 +101,10 @@ export default function JobCardsPage() {
 
   const cardRoles = { canManage: role.canManage, isTech: role.isTech, isQc: role.isQc, isRaiser: role.isRaiser }
   const cardHref = (j: JobCard) => `/maintenance/job-cards/${j.id}`
+  // "Assigned to me", by id where we have it and by name for older cards.
+  const isMine = (j: JobCard) =>
+    (!!auth.userId && (j.assigned_user_id === auth.userId || j.assigned_user_id_2 === auth.userId)) ||
+    (!!actor && (j.assigned_to === actor || j.assigned_to_2 === actor))
 
   // Shared free-text + date-range + urgency filter, applied across every view.
   const cardFilter = makeCardFilter(search, dateFrom, dateTo)
@@ -220,8 +224,12 @@ export default function JobCardsPage() {
           <div className="card p-3 text-[12px] text-text-muted mb-3">
             Your job cards, <strong className="text-text">{actor}</strong>. Click a row to log work — the timer shows while a job is running. Breakdowns time from the moment they were raised.
           </div>
+          {/* Matched on user id first, name as the fallback for older cards —
+              a name-only match drops every card whenever the roster spelling and
+              the profile name differ. Kept through qc_check / mgr_verify so a
+              finished card stays in sight until it is actually signed off. */}
           <JobCardTable
-            cards={jcs.filter(j => (j.assigned_to === actor || j.assigned_to_2 === actor) && !j.external && j.status !== 'complete').filter(passes).sort(byUrgencyThenAge)}
+            cards={jcs.filter(j => isMine(j) && !j.external && j.status !== 'complete').filter(passes).sort(byUrgencyThenAge)}
             roles={cardRoles}
             empty={`No open job cards assigned to ${actor}.`} />
 

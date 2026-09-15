@@ -10,7 +10,12 @@ export type SessionStatus  = 'draft' | 'submitted' | 'approved'
 export type OutputGroup    = 'B' | 'C' | 'D'
 export type BagStatus      = 'in_stock' | 'in_process' | 'consumed' | 'dispatched' | 'on_hold' | 'rejected'
 export type SignerRole     = 'operator' | 'supervisor' | 'qc'
-export type ScanAction     = 'debagging_in' | 'bagging_out' | 'stock_count' | 'dispatch' | 'reprint' | 'qc_check'
+// Mirrors scan_events_action_check in the database. 'void' is the reversing
+// event used to undo an earlier one (ARCHITECTURE.md §4 — the ledger is
+// append-only); 'topped_up' / 'drawn_down' are the half-bag transfer pair (§6).
+// These three were allowed by the CHECK constraint but missing here, so writing
+// one meant casting the row to `any` at every call site.
+export type ScanAction     = 'debagging_in' | 'bagging_out' | 'stock_count' | 'dispatch' | 'reprint' | 'qc_check' | 'void' | 'topped_up' | 'drawn_down'
 export type LocalExport    = 'Export' | 'Export Blend' | 'Domestic/Local'
 export type OrgConv        = 'CON' | 'ORG'
 export type SectionId      = 'sieving' | 'refining1' | 'refining2' | 'granule' | 'blender' | 'pasteuriser'

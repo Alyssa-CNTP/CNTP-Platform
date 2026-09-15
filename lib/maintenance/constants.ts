@@ -12,8 +12,13 @@ export const AREAS = ['Sieving Tower', 'Pasteurizer', 'Granules - RB', 'Refining
 // deliberately excluded so he is never treated as an on-duty technician.
 export const TECHS = ['Shane', 'Mohapi', 'John', 'Yamkela', 'Melikhaya']
 
-// Breakdown is its own workflow now — removed from the selectable planned types
-export const PLANNED_TYPES = ['Planned Maintenance', 'Safety Related', 'Engineering', 'Repair', 'Temporary Repair', 'Improvement', 'Audit/Inspection Finding']
+// Breakdown is its own workflow now — removed from the selectable planned types.
+// NPD covers work raised for new-product development trials (rigging a line for a
+// trial run, a one-off modification) — it is neither a repair nor routine upkeep,
+// and separating it keeps that time out of the maintenance-load figures.
+// The voice-capture prompt reads this same list (app/api/maintenance/transcribe)
+// so a new type is offered by both the form and the voice flow.
+export const PLANNED_TYPES = ['Planned Maintenance', 'Safety Related', 'Engineering', 'Repair', 'Temporary Repair', 'Improvement', 'Audit/Inspection Finding', 'NPD (New Product Development)']
 
 // Why a technician paused a job. Picked from this list so pauses are reportable
 // (e.g. how much time is lost waiting for parts) instead of free text. 'Other'

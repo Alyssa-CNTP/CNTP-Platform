@@ -17,6 +17,7 @@ import { allocateWeekly, allocateMonthly, isoWeekNumber, monthIndexOf } from '@/
 import { TECHS } from '@/lib/maintenance/constants'
 import { printTable, printChecklistOne } from '@/lib/maintenance/exporters'
 import { INP } from '@/components/production/shared/ui'
+import { ServiceCard } from '@/components/maintenance/ServiceCard'
 
 // Order forklift run-hour rows by their forklift number; non-forklifts keep their
 // (days-to-service) order ahead of them.
@@ -32,8 +33,9 @@ const BTN_SM = 'border border-surface-rule bg-surface-card text-text rounded-md 
 export default function ScheduledPage() {
   const { loading, data, actions, derived, ui, weekKey, moKey, actor, reload } = useMaintenanceContext()
   const { templates, waterReadings, ipReadings, dieselReadings, lsLogs, boilerStarts, staff } = data
-  const { getComp, saveComp, toggleTask, setTaskField, answerTask, allocateChecklist, submitChecklist, verifyChecklist, saveAnnualNotes, updateAnnual, calibrateAnnual, raiseFromChecklist, saveReading, calDone, calDoneOn, eqServiced } = actions
+  const { getComp, saveComp, toggleTask, setTaskField, answerTask, allocateChecklist, submitChecklist, verifyChecklist, saveAnnualNotes, updateAnnual, calibrateAnnual, raiseFromChecklist, saveReading, saveChecklistReadings, calDone, calDoneOn, eqServiced } = actions
   const auth = useAuth()
+  const userId = auth.userId
   const maintRole = deriveMaintRole(auth)
   const canManage = maintRole.canManage
   const seesAll = maintRole.seesAll
@@ -41,7 +43,7 @@ export default function ScheduledPage() {
   // staff directory for the picker.
   const dutyNow: string[] = derived.dutyNow
   const allTechs = (data.staff.length ? data.staff.map(s => s.name) : TECHS)
-  const { annualRows, lastComp, eqLatest, calRows, outstandingChecklists } = derived
+  const { annualRows, lastComp, eqLatest, calRows, outstandingChecklists, compressorService, generatorService } = derived
   const { drafts, setDrafts, setPopup } = ui
 
   const [sub, setSub] = useState(0)
@@ -53,8 +55,10 @@ export default function ScheduledPage() {
   // Per-asset "who did the calibration" for the full register — a calibration
   // cannot be marked done until someone is selected.
   const [calWho, setCalWho] = useState<Record<number, string>>({})
-  // Monthly audit filter — view a past month's checklists (empty = current month).
+  // History filters — view a PAST period's completed checklists (empty = current).
+  // Monthly takes a month; weekly takes an ISO week (yyyy-Www).
   const [monthView, setMonthView] = useState('')
+  const [weekView, setWeekView] = useState('')
   // Annual register header filters.
   const [annualSearch, setAnnualSearch] = useState('')
   const [annualCat, setAnnualCat] = useState('all')
@@ -135,11 +139,13 @@ export default function ScheduledPage() {
       .in('role_key', ['maintenance_tech', 'maintenance_asst'])
     const rows = (entries ?? []) as { person_name: string; role_key: string; shift: string }[]
     const uniq = (arr: string[]) => Array.from(new Set(arr.map(x => (x ?? '').trim()).filter(Boolean)))
-    // Weekly → morning (day) shift; monthly → everyone on the roster this month.
-    const techs = freq === 'weekly'
-      ? uniq(rows.filter(r => r.shift === 'day').map(r => r.person_name))
-      : uniq(rows.map(r => r.person_name))
-    if (!techs.length) { setPopup(`No maintenance technicians on the ${freq === 'weekly' ? 'morning shift this week' : 'roster this month'} — check the shift roster in Operations.`); return }
+    // Spread the work across EVERY maintenance technician, not just whoever is on
+    // duty right now — a checklist is a whole-period job, and only rostering the
+    // on-duty crew left the rest of the team with nothing and overloaded the few.
+    // The roster is still read (unchanged, read-only) to catch anyone it lists who
+    // is not in the staff directory; the directory is the primary source.
+    const techs = uniq([...allTechs, ...rows.map(r => r.person_name)])
+    if (!techs.length) { setPopup('No maintenance technicians found in the staff directory or the shift roster.'); return }
     const tpls = templates.filter(t => t.frequency === freq)
     const allocTpls = tpls.map(t => ({ id: t.id, area: t.area, sort_order: t.sort_order }))
     const now = new Date()
@@ -149,7 +155,17 @@ export default function ScheduledPage() {
     let n = 0
     for (const t of tpls) { const who = map[t.id]; if (who) { await allocateChecklist(t, who); n++ } }
     reload() // refresh so every allocation shows immediately
-    setPopup(`Auto-allocated ${n} ${freq} checklist${n === 1 ? '' : 's'} across ${techs.length} technician${techs.length === 1 ? '' : 's'} (${techs.join(', ')}) from the shift roster.\n\nWeekly is due before 10:00 on Monday; monthly is due by the 15th.`)
+    setPopup(`Auto-allocated ${n} ${freq} checklist${n === 1 ? '' : 's'} across ${techs.length} technician${techs.length === 1 ? '' : 's'} (${techs.join(', ')}).\n\nThis period is now locked — to move a checklist to someone else (sick leave, etc.) change it individually on the card. Auto-allocate cannot be run again for this period.\n\nWeekly is due before 10:00 on Monday; monthly is due by the 15th.`)
+  }
+
+  /** Has this period already been auto-allocated? Once any checklist for the
+   *  period carries an allocation the period is LOCKED: auto-allocate is disabled
+   *  (it would reshuffle work people have already started) and only the
+   *  maintenance manager may move an individual checklist to someone else. */
+  const periodAllocated = (freq: 'weekly' | 'monthly') => {
+    const period = freq === 'weekly' ? weekKey : (monthView || moKey)
+    return templates.filter(t => t.frequency === freq)
+      .some(t => !!getComp(t.id, period)?.assigned_at)
   }
 
   if (loading) {
@@ -241,13 +257,25 @@ export default function ScheduledPage() {
 
       {(sub === 1 || sub === 2) && (() => {
         const freq = sub === 1 ? 'weekly' : 'monthly'
-        // Monthly can be pointed at a past month (audit view); weekly is current week.
-        const period = freq === 'weekly' ? weekKey : (monthView || moKey)
-        const auditView = freq === 'monthly' && !!monthView && monthView !== moKey
+        // Either frequency can be pointed at a PAST period to read the history:
+        // weekly takes an ISO week (yyyy-Www), monthly takes a month (yyyy-mm).
+        const period = freq === 'weekly' ? (weekView || weekKey) : (monthView || moKey)
+        const auditView = freq === 'weekly'
+          ? (!!weekView && weekView !== weekKey)
+          : (!!monthView && monthView !== moKey)
         // Technicians only see the checklists allocated to them; managers and the
         // oversight profiles (IT / admin / Management / production manager) see all.
+        // A technician sees the checklists allocated to THEM. Match on the stored
+        // user id first (reliable) and fall back to the name for rows allocated
+        // before assigned_user_id existed.
+        const mine = (cl: { id: number }) => {
+          const c = getComp(cl.id, period)
+          if (!c) return false
+          if (c.assigned_user_id && userId) return c.assigned_user_id === userId
+          return (c.assigned_to ?? '') === actor
+        }
         const list = templates.filter(t => t.frequency === freq)
-          .filter(cl => seesAll || canManage || (getComp(cl.id, period)?.assigned_to ?? '') === actor)
+          .filter(cl => seesAll || canManage || mine(cl))
         return (
           <div>
             <div className="mb-3 flex items-start justify-between gap-2 flex-wrap">
@@ -262,19 +290,34 @@ export default function ScheduledPage() {
               </p>
               </div>
               <div className="flex items-center gap-2 shrink-0">
-                {freq === 'monthly' && (
+                {freq === 'monthly' ? (
                   <label className="text-[11px] text-text-muted flex items-center gap-1">Month
                     <input type="month" className={`${INP} w-auto`} value={monthView || moKey} onChange={e => setMonthView(e.target.value === moKey ? '' : e.target.value)} />
                   </label>
+                ) : (
+                  <label className="text-[11px] text-text-muted flex items-center gap-1">Week
+                    <input type="week" className={`${INP} w-auto`} value={weekView || weekKey} onChange={e => setWeekView(e.target.value === weekKey ? '' : e.target.value)} />
+                  </label>
                 )}
-                {auditView && <span className="badge badge-gray">Audit view</span>}
+                {auditView && <span className="badge badge-gray">History — {period}</span>}
+                {auditView && (
+                  <button className={BTN_SM} onClick={() => (freq === 'weekly' ? setWeekView('') : setMonthView(''))}>Back to current</button>
+                )}
                 {/* Manager UX: auto-allocate from the shift roster (reads it only). */}
-                {canManage && !auditView && (
-                  <button onClick={() => autoAllocate(freq)} title={freq === 'weekly' ? 'Allocate weekly checklists to the morning-shift technicians (rotates weekly)' : 'Allocate monthly checklists across the roster (heavy lines rotate monthly)'}
-                    className="inline-flex items-center gap-1.5 bg-brand text-white rounded-lg px-3 py-2 text-[12px] font-semibold hover:brightness-110 transition">
-                    <Users size={14} /> Auto-allocate from roster
-                  </button>
-                )}
+                {canManage && !auditView && (() => {
+                  const locked = periodAllocated(freq)
+                  return (
+                    <button
+                      disabled={locked}
+                      onClick={() => !locked && autoAllocate(freq)}
+                      title={locked
+                        ? 'This period has already been allocated. Re-running would reshuffle work people have started — move an individual checklist on its card instead.'
+                        : 'Allocate this period\'s checklists across all maintenance technicians'}
+                      className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-[12px] font-semibold transition ${locked ? 'bg-surface-dim text-text-faint cursor-not-allowed' : 'bg-brand text-white hover:brightness-110'}`}>
+                      <Users size={14} /> {locked ? 'Allocated for this period' : 'Auto-allocate to all technicians'}
+                    </button>
+                  )
+                })()}
                 <button onClick={() => printChecklists(freq, period)}
                   className="inline-flex items-center gap-1.5 border border-surface-rule bg-surface-card text-text rounded-lg px-3 py-2 text-[12px] font-semibold hover:border-text/30 transition">
                   <Printer size={14} /> Print / export
@@ -317,6 +360,7 @@ export default function ScheduledPage() {
                           <div className="text-[11px] text-text-faint break-words">{cl.doc_ref} · {cl.tasks.length} tasks</div>
                           <div className={`text-[10px] mt-0.5 ${prev || done ? 'text-text-muted' : 'text-err'}`}>
                             {done && comp ? <>✓ Completed by <strong className="text-ok">{comp.completed_by || '—'}</strong> ({fmtD(comp.updated_at ?? null)})</>
+                              : doneN > 0 && comp ? <>{doneN}/{cl.tasks.length} done{comp.completed_by ? <> by <strong className="text-text">{comp.completed_by}</strong></> : null}</>
                               : prev ? <>Last: {prev.period_key} by <strong className="text-text">{prev.completed_by || '—'}</strong></>
                               : 'Never completed in the system'}
                           </div>
@@ -326,7 +370,10 @@ export default function ScheduledPage() {
                       <div className="flex items-center gap-1.5" onClick={e => e.stopPropagation()}>
                         {/* Manager allocates the checklist to a technician (on-duty suggested first). */}
                         {canManage && (
-                          <select className={`${INP} min-w-0 flex-1 text-[11px] py-1 min-h-0`} title="Allocate this checklist to a technician"
+                          <select className={`${INP} min-w-0 flex-1 text-[11px] py-1 min-h-0`}
+                            title={assigned
+                              ? 'Manager override — move this checklist to someone else (sick leave, etc.). Only the maintenance manager can change an allocated checklist.'
+                              : 'Allocate this checklist to a technician'}
                             value={assigned} onChange={e => allocateChecklist(cl, e.target.value)}>
                             <option value="">Allocate…</option>
                             {dutyNow.length > 0 && <optgroup label="On duty now">{dutyNow.map(t => <option key={t} value={t}>{t}</option>)}</optgroup>}
@@ -376,7 +423,15 @@ export default function ScheduledPage() {
                                   ? <><span className="text-[12px] font-semibold text-text">Average</span><span className="text-[15px] font-semibold text-brand tabular-nums">{avg != null ? avg.toFixed(1) + ' %' : '—'}</span></>
                                   : <span className="text-[11px] text-text-muted">Enter this week's readings.</span>}
                                 <button className={BTN_OK + ' ml-auto'}
-                                  onClick={() => cl.tasks.forEach((_, ti) => { if (valOf(ti) !== '' && !st[ti]?.done) toggleTask(cl, ti) })}>Save readings</button>
+                                  onClick={async () => {
+                                    // Mark the entered lines done on the checklist…
+                                    cl.tasks.forEach((_, ti) => { if (valOf(ti) !== '' && !st[ti]?.done) toggleTask(cl, ti) })
+                                    // …and write the numbers into the readings register
+                                    // so they appear on the trend graphs.
+                                    const vals: Record<number, string> = {}
+                                    cl.tasks.forEach((_, ti) => { vals[ti] = valOf(ti) })
+                                    await saveChecklistReadings(cl, vals)
+                                  }}>Save readings</button>
                               </div>
                             </div>
                           )
@@ -463,6 +518,20 @@ export default function ScheduledPage() {
             <h2 className="text-sm font-semibold text-text">Annual / calibration / verification</h2>
             <p className="text-[12px] text-text-muted mt-0.5">Every field is editable. Mark an item calibrated with the date, cycle (days) and who did it — the next-due date recomputes automatically. Boiler: 180-day warning; others: 60 / 30 / 7 / 1-day alerts.</p>
           </div>
+
+          {/* Run-hour service status — the compressor and generator are scheduled on
+              hours (and the generator also yearly), not on a calendar cycle like the
+              rest of this register, so their next-service DATE is computed and shown
+              here alongside it. */}
+          {(compressorService || generatorService) && (
+            <div>
+              <h3 className="text-[12px] font-semibold text-text mb-2">Run-hour service (next due date is calculated)</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {compressorService && <ServiceCard s={compressorService} />}
+                {generatorService && <ServiceCard s={generatorService} />}
+              </div>
+            </div>
+          )}
 
           {/* Counts + search + category filter */}
           <div className="flex gap-2 flex-wrap items-center text-[12px]">
