@@ -69,6 +69,30 @@ schema handles use the `as never` form the rest of the repo already uses. Narrow
 looseness bugs the casts were hiding — a `panel_outcome` widened to `string`, and a dead `source_row`
 delete on the mini-lab upsert.
 
+### Follow-up the same day — the app said yes where the database said no
+
+Caught on review straight after the merge, before anyone hit it. The app resolves a
+permission as **override → role default → module grant** (`resolvePermission`), but an RLS
+policy can only read the **stored override jsonb** — role defaults live in TypeScript, and
+mirroring them into SQL would be a second source of truth for who may see money.
+
+So an IT co_developer, whose access comes entirely from a role default, was allowed by the app
+and refused by the database: the Contracts screen would have shown an **empty pricing panel with
+no explanation**, indistinguishable from "no price captured yet". Exactly the two-paths-disagree
+failure this document warns about, in the one place where the data is a producer's money.
+
+The policy is **not** loosened — requiring the money key to be ticked against a person by name is
+the right posture for it. What changed is that the screen no longer lies about it: it reads the
+stored override to know what the database will actually allow, asks for pricing only when the
+answer is yes, and where role and database disagree says so in an amber banner naming the tick
+needed on Users & Access. The migration carries the same note next to the policy, so changing one
+without the other is hard to do by accident.
+
+Only `takein.contract_pricing` has permission-keyed policies — verified against `pg_policies`, so
+nothing else in the module carries the same assumption.
+
+---
+
 ### Still open
 
 - **D4 and D5 need their real names and prefixes** before they can take a delivery. They are seeded inactive precisely so they cannot.
