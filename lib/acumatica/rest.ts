@@ -56,12 +56,24 @@ async function timedFetch(url: string, init: RequestInit, ms: number): Promise<R
 }
 
 // ── Token cache (module-level, survives across requests on the long-running VPS) ─
-let _token: { value: string; expiresAt: number } | null = null
+//
+// Keyed on the CLIENT ID, because that is what selects the tenant: Acumatica
+// registers a connected app per company and the id carries the suffix —
+// `<guid>@CNTP` for live, `<guid>@CNTP TEST` for the test company. The base URL
+// is identical for both, so nothing else in a request distinguishes them.
+//
+// A single unkeyed cache would hand a live token to a call meant for the test
+// tenant (or the reverse) for up to an hour, silently, answering 200. Reads
+// would quietly return the wrong company's data; a write would book a
+// production order into the wrong company. Neither is visible in the response.
+const _tokens = new Map<string, { value: string; expiresAt: number }>()
 
 async function getToken(cfg: AcumaticaRestConfig, force = false): Promise<string> {
   const now = Date.now()
+  const key = cfg.clientId
   // Reuse a cached token until 60s before it expires.
-  if (!force && _token && _token.expiresAt > now + 60_000) return _token.value
+  const hit = _tokens.get(key)
+  if (!force && hit && hit.expiresAt > now + 60_000) return hit.value
 
   const res = await timedFetch(`${cfg.baseUrl}/identity/connect/token`, {
     method: 'POST',
@@ -81,8 +93,9 @@ async function getToken(cfg: AcumaticaRestConfig, force = false): Promise<string
     throw new Error(`Acumatica token request failed (${res.status})${body ? `: ${body.slice(0, 200)}` : ''}`)
   }
   const j = await res.json()
-  _token = { value: j.access_token, expiresAt: now + Number(j.expires_in ?? 3600) * 1000 }
-  return _token.value
+  const minted = { value: j.access_token as string, expiresAt: now + Number(j.expires_in ?? 3600) * 1000 }
+  _tokens.set(key, minted)
+  return minted.value
 }
 
 // Call a contract-REST entity.
