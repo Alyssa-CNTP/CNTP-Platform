@@ -2,6 +2,41 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-15 — Gustav (Take-in: template contracts so the whole flow can be walked on staging)
+
+**Files changed:** `supabase/seeds/20260915_takein_demo_data.sql` (new), `supabase/seeds/20260915_takein_demo_data_teardown.sql` (new)
+
+Seed data for the Raw Material Take-In module, applied to the **staging** Supabase project
+(`qjqkpockmujecjgmdple`) and committed so it can be re-run rather than re-typed. Five producers,
+six contracts, pricing on each, panel terms on the four released ones, and five bookings across
+Graafwater and Vanrhynsdorp.
+
+**The four released contracts differ on purpose.** The thing most worth testing is that a panel
+decision's effect on the producer is read from the **contract** and not hardcoded — the Verpligte
+Paneel Besluit rule:
+
+| Contract | Variant | Panel terms |
+|---|---|---|
+| D26-001 | Conventional | every trigger binding except lab variance — the default shape |
+| D26-002 | Organic | sensory **not** binding — the panel sits, the farmer is unaffected |
+| D26-003 | RA-Conventional | density **and** sensory not binding — the in-house-only case |
+| D26-004 | Conventional | lab variance **is** binding — the one nobody has by default |
+
+D26-005 is left at `awaiting_release` and D26-006 at `draft`, so the two-step approve → release can
+be walked without first creating a contract.
+
+Everything is tagged for removal: producers carry `acumatica_code` `V-DEMO%`, contracts
+`contract_no` `D26-%`. The seed is idempotent — re-running replaces its rows rather than doubling
+them. The teardown script removes the seed **and** anything captured against it during testing
+(batches, bags, documents, lab results, audit events) and resets every depot counter to 0, because
+demo batches left behind would put invented deliveries into Settlement and the season KPIs.
+
+Two deliberate choices. **Producer emails are NULL** — nothing in this module emails a farmer, and a
+demo row carrying a plausible address is how that stops being true by accident. **The rand values
+are invented** — they exist to prove the pricing RLS split works, not to reflect what anyone is paid.
+
+---
+
 ## 2026-09-15 — Gustav (RAW MATERIAL TAKE-IN: the farmer take-in flow built into the platform, staging only)
 
 **Files changed:** `supabase/migrations/20260915_001_takein_schema.sql`, `lib/core/takein/grading.ts`, `lib/core/takein/grading.test.ts`, `lib/takein/types.ts`, `lib/takein/db.ts`, `app/(app)/take-in/layout.tsx`, `app/(app)/take-in/page.tsx`, `app/(app)/take-in/contracts/page.tsx`, `app/(app)/take-in/schedule/page.tsx`, `app/(app)/take-in/intake/page.tsx`, `app/(app)/take-in/mini-lab/page.tsx`, `app/(app)/take-in/documents/page.tsx`, `app/(app)/take-in/history/page.tsx`, `app/(app)/take-in/settlement/page.tsx`, `lib/auth/permissions.ts`, `lib/auth/permission-registry.ts`, `components/layout/Sidebar.tsx`, `app/(app)/layout.tsx`, `lib/auth/context.tsx`, `app/api/admin/users/route.ts`, `app/api/admin/users/[id]/route.ts`, `app/(app)/users/page.tsx`
