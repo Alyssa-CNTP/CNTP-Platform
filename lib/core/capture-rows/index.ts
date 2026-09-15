@@ -102,7 +102,40 @@ function serialOrNull(serial: unknown): string | null {
   return s ? String(s) : null
 }
 
-/** Input rows for `production.prod_debagging`. */
+/**
+ * Input rows for `production.prod_debagging`.
+ *
+ * ── Why a manually-typed input serial now reaches bag_serial_no ────────────
+ *
+ * Refining, Granule, Blender and Pasteuriser used to null this column whenever
+ * `inputMode === 'manual'`, on the reasoning that a typed serial might not be
+ * in `bag_tags` and would trip `prod_debagging_bag_serial_no_fkey` (23503),
+ * taking the whole save with it. The serial went to `notes` instead.
+ *
+ * That cost the platform its section-to-section links. `bag_serial_no` is the
+ * ONLY column joining a bag to the session that consumed it, so nulling it for
+ * every hand-entered bag means Refining cannot be traced to the Sieving bag it
+ * debagged, Granule cannot be traced to either, and a bag's grade cannot be
+ * inherited from what it was made of. Measured on staging before this change:
+ * 2 serialed input rows in the entire database — 0 of 38 on the Granule Line,
+ * 0 of 5 on Refining 2. The chain was severed at the point of capture.
+ *
+ * The FK worry no longer applies, for two independent reasons:
+ *
+ *   1. Every capture screen registers a manual input bag in `bag_tags` at the
+ *      moment the operator commits it, BEFORE persist() runs — so the row the
+ *      FK needs is already there.
+ *   2. `persist()` re-checks anyway. It reads `bag_tags` for every claimed
+ *      serial and moves the genuinely-untagged ones into `notes` itself,
+ *      exactly as this builder used to do blindly. That guard is the right
+ *      place for it: it knows what is actually in the database, and this
+ *      builder is pure and cannot.
+ *
+ * So the serial is passed through and the guard decides. Sieving is the one
+ * section that still nulls it unconditionally, and that stays — it debags farm
+ * bags at the head of the line, which have no upstream serial to carry
+ * (ARCHITECTURE.md §5, "Input paths are the same everywhere").
+ */
 export function buildDebagRows(
   prods: CaptureProduction[],
   sid: string,
@@ -118,10 +151,11 @@ export function buildDebagRows(
         if (n(r.weight) === 0) return
         rows.push({
           session_id: sid, bag_no: bagNo++,
-          // bag_serial_no is a FK to bag_tags — only set for scan/system bags
-          // guaranteed to exist there. Manual serials go in notes to avoid FK failure.
-          bag_serial_no: r.inputMode !== 'manual' ? r.serial || null : null,
-          notes: r.inputMode === 'manual' ? r.serial || null : null,
+          // The serial goes in the FK column whatever the input mode — see the
+          // note above buildDebagRows. A manual entry is still a real bag that
+          // the capture screen registered in bag_tags before this ran.
+          bag_serial_no: serialOrNull(r.serial),
+          notes: null,
           lot_number: r.lot || prod.lot || null,
           product_type: r.productType || null, variant: variantForDb(r.variant || prod.variant),
           kg_nett: n(r.weight),
@@ -135,10 +169,8 @@ export function buildDebagRows(
           if (n(r.weight) === 0) return
           rows.push({
             session_id: sid, bag_no: bagNo++,
-            // bag_serial_no is a FK to bag_tags — only set for scan/system bags.
-            // Manual serials go in notes to avoid an FK failure.
-            bag_serial_no: r.inputMode !== 'manual' ? r.serial || null : null,
-            notes: [`blend ${bl.blendNo}`, r.inputMode === 'manual' ? r.serial : null].filter(Boolean).join(' · ') || null,
+            bag_serial_no: serialOrNull(r.serial),
+            notes: `blend ${bl.blendNo}`,
             lot_number: r.lot || prod.lot || null,
             product_type: dustProductType(r.dustKey), variant: variantForDb(r.variant || prod.variant),
             kg_nett: n(r.weight), is_spillage: false,
@@ -151,9 +183,9 @@ export function buildDebagRows(
         if (n(r.weight) === 0) return
         rows.push({
           session_id: sid, bag_no: bagNo++,
-          bag_serial_no: r.inputMode !== 'manual' ? r.serial || null : null,
+          bag_serial_no: serialOrNull(r.serial),
           grade: r.destination || null,
-          notes: r.inputMode === 'manual' ? r.serial : null,
+          notes: null,
           lot_number: r.lot || prod.lot || null,
           product_type: r.productType || null, variant: variantForDb(r.variant || prod.variant),
           kg_nett: n(r.weight), is_spillage: false,
@@ -165,10 +197,8 @@ export function buildDebagRows(
         if (n(r.weight) === 0) return
         rows.push({
           session_id: sid, bag_no: bagNo++,
-          // bag_serial_no is a FK to bag_tags — only set for scan/system bags
-          // guaranteed to be there; a manual serial goes in notes to avoid an FK failure.
-          bag_serial_no: r.inputMode !== 'manual' ? r.serial || null : null,
-          notes: [r.stream === 'postsieve' ? 'post-sieve' : null, r.inputMode === 'manual' ? r.serial : null].filter(Boolean).join(' · ') || null,
+          bag_serial_no: serialOrNull(r.serial),
+          notes: r.stream === 'postsieve' ? 'post-sieve' : null,
           lot_number: r.lot || pd.batchNo || prod.lot || null,
           product_type: r.productType || null, variant: variantForDb(r.variant || prod.variant),
           kg_nett: n(r.weight), is_spillage: false,

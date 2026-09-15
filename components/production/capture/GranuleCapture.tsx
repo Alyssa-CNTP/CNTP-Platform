@@ -406,13 +406,15 @@ function DustInputRow({
 // ── Blend card ──────────────────────────────────────────────────────────────────
 
 function BlendCard({
-  blend, index, locked, variantWord, operatorId, assignment, onChange, onRemove, onToggleDone, canRemove,
+  blend, index, locked, variantWord, operatorId, sessionId, assignment, onChange, onRemove, onToggleDone, canRemove,
 }: {
   blend: GranuleBlend
   index: number
   locked: boolean
   variantWord: string
   operatorId?: string | null
+  /** The consuming session — see the note on BlenderCapture's sessionId. */
+  sessionId?: string | null
   assignment: ShiftAssignment | null
   onChange: (b: GranuleBlend) => void
   onRemove: () => void
@@ -451,7 +453,7 @@ function BlendCard({
           status: 'consumed', consumed_at_section: 'granule', location_updated_at: t,
         } as any, { onConflict: 'serial_number' }).catch(() => {})
       }
-      markBagConsumed(row.serial, 'granule', null, n(row.weight) || undefined, operatorId ?? null)
+      markBagConsumed(row.serial, 'granule', sessionId ?? null, n(row.weight) || undefined, operatorId ?? null)
     }
   }
   function removeRow(id: string) { onChange({ ...blend, rows: blend.rows.filter(r => r.id !== id) }) }
@@ -463,7 +465,7 @@ function BlendCard({
       variant: bag.variant || variantWord || '', weight: bag.weight_kg ? String(bag.weight_kg) : '',
       lot: bag.lot_number || '', inputMode: 'system', secured: true, logged_at: t,
     }] })
-    markBagConsumed(bag.serial_number, 'granule', null, bag.weight_kg ?? undefined, operatorId ?? null)
+    markBagConsumed(bag.serial_number, 'granule', sessionId ?? null, bag.weight_kg ?? undefined, operatorId ?? null)
     setShowSystemPick(false)
   }
 
@@ -979,7 +981,7 @@ export function GranuleCapture({
           )}
 
           {value.blends.map((b, i) => (
-            <BlendCard key={b.id} blend={b} index={i} locked={locked} variantWord={variantWord} operatorId={operatorId} assignment={assignment}
+            <BlendCard key={b.id} blend={b} index={i} locked={locked} variantWord={variantWord} operatorId={operatorId} sessionId={sessionId} assignment={assignment}
               onChange={nb => updateBlend(b.id, nb)} onRemove={() => removeBlend(b.id)} onToggleDone={done => toggleBlendDone(b.id, done)} canRemove={value.blends.length > 1} />
           ))}
 

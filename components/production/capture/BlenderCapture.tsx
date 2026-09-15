@@ -558,7 +558,7 @@ function OutputRow({ b, locked, onSetSecured, onRemove, onTag }: {
 // ── Main component ────────────────────────────────────────────────────────────
 
 export function BlenderCapture({
-  sectionId, assignment, variantWord, locked, value, onChange, genSerial, operatorId, date,
+  sectionId, assignment, variantWord, locked, value, onChange, genSerial, operatorId, date, sessionId,
 }: {
   sectionId: string
   assignment: ShiftAssignment | null
@@ -569,6 +569,14 @@ export function BlenderCapture({
   genSerial: () => string
   operatorId?: string | null
   date: string
+  /**
+   * The capture session consuming these bags. Passed to markBagConsumed so
+   * `bag_tags.consumed_at_session` and `scan_events.session_id` are actually
+   * filled — every call site used to hardcode null, which is what left the
+   * genealogy chain with no way to tie a consumed bag to the bags produced
+   * alongside it. Nullable because a brand-new record has no session row yet.
+   */
+  sessionId?: string | null
 }) {
   const [tab, setTab] = useState<'debag' | 'bag'>('debag')
   // One "+ Add debagging bag" action opens this instead of each group having
@@ -717,7 +725,7 @@ export function BlenderCapture({
           location_updated_at: t,
         } as any, { onConflict: 'serial_number' }).catch(() => {})
       }
-      markBagConsumed(finalRow.serial, sectionId, null, n(finalRow.weight) || undefined, operatorId ?? null)
+      markBagConsumed(finalRow.serial, sectionId, sessionId ?? null, n(finalRow.weight) || undefined, operatorId ?? null)
     }
     setBagModal(null)
   }

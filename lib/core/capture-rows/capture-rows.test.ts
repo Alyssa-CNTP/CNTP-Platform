@@ -112,14 +112,19 @@ describe('refining', () => {
     outputB: { bags: [] }, outputC: { bags: [] }, outputD: { bags: [] },
   }
 
-  it('routes a scanned serial to bag_serial_no and a manual one to notes', () => {
-    // bag_serial_no is a FK to bag_tags; a manual serial may not exist there, so
-    // writing it would fail the whole insert.
+  it('sends a typed serial to bag_serial_no, same as a scanned one', () => {
+    // Both input modes now reach the FK column. This builder used to null a
+    // manual serial and push it into notes to dodge
+    // prod_debagging_bag_serial_no_fkey — which severed every section-to-section
+    // link, because bag_serial_no is the only column joining a bag to the
+    // session that consumed it. persist() re-checks each serial against
+    // bag_tags and demotes the genuinely-untagged ones to notes itself; it can
+    // see the database and this builder cannot. See buildDebagRows' header.
     const [scanned, manual] = buildDebagRows([prod(data)], 'sess-1', ctx('refining'))
     expect(scanned.bag_serial_no).toBe('STFL-01092026-001')
     expect(scanned.notes).toBeNull()
-    expect(manual.bag_serial_no).toBeNull()
-    expect(manual.notes).toBe('HANDWRITTEN-9')
+    expect(manual.bag_serial_no).toBe('HANDWRITTEN-9')
+    expect(manual.notes).toBeNull()
   })
 
   it('falls back to the production lot when the row has none', () => {
@@ -157,10 +162,14 @@ describe('granule', () => {
     expect(rows.map(r => r.product_type)).toEqual(['SG Dust', 'SF Dust'])
   })
 
-  it('records the blend number in notes, joined with a manual serial', () => {
+  it('records the blend number in notes, whatever the input mode', () => {
+    // notes no longer doubles as a hiding place for a typed serial — that goes
+    // in bag_serial_no now, so the Granule Line's inputs can be traced back to
+    // the Sieving and Refining bags they were made from.
     const [scanned, manual] = buildDebagRows([prod(data)], 'sess-1', ctx('granule'))
     expect(scanned.notes).toBe('blend 2')
-    expect(manual.notes).toBe('blend 2 · TYPED-1')
+    expect(manual.notes).toBe('blend 2')
+    expect(manual.bag_serial_no).toBe('TYPED-1')
   })
 
   it('emits granules and dust as separate output rows, renumbered together', () => {

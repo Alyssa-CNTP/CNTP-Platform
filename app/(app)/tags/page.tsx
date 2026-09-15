@@ -17,9 +17,12 @@ import {
   Search, X, Package, Printer, ArrowRight, Clock, ChevronRight,
   Filter, Activity, BarChart3, Layers, AlertTriangle, CheckCircle2,
   Loader2, Eye, Scan, TrendingUp, MapPin, History, Database, Calendar,
-  FlaskConical, ExternalLink, PackageOpen, Plus,
+  FlaskConical, ExternalLink, PackageOpen, Plus, Fingerprint,
 } from 'lucide-react'
 import ScanCameraButton from '@/components/shared/ScanCameraButton'
+import BatchConsolidation from '@/components/production/BatchConsolidation'
+import BagSerialIdentity from '@/components/production/BagSerialIdentity'
+import { normalizeBatch } from '@/lib/production/batch-key'
 import { transferBagWeight } from '@/lib/production/scan-utils'
 import { printLabelAuto } from '@/lib/production/label-print'
 import { expectedBagWeightFor, isUnusuallyHeavyBag, MAX_BAG_WEIGHT_KG, DESTINATION_OPTIONS } from '@/lib/production/capture-config'
@@ -186,21 +189,37 @@ function printTagLabel(tag: BagTag) {
 }
 
 // ── Tag detail modal ───────────────────────────────────────────────────────────
+type IdentityTab = 'batch' | 'serial'
+
+const IDENTITY_TABS: { id: IdentityTab; label: string; icon: React.ReactNode }[] = [
+  { id: 'batch',  label: 'Batch identity',  icon: <Layers size={13} /> },
+  { id: 'serial', label: 'Unique serial',   icon: <Fingerprint size={13} /> },
+]
+
 interface TagDetailProps {
   tag: BagTag
   allTags: BagTag[]
   operatorId: string | null
   onClose: () => void
   onChanged: () => void
+  /** Walk the genealogy chain without closing the record. */
+  onOpenSerial: (serial: string) => void
 }
 
-function TagDetail({ tag, allTags, operatorId, onClose, onChanged }: TagDetailProps) {
-  const [events,       setEvents]       = useState<ScanEvent[]>([])
-  const [inputBags,    setInputBags]    = useState<BagTag[]>([])
-  const [quality,      setQuality]      = useState<QualityRow[]>([])
-  const [loadingEvts,  setLoadingEvts]  = useState(true)
-  const [loadingGene,  setLoadingGene]  = useState(true)
-  const [loadingQual,  setLoadingQual]  = useState(true)
+function TagDetail({ tag, allTags, operatorId, onClose, onChanged, onOpenSerial }: TagDetailProps) {
+  const [identityTab, setIdentityTab] = useState<IdentityTab>('batch')
+
+  // The batch tab keys on the bag's lot, through the same normaliser the batch
+  // spine and every reporting view use — "GS - 0098", "gs_0098" and "GS-0098"
+  // are one batch, and a raw string compare here would miss two of the three.
+  // 'NOT TRACKED' is a sentinel the capture screens write, not a batch.
+  const rawLot = (tag.lot_number ?? '').trim()
+  const lotKey = rawLot && rawLot.toUpperCase() !== 'NOT TRACKED' ? normalizeBatch(rawLot) : ''
+
+  // Reset to the batch tab when the record is pointed at a different bag —
+  // without this, walking the chain from the serial tab silently keeps you on
+  // a tab you did not choose for the bag you are now looking at.
+  useEffect(() => { setIdentityTab('batch') }, [tag.serial_number])
 
   // Local override so the modal reflects a top-up immediately without waiting
   // for the parent list's next refresh.
@@ -276,17 +295,12 @@ function TagDetail({ tag, allTags, operatorId, onClose, onChanged }: TagDetailPr
     return () => clearTimeout(t)
   }, [sourceInput, tag.serial_number])
 
-  function reloadEvents() {
-    setLoadingEvts(true)
-    getDb().schema('production').from('scan_events')
-      .select('*')
-      .eq('serial_number', tag.serial_number)
-      .order('scanned_at', { ascending: true })
-      .then(({ data }: { data: ScanEvent[] | null }) => {
-        setEvents((data as ScanEvent[]) || [])
-        setLoadingEvts(false)
-      })
-  }
+  // A top-up appends events and a 'transferred_from' lineage link, both of
+  // which BagSerialIdentity loads itself. Bumping this remounts it so the
+  // operator sees the result of what they just did, rather than a panel that
+  // still describes the bag as it was a moment ago.
+  const [identityNonce, setIdentityNonce] = useState(0)
+  const reloadIdentity = () => setIdentityNonce(k => k + 1)
 
   function resetAddWeightForm() {
     setSourceInput(''); setSourceBag(null); setAmount(''); setProductType('')
@@ -327,7 +341,7 @@ function TagDetail({ tag, allTags, operatorId, onClose, onChanged }: TagDetailPr
       setOpenOverride(!closeBag)
       if (productMismatch) setProductTypeOverride(resolvedProductType)
       resetAddWeightForm()
-      reloadEvents()
+      reloadIdentity()
       onChanged()
     } catch (e) {
       setAddError('Could not save the top-up — check the connection and try again.')
@@ -335,64 +349,6 @@ function TagDetail({ tag, allTags, operatorId, onClose, onChanged }: TagDetailPr
       setSaving(false)
     }
   }
-
-  // Load scan events for this serial
-  useEffect(() => {
-    reloadEvents()
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tag.serial_number])
-
-  // Load genealogy: what bags were consumed to produce this bag
-  useEffect(() => {
-    if (!tag.prod_session_id) { setLoadingGene(false); return }
-    setLoadingGene(true)
-
-    getDb().schema('production').from('scan_events')
-      .select('*')
-      .eq('session_id', tag.prod_session_id)
-      .eq('action', 'debagging_in')
-      .then(({ data: evts }: { data: ScanEvent[] | null }) => {
-        const serials = (evts || []).map(e => e.serial_number).filter(Boolean)
-        if (serials.length === 0) { setLoadingGene(false); return }
-
-        getDb().schema('production').from('bag_tags')
-          .select('*')
-          .in('serial_number', serials)
-          .then(({ data: bags }: { data: any[] | null }) => {
-            setInputBags(((bags as any[]) || []).map(b => ({
-              ...b,
-              section_name: SECTION_DISPLAY[b.section_id] ?? b.section_id,
-              tag_date:     (b.created_at ?? '').slice(0, 10),
-              captured_at:  b.created_at,
-            })) as BagTag[])
-            setLoadingGene(false)
-          })
-      })
-  }, [tag.prod_session_id])
-
-  // Load quality records for this bag. Quality is keyed by lot/batch (not by
-  // serial), so a bag inherits the quality of the lot it belongs to. Mirrors the
-  // batch-reconciliation panel's three sources: pasteuriser runs, lab results,
-  // and raw-material entries, matched by the bag's lot_number.
-  useEffect(() => {
-    const lot = (tag.lot_number || '').trim()
-    if (!lot || lot === 'NOT TRACKED') { setQuality([]); setLoadingQual(false); return }
-    setLoadingQual(true)
-    const db = getDb()
-    Promise.all([
-      db.from('pasteuriser_runs').select('id,run_date,batch_ref,status').ilike('batch_ref', lot).limit(10),
-      db.from('lab_results').select('id,sample_date,batch_number,result_status').ilike('batch_number', lot).limit(10),
-      db.from('raw_material_entries').select('id,received_date,lot_number,grade').ilike('lot_number', lot).limit(10),
-    ]).then(([past, lab, raw]: any[]) => {
-      const rows: QualityRow[] = []
-      ;(past?.data ?? []).forEach((r: any) => rows.push({ source: 'Pasteuriser run', ref: String(r.id ?? '').slice(0, 8), date: r.run_date ?? '', detail: `Status: ${r.status ?? 'unknown'}`, href: '/quality/pasteuriser' }))
-      ;(lab?.data  ?? []).forEach((r: any) => rows.push({ source: 'Lab result',  ref: String(r.id ?? '').slice(0, 8), date: r.sample_date ?? '', detail: `Result: ${r.result_status ?? 'pending'}`, href: '/quality/lab-results' }))
-      ;(raw?.data  ?? []).forEach((r: any) => rows.push({ source: 'Raw material', ref: String(r.id ?? '').slice(0, 8), date: r.received_date ?? '', detail: `Grade ${r.grade ?? '—'}`, href: '/quality/raw-material' }))
-      rows.sort((a, b) => (b.date || '').localeCompare(a.date || ''))
-      setQuality(rows)
-      setLoadingQual(false)
-    }).catch(() => { setQuality([]); setLoadingQual(false) })
-  }, [tag.lot_number])
 
   const isConsumed = Boolean(tag.consumed_at_section)
   const statusBadge = isOpenBag
@@ -406,8 +362,13 @@ function TagDetail({ tag, allTags, operatorId, onClose, onChanged }: TagDetailPr
       className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/50"
       onClick={onClose}
     >
+      {/* Wider than it was (2xl → 5xl): the batch tab mounts the full
+          BatchConsolidation surface — KPI row, output mix, machine settings,
+          the three-way reconciliation table — which was built for a 5xl page
+          and is unreadable squeezed into 2xl. Still scrolls, and still stacks
+          to one column on a tablet. */}
       <div
-        className="bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl w-full max-w-2xl max-h-[92vh] overflow-y-auto flex flex-col"
+        className="bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl w-full max-w-5xl max-h-[92vh] overflow-y-auto flex flex-col"
         onClick={e => e.stopPropagation()}
       >
         {/* ── Modal header ── */}
@@ -583,7 +544,59 @@ function TagDetail({ tag, allTags, operatorId, onClose, onChanged }: TagDetailPr
           </div>
         )}
 
+        {/* ── The two identities ──────────────────────────────────────────────
+            A bag has two answers to "what is this", and they are not the same
+            answer — so they are not one scrolling page. The BATCH is the production
+            run it came out of: yield, output mix, machine settings, the lot's
+            quality, the order reconciliation. The SERIAL is this physical bag:
+            its own QC numbers, what it was made from, where it went.
+
+            This used to be a button out to /traceability, which meant the
+            batch view was somewhere an operator had to know to go. It opens
+            here now, on the batch, because that is the question asked most
+            often of a bag that has just been scanned. */}
+        <div className="sticky top-[73px] z-10 bg-white px-5 pt-3 pb-2 border-b border-stone-100">
+          <div className="flex gap-1 bg-stone-100 rounded-xl p-1">
+            {IDENTITY_TABS.map(t => (
+              <button
+                key={t.id}
+                onClick={() => setIdentityTab(t.id)}
+                className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-[12px] font-semibold transition-all ${
+                  identityTab === t.id ? 'bg-white text-stone-900 shadow-sm' : 'text-stone-500 hover:text-stone-700'
+                }`}
+              >
+                {t.icon}{t.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
         <div className="px-5 py-4 space-y-5">
+
+          {identityTab === 'batch' ? (
+            /* The same surface /traceability mounts — one component, so the
+               two screens cannot drift into disagreeing about a batch. */
+            lotKey ? (
+              <BatchConsolidation batchKey={lotKey} />
+            ) : (
+              <div className="flex flex-col items-center justify-center py-12 gap-2 text-center">
+                <Layers size={30} className="text-stone-200" />
+                <p className="font-mono text-[13px] text-stone-400">No batch on this bag</p>
+                <p className="text-[11px] text-stone-400 max-w-sm">
+                  This bag carries no lot / batch number, so there is no production run to
+                  report against. Both Refining lines currently bag without one — the bag
+                  itself is still fully traceable under <span className="font-semibold">Unique serial</span>.
+                </p>
+                <button
+                  onClick={() => setIdentityTab('serial')}
+                  className="mt-1 text-[12px] font-semibold text-brand hover:underline"
+                >
+                  Open this bag's own record →
+                </button>
+              </div>
+            )
+          ) : (
+          <>
 
           {/* ── Barcode ── */}
           <div className="flex justify-center py-4 bg-stone-50 rounded-xl border border-stone-200">
@@ -616,147 +629,25 @@ function TagDetail({ tag, allTags, operatorId, onClose, onChanged }: TagDetailPr
                 </div>
               ))}
             </div>
-            {tag.lot_number && (
-              <Link href={`/traceability?batch=${encodeURIComponent(tag.lot_number)}`}
-                className="mt-2.5 inline-flex items-center gap-1.5 rounded-lg border border-brand/30 bg-brand/5 px-3 py-1.5 text-[12px] font-medium text-brand hover:bg-brand/10 transition">
-                <BarChart3 size={13} /> View batch KPIs (yield · quality · reconciliation)
-              </Link>
-            )}
           </div>
 
-          {/* ── Genealogy chain ── */}
-          <div>
-            <p className="text-[10px] font-semibold text-stone-400 uppercase tracking-wide mb-2.5 flex items-center gap-1.5">
-              <History size={11} /> Genealogy chain
-            </p>
+          <BagSerialIdentity
+            key={identityNonce}
+            tag={{
+              serial_number:       tag.serial_number,
+              section_id:          tag.section_id,
+              section_name:        tag.section_name,
+              product_type:        displayProductType,
+              lot_number:          tag.lot_number,
+              variant:             tag.variant,
+              consumed_at_section: tag.consumed_at_section,
+              consumed_weight_kg:  tag.consumed_weight_kg,
+            }}
+            onOpenSerial={onOpenSerial}
+          />
 
-            {/* Inputs consumed to make this bag */}
-            {loadingGene ? (
-              <div className="flex items-center gap-2 text-[11px] text-stone-400 py-2">
-                <Loader2 size={12} className="animate-spin" /> Loading inputs…
-              </div>
-            ) : inputBags.length > 0 ? (
-              <div className="space-y-2 mb-3">
-                <p className="text-[10px] text-stone-400 italic">Bags consumed to produce this bag:</p>
-                {inputBags.map(ib => (
-                  <div key={ib.id} className="flex items-center gap-2 bg-stone-50 rounded-lg px-3 py-2 border border-stone-100">
-                    <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${SECTION_DOT[ib.section_id] ?? 'bg-stone-400'}`} />
-                    <span className="font-mono text-[11px] font-bold text-stone-800 tracking-wider">{ib.serial_number}</span>
-                    <SectionPill sectionId={ib.section_id} label={ib.section_name} />
-                    <VariantPill variant={ib.variant} />
-                    {ib.weight_kg && <span className="font-mono text-[10px] text-stone-500 ml-auto">{ib.weight_kg} kg</span>}
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <p className="text-[11px] text-stone-400 italic mb-3">No input bags found for this session</p>
-            )}
-
-            {/* Movement chain: created at → consumed at */}
-            <div className="flex items-center gap-2 flex-wrap">
-              <div className="flex items-center gap-1.5">
-                <div className={`w-2 h-2 rounded-full ${SECTION_DOT[tag.section_id] ?? 'bg-stone-400'}`} />
-                <SectionPill sectionId={tag.section_id} label={tag.section_name} />
-              </div>
-              <ArrowRight size={12} className="text-stone-300 shrink-0" />
-              {tag.consumed_at_section ? (
-                <div className="flex items-center gap-1.5">
-                  <div className={`w-2 h-2 rounded-full ${SECTION_DOT[tag.consumed_at_section] ?? 'bg-stone-400'}`} />
-                  <SectionPill sectionId={tag.consumed_at_section} />
-                  {tag.consumed_weight_kg && (
-                    <span className="font-mono text-[10px] text-stone-500">{tag.consumed_weight_kg} kg</span>
-                  )}
-                </div>
-              ) : (
-                <span className="inline-flex font-mono text-[9px] font-bold px-2 py-0.5 rounded border bg-amber-50 text-amber-700 border-amber-200">
-                  On floor — not yet consumed
-                </span>
-              )}
-            </div>
-          </div>
-
-          {/* ── Quality ── */}
-          <div>
-            <p className="text-[10px] font-semibold text-stone-400 uppercase tracking-wide mb-2.5 flex items-center gap-1.5">
-              <FlaskConical size={11} /> Quality {loadingQual ? '' : `(${quality.length})`}
-            </p>
-            {loadingQual ? (
-              <div className="flex items-center gap-2 text-[11px] text-stone-400 py-2">
-                <Loader2 size={12} className="animate-spin" /> Loading quality…
-              </div>
-            ) : quality.length === 0 ? (
-              <p className="text-[11px] text-stone-400 italic">
-                {tag.lot_number && tag.lot_number !== 'NOT TRACKED'
-                  ? `No quality records found for lot ${tag.lot_number}.`
-                  : 'No lot / batch on this bag to match quality records against.'}
-              </p>
-            ) : (
-              <div className="space-y-2">
-                <p className="text-[10px] text-stone-400 italic">Matched by lot / batch {tag.lot_number}:</p>
-                {quality.map((q, i) => (
-                  <Link key={i} href={q.href}
-                    className="flex items-center gap-2 bg-stone-50 rounded-lg px-3 py-2 border border-stone-100 hover:bg-stone-100 transition">
-                    <FlaskConical size={12} className="text-stone-400 shrink-0" />
-                    <span className="text-[11px] font-semibold text-stone-700 shrink-0">{q.source}</span>
-                    <span className="font-mono text-[10px] text-stone-500 truncate">{q.detail}</span>
-                    {q.date && <span className="font-mono text-[10px] text-stone-400 ml-auto shrink-0">{q.date.slice(0, 10)}</span>}
-                    <ExternalLink size={11} className="text-stone-300 shrink-0" />
-                  </Link>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* ── Scan events timeline ── */}
-          <div>
-            <p className="text-[10px] font-semibold text-stone-400 uppercase tracking-wide mb-2.5 flex items-center gap-1.5">
-              <Activity size={11} /> Scan events {loadingEvts ? '' : `(${events.length})`}
-            </p>
-            {loadingEvts ? (
-              <div className="flex items-center gap-2 text-[11px] text-stone-400 py-2">
-                <Loader2 size={12} className="animate-spin" /> Loading events…
-              </div>
-            ) : events.length === 0 ? (
-              <p className="text-[11px] text-stone-400 italic">
-                No scan events yet — will appear when scanned at downstream sections
-              </p>
-            ) : (
-              <div className="relative">
-                <div className="absolute left-[7px] top-2 bottom-2 w-px bg-stone-100" />
-                <div className="space-y-0">
-                  {events.map((ev, i) => (
-                    <div key={ev.id} className="flex items-start gap-3 pl-4 relative py-2 border-b border-stone-50 last:border-0">
-                      <div className={`absolute left-0 top-3 w-3.5 h-3.5 rounded-full border-2 border-white shrink-0 ${SECTION_DOT[ev.section_id] ?? 'bg-stone-300'}`} />
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="font-mono text-[11px] font-bold text-stone-800 capitalize">
-                            {ev.action?.replace(/_/g, ' ') || 'scan'}
-                          </span>
-                          <span className={`font-mono text-[9px] font-bold px-1.5 py-0.5 rounded border ${SECTION_PILL[ev.section_id] ?? 'bg-stone-100 text-stone-500 border-stone-200'}`}>
-                            {ev.section_id}
-                          </span>
-                          {ev.weight_kg && (
-                            <span className="font-mono text-[10px] text-stone-500">{ev.weight_kg} kg</span>
-                          )}
-                        </div>
-                        {ev.notes && (
-                          <div className="font-mono text-[10px] text-stone-500 mt-0.5 truncate">{ev.notes}</div>
-                        )}
-                        <div className="flex items-center gap-2 mt-0.5">
-                          <span className="font-mono text-[10px] text-stone-400">
-                            {format(parseISO(ev.scanned_at), 'dd MMM yyyy HH:mm:ss')}
-                          </span>
-                          <span className="text-[9px] text-stone-300">
-                            · {formatDistanceToNow(parseISO(ev.scanned_at), { addSuffix: true })}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
+          </>
+          )}
 
         </div>
       </div>
@@ -1300,6 +1191,28 @@ export default function TagsPage() {
     setFilters({ search: '', section: 'all', date: '', status: 'all', variant: 'all' })
   }, [])
 
+  // Follow a genealogy link to another bag without leaving the record. The bag
+  // is usually not in `tags` — a parent sits in a different section, and an
+  // operator filtered to their own section would never have loaded it — so this
+  // falls back to fetching it. Failing silently would leave the operator
+  // tapping a link that does nothing.
+  const openSerial = useCallback(async (serial: string) => {
+    const local = tags.find(t => t.serial_number.toUpperCase() === serial.toUpperCase())
+    if (local) { setSelected(local); return }
+    const { data } = await getDb().schema('production').from('bag_tags')
+      .select('*').eq('serial_number', serial).limit(1).maybeSingle()
+    if (!data) return
+    setSelected({
+      ...(data as any),
+      id:              (data as any).serial_number,
+      section_name:    SECTION_DISPLAY[(data as any).section_id] ?? (data as any).section_id,
+      tag_date:        ((data as any).created_at ?? '').slice(0, 10),
+      captured_at:     (data as any).created_at,
+      prod_session_id: (data as any).session_id ?? '',
+      qr_payload:      (data as any).serial_number,
+    } as BagTag)
+  }, [tags])
+
   // ── Load tags ──────────────────────────────────────────────────────────────
   const load = useCallback(async () => {
     setLoading(true)
@@ -1476,6 +1389,7 @@ export default function TagsPage() {
           operatorId={userId}
           onClose={() => setSelected(null)}
           onChanged={load}
+          onOpenSerial={openSerial}
         />
       )}
     </div>

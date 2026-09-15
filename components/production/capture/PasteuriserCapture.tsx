@@ -562,7 +562,7 @@ function OutputLineRow({ line, lineNo, color, perBag, locked, onEdit, onRemove, 
 // ── Main component ────────────────────────────────────────────────────────────
 
 export function PasteuriserCapture({
-  sectionId, assignment, variantWord, onVariantSuggestion, date, locked, value, onChange, genSerial, operatorId,
+  sectionId, assignment, variantWord, onVariantSuggestion, date, locked, value, onChange, genSerial, operatorId, sessionId,
 }: {
   sectionId: string
   assignment: ShiftAssignment | null
@@ -574,6 +574,8 @@ export function PasteuriserCapture({
   onChange: (d: PasteuriserData) => void
   genSerial: () => string
   operatorId?: string | null
+  /** The consuming session — see the note on BlenderCapture's sessionId. */
+  sessionId?: string | null
 }) {
   const [tab, setTab] = useState<'debag' | 'bag'>('debag')
   const [bagModal, setBagModal] = useState<{ stream: 'main' | 'postsieve'; editing: PastDebagRow | null } | null>(null)
@@ -674,7 +676,7 @@ export function PasteuriserCapture({
           status: 'consumed', consumed_at_section: sectionId, location_updated_at: t2,
         } as any, { onConflict: 'serial_number' }).catch(() => {})
       }
-      markBagConsumed(finalRow.serial, sectionId, null, n(finalRow.weight) || undefined, operatorId ?? null)
+      markBagConsumed(finalRow.serial, sectionId, sessionId ?? null, n(finalRow.weight) || undefined, operatorId ?? null)
     }
     setBagModal(null)
   }
