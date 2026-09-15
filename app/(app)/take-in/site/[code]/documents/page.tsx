@@ -20,9 +20,9 @@
 //     Afleweringsbewys: two documents about one delivery, not two receipts.
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { useSearchParams } from 'next/navigation'
+import { useParams, useSearchParams } from 'next/navigation'
 import { useAuth } from '@/lib/auth/context'
-import { takeinDb, loadSites, allocateDocNo, logBatchEvent, errMsg, scopedSites } from '@/lib/takein/db'
+import { takeinDb, loadSites, allocateDocNo, logBatchEvent, errMsg, scopedSites, siteCodeFrom } from '@/lib/takein/db'
 import type { Site, FrozenFigures, LabRow, PanelOutcome } from '@/lib/takein/types'
 import {
   sieveTable, nettKg, grossKg, stageOf, prelimGroup, prelimPanel, panelBinding,
@@ -55,8 +55,9 @@ type PanelTermRow = { contract_id: string; term_key: string; binding: boolean }
 
 export default function DocumentsPage() {
   const { p, fullName, user, depotCodes } = useAuth()
-  // Set when this screen was opened from a site's page in Warehousing.
-  const siteParam = useSearchParams().get('site')
+  // This screen is always working on one site — the code is in the route.
+  const routeCode = useParams<{ code: string }>().code
+  const siteParam = siteCodeFrom(routeCode, useSearchParams().get('site'))
   const canIssue = p('can_issue_takein_documents')
   const canVoid  = p('can_void_takein_document')
   const actor = { id: user?.id ?? null, name: fullName ?? 'Unknown' }

@@ -2,37 +2,39 @@
 
 // app/(app)/take-in/layout.tsx
 //
-// The Raw Material Take-In module shell. Sub-tabs across the top follow the
-// physical chain, because that is the order the work happens in and the order
-// the floor asks about it:
+// The Raw Material Take-In shell, for the two things that are NOT a site's own
+// work: the consolidated view over every site, and the company-wide contract
+// register. Settlement joins them for whoever holds its key.
 //
-//   Contracts → Schedule → Intake & GRN → Mini Lab → Documents → History
+// THE INTAKE CHAIN LIVES PER SITE, under /take-in/site/[code] — schedule,
+// weighbridge, mini lab, documents, history. A site is where an operator
+// actually stands, so that is where the work is; Warehousing in the sidebar
+// goes straight there.
 //
-// Settlement sits apart, and is only rendered for someone holding its own key.
-// The route guard in app/(app)/layout.tsx enforces that independently — this is
-// the signpost, not the lock.
+// The route guard in app/(app)/layout.tsx enforces the settlement key
+// independently — this is the signpost, not the lock.
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useAuth } from '@/lib/auth/context'
-import {
-  Warehouse, FileSignature, CalendarRange, PackageOpen,
-  Beaker, FileText, Search, Banknote,
-} from 'lucide-react'
+import { Warehouse, FileSignature, Banknote } from 'lucide-react'
 
+// Only the things that are NOT a site's own work. The intake chain — schedule,
+// weighbridge, mini lab, documents, history — belongs to a site and lives under
+// /take-in/site/[code], because that is where an operator actually stands.
 const TABS = [
-  { href: '/take-in',            label: 'Overview',   icon: Warehouse      },
-  { href: '/take-in/contracts',  label: 'Contracts',  icon: FileSignature  },
-  { href: '/take-in/schedule',   label: 'Schedule',   icon: CalendarRange  },
-  { href: '/take-in/intake',     label: 'Intake & GRN', icon: PackageOpen  },
-  { href: '/take-in/mini-lab',   label: 'Mini Lab',   icon: Beaker         },
-  { href: '/take-in/documents',  label: 'Documents',  icon: FileText       },
-  { href: '/take-in/history',    label: 'History',    icon: Search         },
+  { href: '/take-in',           label: 'All sites', icon: Warehouse     },
+  { href: '/take-in/contracts', label: 'Contracts', icon: FileSignature },
 ] as const
 
 export default function TakeInLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
   const { p, depotCodes } = useAuth()
+
+  // A site draws its own header and tabs; two stacked headers reads as a bug.
+  // Checked AFTER the hooks above, never before — a conditional hook call is
+  // the error-#310 class that took capture down for two days.
+  const onSite = pathname.startsWith('/take-in/site/')
 
   const tabs = [
     ...TABS,
@@ -40,6 +42,8 @@ export default function TakeInLayout({ children }: { children: React.ReactNode }
       ? [{ href: '/take-in/settlement', label: 'Settlement', icon: Banknote } as const]
       : []),
   ]
+
+  if (onSite) return <>{children}</>
 
   return (
     <div className="space-y-5">

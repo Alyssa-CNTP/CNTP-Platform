@@ -16,9 +16,9 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { useSearchParams } from 'next/navigation'
+import { useParams, useSearchParams } from 'next/navigation'
 import { useAuth } from '@/lib/auth/context'
-import { takeinDb, loadSites, errMsg, scopedSites } from '@/lib/takein/db'
+import { takeinDb, loadSites, errMsg, scopedSites, siteCodeFrom } from '@/lib/takein/db'
 import { stageOf, isFinalised, nettKg, type Stage } from '@/lib/core/takein/grading'
 import type { Site, BatchEvent, LabRow, FrozenFigures, PanelOutcome } from '@/lib/takein/types'
 import { Loader2, AlertTriangle, Search } from 'lucide-react'
@@ -60,8 +60,9 @@ type ShowFilter = 'open' | 'done' | 'void' | 'all'
 export default function HistoryPage() {
   const router = useRouter()
   const { depotCodes } = useAuth()
-  // Set when this screen was opened from a site's page in Warehousing.
-  const siteParam = useSearchParams().get('site')
+  // This screen is always working on one site — the code is in the route.
+  const routeCode = useParams<{ code: string }>().code
+  const siteParam = siteCodeFrom(routeCode, useSearchParams().get('site'))
   const [sites, setSites] = useState<Site[]>([])
   const [rows, setRows]     = useState<Row[]>([])
   const [events, setEvents] = useState<BatchEvent[]>([])

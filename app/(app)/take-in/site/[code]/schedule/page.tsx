@@ -12,9 +12,9 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { useSearchParams } from 'next/navigation'
+import { useParams, useSearchParams } from 'next/navigation'
 import { useAuth } from '@/lib/auth/context'
-import { takeinDb, loadSites, allocateBatchNo, logBatchEvent, errMsg, deliverySites, scopedSites } from '@/lib/takein/db'
+import { takeinDb, loadSites, allocateBatchNo, logBatchEvent, errMsg, deliverySites, scopedSites, siteCodeFrom } from '@/lib/takein/db'
 import type { Site, Contract } from '@/lib/takein/types'
 import { Loader2, AlertTriangle, X, Truck } from 'lucide-react'
 
@@ -60,8 +60,9 @@ interface Booking {
 export default function SchedulePage() {
   const router = useRouter()
   const { p, fullName, user, depotCodes } = useAuth()
-  // Set when this screen was opened from a site's page in Warehousing.
-  const siteParam = useSearchParams().get('site')
+  // This screen is always working on one site — the code is in the route.
+  const routeCode = useParams<{ code: string }>().code
+  const siteParam = siteCodeFrom(routeCode, useSearchParams().get('site'))
   const mayBook = p('can_book_takein')
   const isMgr   = p('can_override_takein_booking')
   const actor   = { id: user?.id ?? null, name: fullName ?? 'Unknown' }
