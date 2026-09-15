@@ -2,6 +2,49 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-15 — Gustav (Take-in: the screens could not reach their own schema, and the error said nothing)
+
+**Files changed:** `lib/takein/db.ts`, `lib/takein/db.test.ts` (new), `app/api/admin/users/[id]/route.ts`
+
+Reported from staging: every Raw Material Take-In screen showed **"Could not load contracts."** with the
+contract list empty, while the rows were demonstrably in the database.
+
+### Why nothing could be diagnosed from the screen
+
+`errMsg()` tested `e instanceof Error`. **Supabase throws a `PostgrestError`, which is a plain object**
+— `{ message, details, hint, code }` — so the check reported false and the real message was replaced by
+the generic fallback. The screen had the diagnosis in hand and threw it away.
+
+This was a regression introduced the same day: clearing 54 `no-explicit-any` lint errors replaced
+`catch (e: any) { setErr(e?.message ?? '…') }` with the helper, and `e?.message` had been reading the
+PostgrestError correctly by accident. It now reads `message`, `hint` and `code` off any object, so
+`PGRST106` reaches the operator instead of being swallowed. Tested with a real PostgrestError shape.
+
+### What was actually wrong
+
+`takein` and `logistics` are **not in the project's PostgREST exposed-schema list**, so no browser query
+against them could ever have worked. Established from `get_advisors`: the `SECURITY DEFINER` RPC lint
+enumerates every such function reachable at `/rest/v1/rpc/`, and all three `takein` functions qualify
+(`security_definer` true, `authenticated` holds EXECUTE) yet none is listed.
+
+**The mistake that let this ship was the verification, not the code.** The whole chain was proved with
+`execute_sql` — a direct Postgres connection that bypasses PostgREST entirely. It proved the SQL, the
+RLS, the grants and the sequence allocation, and proved nothing at all about whether the app could
+reach any of it. A schema is not usable by the app until it is exposed, and that is a project setting no
+migration can carry.
+
+### A second bug, caught by the new tests
+
+`visibleDepots()` filtered depot codes with `filter(Boolean)`. A whitespace-only entry is **truthy**, so
+it counted as a scope, matched no depot, and silently blanked that user's dashboard — indistinguishable
+from the module being broken. Codes are now trimmed before filtering, at the write path
+(`app/api/admin/users/[id]/route.ts`) as well as the read, so the empty-means-every-depot rule holds for
+a malformed row too.
+
+First unit tests for `lib/takein/` — 9 of them, over `errMsg` and the depot-scoping rule.
+
+---
+
 ## 2026-09-15 — Gustav (Take-in: template contracts so the whole flow can be walked on staging)
 
 **Files changed:** `supabase/seeds/20260915_takein_demo_data.sql` (new), `supabase/seeds/20260915_takein_demo_data_teardown.sql` (new)

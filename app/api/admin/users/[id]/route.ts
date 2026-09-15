@@ -106,7 +106,7 @@ export async function PATCH(
       return NextResponse.json({ error: 'Permission denied — cannot change depot access' }, { status: 403 })
 
     const codes = Array.isArray(body.depotCodes)
-      ? (body.depotCodes as unknown[]).map(String).filter(Boolean)
+      ? (body.depotCodes as unknown[]).map(c => String(c).trim()).filter(Boolean)
       : []
 
     const { error } = await sessionClient
