@@ -14,6 +14,16 @@
 //
 // Panel terms live here too, because "does a panel decision reach the producer"
 // is a contract question, not a code question.
+//
+// ONE WRINKLE, STATED SO IT IS NOT REDISCOVERED AS A BUG. The app resolves a
+// permission as override → role default → module grant (resolvePermission);
+// the RLS policy on takein.contract_pricing can only read the STORED override
+// jsonb, because role defaults live in TypeScript and mirroring them into SQL
+// would be a second source of truth. So a user whose access comes from a role
+// DEFAULT — an IT co_developer, say — is allowed by the app and refused by the
+// database, and would otherwise see an empty pricing panel with no explanation.
+// The money key is deliberately left needing an explicit tick; what this page
+// owes the user is to SAY so rather than show a silent blank.
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useAuth } from '@/lib/auth/context'
@@ -29,11 +39,16 @@ const VARIANTS = ['Conventional', 'RA-Conventional', 'Organic', 'RA-Organic', 'F
 type PanelTermRow = { contract_id: string; term_key: string; binding: boolean }
 
 export default function ContractsPage() {
-  const { p, fullName, user } = useAuth()
+  const { p, fullName, user, permissions } = useAuth()
   const canEdit    = p('can_manage_takein_contracts')
   const canApprove = p('can_approve_takein_contracts')
   const canSeePrice = p('can_view_contract_pricing')
   const canSetPrice = p('can_set_contract_pricing')
+
+  // What the DATABASE will allow — the stored override only, which is all the
+  // RLS policy can see. See the note at the top of this file.
+  const rlsSeePrice = permissions.can_view_contract_pricing === true
+  const priceHeldByDb = canSeePrice && !rlsSeePrice
 
   const [contracts, setContracts] = useState<Contract[]>([])
   const [pricing,   setPricing]   = useState<Record<string, ContractPricing>>({})
@@ -66,7 +81,7 @@ export default function ContractsPage() {
       // Only ask for the money if this user is allowed to see it. Asking and
       // getting nothing back would also be safe — the policy refuses — but not
       // asking makes the intent legible in the network tab too.
-      if (canSeePrice) {
+      if (rlsSeePrice) {
         const { data: pr } = await db.from('contract_pricing').select('*')
         setPricing(Object.fromEntries(((pr as ContractPricing[]) ?? []).map(x => [x.contract_id, x])))
       } else {
@@ -75,9 +90,9 @@ export default function ContractsPage() {
     } catch (e: unknown) {
       setErr(errMsg(e, 'Could not load contracts.'))
     } finally { setLoading(false) }
-  }, [canSeePrice, selId])
+  }, [rlsSeePrice, selId])
 
-  useEffect(() => { void load() }, [canSeePrice])
+  useEffect(() => { void load() }, [rlsSeePrice])
 
   const sel = useMemo(() => contracts.find(c => c.id === selId) ?? null, [contracts, selId])
   const selTerms = useMemo(() => ({ ...DEFAULT_BINDING, ...(selId ? terms[selId] ?? {} : {}) }),
@@ -121,6 +136,20 @@ export default function ContractsPage() {
       {err && (
         <div className="rounded-xl border border-err/25 bg-err-bg px-4 py-3 text-[12px] text-err">
           <AlertTriangle className="mr-1.5 inline h-4 w-4" />{err}
+        </div>
+      )}
+
+      {priceHeldByDb && (
+        <div className="flex items-start gap-2 rounded-xl border border-warn/25 bg-warn-bg px-4 py-3 text-[12px] text-text-muted">
+          <Lock className="mt-0.5 h-4 w-4 shrink-0 text-warn" />
+          <span>
+            <strong className="text-text">Your role allows pricing, but the database still withholds it.</strong>{' '}
+            The rand values are guarded by row-level security, which can only read a permission
+            ticked explicitly against your account — it cannot see a role default. Ask an
+            administrator to tick <span className="font-mono">Contract pricing (rand values)</span>{' '}
+            for you on Users &amp; Access. This is deliberate for the money: it is the one key that
+            has to be granted to a person by name.
+          </span>
         </div>
       )}
 
@@ -198,7 +227,7 @@ export default function ContractsPage() {
                       Pricing
                     </span>
                   </div>
-                  {canSeePrice ? (
+                  {rlsSeePrice ? (
                     <div className="grid gap-4 sm:grid-cols-2">
                       <Field label="Guaranteed price" mono
                         value={pricing[sel.id] ? `R ${rands(pricing[sel.id].guaranteed_cents)} /kg` : 'not set'} />

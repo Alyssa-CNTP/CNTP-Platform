@@ -435,6 +435,18 @@ grant usage, select on sequence takein.batch_events_id_seq to authenticated;
 
 -- ── contract pricing: the row is only visible to the key holder ─────────────
 -- This is the one place RLS does real work rather than deferring to the app.
+--
+-- It reads the STORED override jsonb and nothing else. The app resolves a
+-- permission as override -> role default -> module grant (resolvePermission in
+-- lib/auth/permissions.ts), but role defaults live in TypeScript and mirroring
+-- them into SQL would be a second source of truth for who may see money. So the
+-- rule here is deliberately stricter than the app's: pricing has to be ticked
+-- against a person by name, and a role default alone does not open it.
+--
+-- The consequence is a user the APP allows and the DATABASE refuses. That is
+-- intended, but it must never be silent: app/(app)/take-in/contracts/page.tsx
+-- detects exactly this case and says so on screen rather than rendering an
+-- empty pricing panel. Change one and change the other.
 drop policy if exists contract_pricing_read  on takein.contract_pricing;
 drop policy if exists contract_pricing_write on takein.contract_pricing;
 create policy contract_pricing_read on takein.contract_pricing for select to authenticated
