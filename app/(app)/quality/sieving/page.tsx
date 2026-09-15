@@ -159,6 +159,66 @@ const SIEVING_SPECS_DB: Record<string,any> = {
   },
 }
 
+// ─── Spec shapes ──────────────────────────────────────────────────────────────
+// SIEVING_SPECS_DB above is still Record<string,any> (pre-existing), but
+// everything that READS a spec goes through these, so a mesh key or a range is
+// not an `any` travelling between functions.
+/** A `[min, max]` bound. Either side may be null — that is a half-open spec,
+ *  which sdChk already handles (`range[0]!==null&&n<range[0]`), and it is also
+ *  what a half-typed row looks like while the editor is open. */
+type SpecRange = [number | null, number | null]
+/** One `${grade}|${variant}` row: mesh label → range. A missing key means the
+ *  fraction has no spec and is not checked — see sdChk. */
+type SpecRow   = Record<string, SpecRange | undefined>
+/** A product's whole spec table, keyed `${grade}|${variant}`. */
+type SpecTable = Record<string, SpecRow>
+interface SpecDef {
+  sieves: string[]; labels: string[]
+  meshForORG: string[]; meshForCON: string[]
+  hasLeafShade?: boolean; hasNeedleCount?: boolean; needle_max?: number
+  qcFieldsFinalOnly?: boolean; noLotNumber?: boolean; noBulkDensity?: boolean
+  hasFineLeafPct?: boolean
+  volumetrics?: string; bulk_bags?: string; temp_range?: string; leaf_shade?: string
+  variants: SpecTable
+}
+interface SpecOverrideRow { product: string; specs: SpecTable; updated_by: string | null; updated_at: string | null }
+interface SpecMetaRow { updated_by: string | null; updated_at: string | null }
+interface SpecSaveState { state: 'idle' | 'saving' | 'saved' | 'error'; message?: string }
+
+/** A row of qms.v_pending_bag_qc / qms.v_part_bags_awaiting_fill. Only the
+ *  columns this screen actually reads are named. */
+interface BagQcRow {
+  bagging_id: string
+  bag_serial_no: string | null
+  lot_number: string | null
+  product: string
+  variant: string | null
+  kg: number | null
+  destination: string | null
+  bagged_at: string | null
+  inprocess_run_id: string | null
+  inprocess_at: string | null
+  inprocess_out_of_spec: boolean | null
+  inprocess_violations: string[] | null
+  // Added by 20260915_003 — absent on a database that has not had it.
+  bag_weight_kg?: number | null
+  full_bag_kg?: number | null
+}
+
+// Key-order-insensitive JSON, for comparing a spec table against one that has
+// been round-tripped through Postgres. jsonb does not preserve key order (it
+// sorts by key length, then bytewise), so a plain JSON.stringify comparison
+// reports a spec as changed purely because the database handed the same object
+// back in a different order.
+function canonicalJson(v: unknown): string {
+  if (Array.isArray(v)) return `[${v.map(canonicalJson).join(',')}]`
+  if (v && typeof v === 'object') {
+    const o = v as Record<string, unknown>
+    return `{${Object.keys(o).sort().map(k => `${JSON.stringify(k)}:${canonicalJson(o[k])}`).join(',')}}`
+  }
+  return JSON.stringify(v) ?? 'null'
+}
+
 const SD_GRADES   = ['Export','Export Blend','Domestic']
 const SD_VARIANTS = ['Conventional','Organic','RA-Organic','RA-Conventional','FT-Conventional','FT-Organic']
 const SD_PRODUCTS = Object.keys(SIEVING_SPECS_DB)
@@ -273,6 +333,88 @@ function sdGetMesh(product: string, variant: string): string[] {
   const s = SIEVING_SPECS_DB[product]; if (!s) return []
   return sdIsOrg(variant) ? s.meshForORG : s.meshForCON
 }
+// Mesh labels in SIEVE order — coarsest first, then the two named fractions.
+//
+// Both spec tables used to order their columns with a bare `.sort()`, which is
+// lexicographic on the label text: '>10' < '>12' < '>18' < '>40' < '>6'. So
+// ">6" rendered between ">40" and "Dust", five columns from where anyone reads
+// it. On a table of unlabelled 36px number boxes that is a trap, not a
+// cosmetic issue — the editor and the read-only panel below it are the two
+// places a spec is set and checked, and neither may show the meshes in an
+// order that invites editing the wrong one.
+const MESH_ORDER = ['>6 (%)', '>10 (%)', '>12 (%)', '>18 (%)', '>40 (%)', 'Fine Leaf (%)', 'Dust (%)']
+function sortMesh(mesh: string[]): string[] {
+  return [...new Set(mesh)].sort((a, b) => {
+    const ia = MESH_ORDER.indexOf(a), ib = MESH_ORDER.indexOf(b)
+    // Anything unrecognised sorts to the end rather than to the front, so a
+    // mesh added to a spec later can never silently displace a known one.
+    return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || a.localeCompare(b)
+  })
+}
+// Every mesh this product can ever use, in sieve order.
+function allMeshFor(specDef: SpecDef): string[] {
+  return sortMesh([...specDef.meshForORG, ...specDef.meshForCON])
+}
+// The meshes a given `${grade}|${variant}` key is ACTUALLY checked against.
+//
+// A variant is checked against meshForORG or meshForCON, never both — see
+// sdGetMesh. The spec editor ignored that and offered every row every mesh
+// column, so a figure typed into an Organic row's ">12" box was saved to a key
+// nothing ever reads, and the ">10" it belonged in was left at its default.
+// That is precisely what happened to the one saved override on this database:
+// Fine Leaf's six Organic variants came back with '>10 (%)': [0,0] (the app's
+// encoding for "no spec" — sdChk returns neutral) and a phantom '>12 (%)':
+// [0,1]. The edit saved; it just had no effect anyone could see, which reads
+// exactly like a save that did not happen.
+function meshForSpecKey(specDef: SpecDef, specKey: string): string[] {
+  const variant = specKey.split('|')[1] || ''
+  return sortMesh(sdIsOrg(variant) ? specDef.meshForORG : specDef.meshForCON)
+}
+
+// ── Leaf shade against the grade's spec ───────────────────────────────────────
+// Export / Export Blend are shade 4–11, Domestic 1–3 (IPS-SIEV-001/002) — but
+// the numbers are read from the Specifications table, never written here, so
+// editing the spec edits the check. Nothing enforced this before: a shade of 1
+// saved against Export, which is not export material.
+//
+// One function, used by the capture form's live hint, its save-time validate(),
+// and the row editor's save guard. Three copies of a rule is how two of them
+// end up disagreeing — see ARCHITECTURE.md §1A on the twelve copies of n().
+//
+// Returns null when there is nothing to say: no shade typed, no grade picked,
+// no spec set for the combination, or the shade is inside the band.
+function shadeGradeIssue(activeSpecs: SpecTable, grade: string, variant: string, leafShade: string | number | null | undefined):
+  { shade: number; band: SpecRange; fits: string[] } | null {
+  if (!grade || !variant || leafShade === '' || leafShade == null) return null
+  const shade = parseInt(String(leafShade), 10)
+  if (isNaN(shade)) return null
+  const b = (activeSpecs[`${grade}|${variant}`] || {})['Leaf Shade']
+  // [0,0] is the app's "no spec" encoding — see sdChk. A half-open band (one
+  // side null) cannot say which grade a shade belongs to, so it says nothing
+  // rather than guessing at the missing end.
+  if (!Array.isArray(b)) return null
+  const [lo, hi] = b
+  if (lo == null || hi == null || (lo === 0 && hi === 0)) return null
+  if (shade >= lo && shade <= hi) return null
+  // Which grade the measured shade WOULD fit. The usual cause is the grade
+  // being mis-picked rather than the shade mis-read — the grade is three
+  // buttons and the bag tag only says what production intended — so naming the
+  // grade that matches is the useful half of the message. Which of the two is
+  // actually wrong is a question for production, and stays a human step.
+  const fits = SD_GRADES.filter(g => {
+    const gb = (activeSpecs[`${g}|${variant}`] || {})['Leaf Shade']
+    if (!Array.isArray(gb)) return false
+    const [glo, ghi] = gb
+    return glo != null && ghi != null && !(glo === 0 && ghi === 0) && shade >= glo && shade <= ghi
+  })
+  return { shade, band: [lo, hi], fits }
+}
+function shadeGradeMessage(iss: { shade: number; band: SpecRange; fits: string[] }, grade: string): string {
+  return `Leaf shade ${iss.shade} is outside the ${grade} spec of ${iss.band[0]}–${iss.band[1]}`
+    + (iss.fits.length
+        ? ` — shade ${iss.shade} is ${iss.fits.join(' / ')} material. Check with production what this batch is, then set the grade or re-read the shade.`
+        : ` — check the shade, or the grade, against what production says this batch is.`)
+}
 function sdChk(value: any, range: [number,number]|null): 'pass'|'fail'|'neutral' {
   if (!range||value===''||value==null||value===undefined) return 'neutral'
   const n = parseFloat(value); if (isNaN(n)) return 'neutral'
@@ -326,18 +468,27 @@ function mapDbRow(r: any) {
 
 // ─── Spec Editor ─────────────────────────────────────────────────────────────
 
-function SievingSpecEditor({ product, specDef, customSpecs, onSave, onClose }: any) {
-  const allMesh = [...new Set([...specDef.meshForORG,...specDef.meshForCON])].sort()
-  const [draft, setDraft] = useState(JSON.parse(JSON.stringify(customSpecs)))
+interface SievingSpecEditorProps {
+  product: string
+  specDef: SpecDef
+  customSpecs: SpecTable
+  savedMeta?: SpecMetaRow
+  saveState?: SpecSaveState
+  onSave: (specs: SpecTable) => void
+  onClose: () => void
+}
+
+function SievingSpecEditor({ product, specDef, customSpecs, savedMeta, saveState, onSave, onClose }: SievingSpecEditorProps) {
+  const allMesh = allMeshFor(specDef)
+  const [draft, setDraft] = useState<SpecTable>(() => JSON.parse(JSON.stringify(customSpecs)))
   const [newGrade, setNewGrade] = useState(SD_GRADES[0])
   const [newVariant, setNewVariant] = useState(SD_VARIANTS[0])
   // track renamed keys: originalKey -> newKey parts
   const [renames, setRenames] = useState<Record<string,{grade:string,variant:string}>>(
     () => Object.fromEntries(Object.keys(customSpecs).map(k => { const [g,v]=k.split('|'); return [k,{grade:g||'',variant:v||''}] }))
   )
-
-  function applyRenames(d: any) {
-    const out: any = {}
+  function applyRenames(d: SpecTable): SpecTable {
+    const out: SpecTable = {}
     Object.keys(d).forEach(k => {
       const r = renames[k]
       const newKey = r ? `${r.grade}|${r.variant}` : k
@@ -345,16 +496,76 @@ function SievingSpecEditor({ product, specDef, customSpecs, onSave, onClose }: a
     })
     return out
   }
+  const pending = applyRenames(draft)
+  // "Has anything changed?" is measured against the SAVED spec — the
+  // `customSpecs` prop, which the parent replaces with what it read back out of
+  // the database after a save. So a successful save turns this false by itself:
+  // no snapshot to keep in step, and no setState-in-an-effect to keep it there.
+  // Closing the editor still throws the draft away (it is component state), and
+  // tryClose below is what now says so.
+  //
+  // Compared canonically because the round-trip goes through jsonb, which
+  // reorders keys — see canonicalJson.
+  const dirty = canonicalJson(pending) !== canonicalJson(customSpecs)
+
+  // One bound of one fraction of one row. Both the mesh cells and the Leaf
+  // Shade cell go through this rather than repeating the same nested update
+  // twice — the second copy is exactly where the two would drift.
+  function setBound(rowKey: string, fraction: string, side: 0 | 1, value: number | null) {
+    setDraft(d => {
+      const nd: SpecTable = JSON.parse(JSON.stringify(d))
+      const row = nd[rowKey]
+      if (!row) return d
+      const range: SpecRange = row[fraction] ?? [null, null]
+      range[side] = value
+      // Both sides cleared = no spec for this fraction, so the key goes rather
+      // than lingering as [null,null].
+      if (range[0] == null && range[1] == null) delete row[fraction]
+      else row[fraction] = range
+      return nd
+    })
+  }
+
+  function tryClose() {
+    if (dirty && !confirm('Close without saving? The spec changes on screen will be lost.')) return
+    onClose()
+  }
 
   return (
     <div style={{background:'#f8fafc',border:'2px solid #7c3aed',borderRadius:10,padding:16,marginBottom:14}}>
-      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
-        <div style={{fontWeight:700,fontSize:13,color:'#7c3aed'}}>✏️ Edit Specifications — {product}</div>
-        <div style={{display:'flex',gap:8}}>
-          <button onClick={()=>onSave(applyRenames(draft))} style={{padding:'5px 16px',borderRadius:6,border:'none',background:'#7c3aed',color:'#fff',fontSize:12,fontWeight:700,cursor:'pointer'}}>Save Specs</button>
-          <button onClick={()=>{if(confirm('Reset to built-in defaults for '+product+'? This will overwrite any saved changes.'))onSave(JSON.parse(JSON.stringify(SIEVING_SPECS_DB[product].variants)))}} style={{padding:'5px 12px',borderRadius:6,border:'1px solid #d97706',background:'#fffbeb',color:'#92400e',fontSize:11,cursor:'pointer'}}>Reset to Defaults</button>
-          <button onClick={onClose} style={{padding:'5px 12px',borderRadius:6,border:'1px solid #d1d5db',background:'#fff',fontSize:12,cursor:'pointer'}}>Cancel</button>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12,gap:10,flexWrap:'wrap'}}>
+        <div>
+          <div style={{fontWeight:700,fontSize:13,color:'#7c3aed'}}>✏️ Edit Specifications — {product}</div>
+          <div style={{fontSize:10,color:'#6b7280',marginTop:2}}>
+            {savedMeta
+              ? `Saved to the shared database by ${savedMeta.updated_by || 'unknown'} · ${String(savedMeta.updated_at || '').slice(0,16).replace('T',' ')}`
+              : 'No saved override — this product is on the built-in defaults.'}
+            {dirty && <strong style={{color:'#b45309'}}> · unsaved changes on screen</strong>}
+          </div>
         </div>
+        <div style={{display:'flex',gap:8,alignItems:'center'}}>
+          {/* The save result is shown here, next to the button that caused it,
+              and stays on screen. It used to be an alert() on failure and
+              nothing at all on success — so a save that silently did nothing
+              and a save that worked looked identical. */}
+          {saveState?.state==='saving' && <span style={{fontSize:11,color:'#6b7280'}}>Saving…</span>}
+          {saveState?.state==='saved'  && <span style={{fontSize:11,color:'#166534',fontWeight:700}}>✓ Saved &amp; verified</span>}
+          {saveState?.state==='error'  && <span style={{fontSize:11,color:'#991b1b',fontWeight:700}}>⚠ Not saved</span>}
+          <button onClick={()=>onSave(pending)} disabled={!dirty || saveState?.state==='saving'}
+            style={{padding:'5px 16px',borderRadius:6,border:'none',background:(!dirty||saveState?.state==='saving')?'#c4b5fd':'#7c3aed',color:'#fff',fontSize:12,fontWeight:700,cursor:(!dirty||saveState?.state==='saving')?'default':'pointer'}}>
+            {dirty ? 'Save Specs' : 'Nothing to save'}
+          </button>
+          <button onClick={()=>{if(confirm('Reset to built-in defaults for '+product+'? This will overwrite any saved changes.'))onSave(JSON.parse(JSON.stringify(SIEVING_SPECS_DB[product].variants)))}} style={{padding:'5px 12px',borderRadius:6,border:'1px solid #d97706',background:'#fffbeb',color:'#92400e',fontSize:11,cursor:'pointer'}}>Reset to Defaults</button>
+          <button onClick={tryClose} style={{padding:'5px 12px',borderRadius:6,border:'1px solid #d1d5db',background:'#fff',fontSize:12,cursor:'pointer'}}>Cancel</button>
+        </div>
+      </div>
+      {saveState?.state==='error' && (
+        <div style={{padding:'8px 12px',background:'#fef2f2',border:'1px solid #fca5a5',borderRadius:6,fontSize:11,color:'#991b1b',marginBottom:10}}>
+          ⚠ These specs were NOT saved to the shared database — other PCs still have the old values. {saveState.message}
+        </div>
+      )}
+      <div style={{padding:'7px 12px',background:'#faf5ff',border:'1px solid #ddd6fe',borderRadius:6,fontSize:10,color:'#5b21b6',marginBottom:10}}>
+        Each row only shows the meshes its own variant is checked against — Organic variants are measured on &gt;10, Conventional on &gt;12, so the other one is greyed out rather than editable. Leave a box blank for “no spec”; a blank fraction is not checked.
       </div>
       <div style={{overflowX:'auto',borderRadius:8}}>
         <table style={{borderCollapse:'collapse',fontSize:11,width:'100%'}}>
@@ -381,15 +592,31 @@ function SievingSpecEditor({ product, specDef, customSpecs, onSave, onClose }: a
                   </select>
                 </td>
                 {allMesh.map(m=>{
-                  const val = s[m] ?? [0,0]
+                  // The live key, so a row whose variant has just been changed
+                  // in the dropdown immediately shows the right meshes.
+                  const liveKey = `${r.grade}|${r.variant}`
+                  const used = meshForSpecKey(specDef, liveKey).includes(m)
+                  const val = s[m]
+                  if (!used) return (
+                    <td key={m} title={`${sdIsOrg(r.variant)?'Organic':'Conventional'} variants are not checked on ${m.replace(' (%)','')}`}
+                      style={{padding:'3px 4px',textAlign:'center',background:'#f3f4f6',color:'#9ca3af',fontSize:10}}>n/a</td>
+                  )
                   return (
                   <td key={m} style={{padding:'3px 4px',textAlign:'center'}}>
                     <div style={{display:'flex',gap:2,justifyContent:'center'}}>
                       {[0,1].map(j=>(
-                        <input key={j} type="number" step="1" value={val[j]??0} onChange={e=>{
-                          const v=e.target.value===''?0:parseFloat(e.target.value)
-                          setDraft((d:any)=>{const nd=JSON.parse(JSON.stringify(d));if(!nd[vk][m])nd[vk][m]=[0,0];nd[vk][m][j]=v;return nd})
-                        }} style={{width:36,padding:'2px 3px',border:'1px solid #d1d5db',borderRadius:3,fontSize:10,textAlign:'center'}}/>
+                        // Blank, not 0. Pre-filling every empty box with 0 is
+                        // how a spec got turned off by accident: [0,0] is the
+                        // app's "no spec" encoding (sdChk → neutral), so typing
+                        // over one number and leaving the other at its shown 0
+                        // silently disabled the check instead of narrowing it.
+                        <input key={j} type="number" step="1"
+                          value={val?.[j] ?? ''}
+                          placeholder={j===0?'min':'max'}
+                          onChange={e=>{
+                            const raw = e.target.value
+                            setBound(vk, m, j as 0|1, raw==='' ? null : parseFloat(raw))
+                          }} style={{width:40,padding:'2px 3px',border:'1px solid #d1d5db',borderRadius:3,fontSize:10,textAlign:'center'}}/>
                       ))}
                     </div>
                   </td>
@@ -398,10 +625,13 @@ function SievingSpecEditor({ product, specDef, customSpecs, onSave, onClose }: a
                   <td style={{padding:'3px 4px',textAlign:'center'}}>
                     <div style={{display:'flex',gap:2,justifyContent:'center'}}>
                       {[0,1].map(j=>(
-                        <input key={j} type="number" step="1" value={s['Leaf Shade']?.[j]??0} onChange={e=>{
-                          const v=e.target.value===''?0:parseFloat(e.target.value)
-                          setDraft((d:any)=>{const nd=JSON.parse(JSON.stringify(d));if(!nd[vk]['Leaf Shade'])nd[vk]['Leaf Shade']=[0,0];nd[vk]['Leaf Shade'][j]=v;return nd})
-                        }} style={{width:36,padding:'2px 3px',border:'1px solid #d1d5db',borderRadius:3,fontSize:10,textAlign:'center'}}/>
+                        <input key={j} type="number" step="1"
+                          value={s['Leaf Shade']?.[j] ?? ''}
+                          placeholder={j===0?'min':'max'}
+                          onChange={e=>{
+                            const raw = e.target.value
+                            setBound(vk, 'Leaf Shade', j as 0|1, raw==='' ? null : parseFloat(raw))
+                          }} style={{width:40,padding:'2px 3px',border:'1px solid #d1d5db',borderRadius:3,fontSize:10,textAlign:'center'}}/>
                       ))}
                     </div>
                   </td>
@@ -427,10 +657,11 @@ function SievingSpecEditor({ product, specDef, customSpecs, onSave, onClose }: a
         <button onClick={()=>{
           const key=`${newGrade}|${newVariant}`
           if(draft[key]){alert('This combination already exists');return}
-          const emptyRow:any={}
-          allMesh.forEach((m:string)=>{emptyRow[m]=[0,0]})
-          if(specDef.hasLeafShade) emptyRow['Leaf Shade']=[0,0]
-          setDraft((d:any)=>({...d,[key]:emptyRow}))
+          // Seeded from the built-in spec for this combination when there is
+          // one, so a new row starts from the IPS values rather than from a
+          // grid of zeroes that reads as a spec but checks nothing.
+          const seed = SIEVING_SPECS_DB[product]?.variants?.[key]
+          setDraft(d=>({...d,[key]: seed ? JSON.parse(JSON.stringify(seed)) : {}}))
           setRenames(prev=>({...prev,[key]:{grade:newGrade,variant:newVariant}}))
         }} style={{padding:'5px 16px',borderRadius:5,border:'none',background:'#7c3aed',color:'#fff',fontSize:11,fontWeight:700,cursor:'pointer'}}>
           Add Row
@@ -865,8 +1096,16 @@ function InlineEditForm({ run, specDef, activeSpecs, onSave, onCancel, qcNames, 
     ? serialTabMismatch(fields.serialNumber, activeProduct)
     : null
 
+  // The same leaf-shade-vs-grade rule the capture form enforces. Without it an
+  // edit is a way back in: a run saved correctly could have its grade changed
+  // to Export afterwards and keep a Domestic shade.
+  const editShadeIssue = (!specDef.qcFieldsFinalOnly || fields.runType === 'final') && specDef.hasLeafShade
+    ? shadeGradeIssue(activeSpecs, fields.grade, fields.variant, fields.leafShade)
+    : null
+
   function handleSaveClick() {
     if (editSerialMismatch) { alert(editSerialMismatch); return }
+    if (editShadeIssue) { alert(shadeGradeMessage(editShadeIssue, fields.grade)); return }
     if (isNegative(fields.bulkDensity)) { alert('Bulk density cannot be negative.'); return }
     if (isNegative(fields.needleCount)) { alert('Needle count cannot be negative.'); return }
     if (Object.keys(gramVals).some(k => isNegative(gramVals[k]))) { alert('Sieve grams cannot be negative.'); return }
@@ -962,8 +1201,17 @@ function InlineEditForm({ run, specDef, activeSpecs, onSave, onCancel, qcNames, 
         )}
         {specDef.hasLeafShade && (!specDef.qcFieldsFinalOnly||fields.runType==='final') && (
           <div>
-            <label style={{ fontSize:9, fontWeight:700, color:'#374151', display:'block', marginBottom:2, textTransform:'uppercase' }}>Leaf Shade</label>
-            <input type="number" min="1" max="11" value={fields.leafShade} onChange={e=>setF('leafShade',e.target.value)} style={inputSt}/>
+            <label style={{ fontSize:9, fontWeight:700, color:'#374151', display:'block', marginBottom:2, textTransform:'uppercase' }}>
+              Leaf Shade{editShadeIssue ? ` (${editShadeIssue.band[0]}–${editShadeIssue.band[1]} for ${fields.grade})` : ''}
+            </label>
+            <input type="number" min="1" max="11" value={fields.leafShade} onChange={e=>setF('leafShade',e.target.value)}
+              style={{...inputSt, borderColor: editShadeIssue ? '#fca5a5' : '#d1d5db', background: editShadeIssue ? '#fef2f2' : undefined}}/>
+            {editShadeIssue && (
+              <div style={{ fontSize:9, color:'#dc2626', marginTop:2 }}>
+                ⚠ Shade {editShadeIssue.shade} is not {fields.grade}
+                {editShadeIssue.fits.length ? ` — that is ${editShadeIssue.fits.join(' / ')}` : ''}
+              </div>
+            )}
           </div>
         )}
         <div>
@@ -1047,6 +1295,12 @@ export default function SievingPage() {
   const [customSpecs, setCustomSpecs] = useState<Record<string,any>>(
     Object.fromEntries(SD_PRODUCTS.map(p => [p, JSON.parse(JSON.stringify(SIEVING_SPECS_DB[p].variants))]))
   )
+  // Who saved the override now in force for each product, and when — shown in
+  // the editor and on the spec panel, so "is my change actually live?" is
+  // answerable from the screen instead of from the database.
+  const [specMeta, setSpecMeta] = useState<Record<string, SpecMetaRow>>({})
+  const [specSaveState, setSpecSaveState] = useState<SpecSaveState>({ state: 'idle' })
+  const [specLoadError, setSpecLoadError] = useState('')
   const [loading,   setLoading]   = useState(true)
   const [saving,    setSaving]    = useState(false)
   const [sdError,   setSdError]   = useState('')
@@ -1160,6 +1414,59 @@ export default function SievingPage() {
   // Pending Final QC bags — one per Fine Leaf / Coarse Leaf bagging that has
   // not been sampled yet. Indent Sticks and Rooibos Blocks are excluded by the
   // view (they get bags and labels but never a QC stamp).
+  // ── Bags closed WITHOUT being sampled ────────────────────────────────────
+  // qms.bag_qc_waivers (created by 20260915_003). A waived bag drops out of
+  // v_pending_bag_qc, so without this the queue would simply be shorter and
+  // nothing on screen would say a bag had been closed unsampled — the number
+  // gets better and the reason disappears. Shown with who accepted it, because
+  // a waiver is a Quality decision on record: it is not a pass, and must never
+  // read as one.
+  const [waivers, setWaivers] = useState<{ reason: string; waived_by: string; n: number }[]>([])
+  const waivedCount = waivers.reduce((t, w) => t + w.n, 0)
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      const { data, error } = await db.schema('qms').from('bag_qc_waivers')
+        .select('reason, waived_by')
+      // The table may not exist yet on a database that hasn't had the
+      // migration — not an error worth surfacing to a QC mid-shift.
+      if (cancelled || error || !data) return
+      const m = new Map<string, { reason: string; waived_by: string; n: number }>()
+      for (const w of data as { reason: string; waived_by: string }[]) {
+        const k = `${w.reason}|${w.waived_by}`
+        const cur = m.get(k)
+        if (cur) cur.n++
+        else m.set(k, { reason: w.reason, waived_by: w.waived_by, n: 1 })
+      }
+      setWaivers(Array.from(m.values()).sort((a, b) => b.n - a.n))
+    })()
+    return () => { cancelled = true }
+  }, [db, pendingBags])
+  // ── Part bags: not full yet, so not asking for a QC ────────────────────────
+  // qms.v_part_bags_awaiting_fill (20260915_003) is the queue's own exclusion
+  // turned around: every bag that would be awaiting QC except that it is still
+  // being filled — flagged is_open at capture, or under 95% of its product's
+  // standard full weight. Quality was being asked to sample half-filled bags
+  // and give a bulk density and a leaf shade for a bag that was still growing.
+  //
+  // Shown rather than simply absent. A bag silently missing from a queue is
+  // indistinguishable from a bag the queue lost, and this screen has been
+  // burned by exactly that before (the timed-out fetch that read as an empty
+  // queue for a full shift). Nothing has to be done to these: each one joins
+  // the real queue by itself the moment it reaches full.
+  const [partBags, setPartBags] = useState<BagQcRow[]>([])
+  const [showPartBags, setShowPartBags] = useState(false)
+  const loadPartBags = useCallback(async () => {
+    const { data, error } = await db.schema('qms').from('v_part_bags_awaiting_fill')
+      .select('*').order('bagged_at', { ascending: false }).limit(200)
+    // The view may not exist yet on a database that hasn't had the migration —
+    // that is not worth a red banner in front of a QC mid-shift, and the queue
+    // itself is unaffected.
+    if (error || !data) return
+    setPartBags((data as BagQcRow[]).filter(r => String(r.bag_serial_no ?? '').trim()))
+  }, [db])
+  useEffect(() => { loadPartBags() }, [loadPartBags])
+
   const loadPendingBags = useCallback(async () => {
     setPendingLoading(true)
     const { data, error } = await db.schema('qms').from('v_pending_bag_qc')
@@ -1260,10 +1567,61 @@ export default function SievingPage() {
 
   useEffect(() => { load() }, [load])
 
-  // Load saved spec overrides from DB so all PCs share the same specs
+  // ── Searching past the loaded window ──────────────────────────────────────
+  // load() deliberately fetches only the last three months. That is right for
+  // the table and the chart, and wrong for a batch search: a lot that last ran
+  // in May would come back "nothing matching", which is a different statement
+  // from "nothing in the last three months" and the wrong one. So a search
+  // that looks like a batch number also asks the database directly for older
+  // runs on that lot and merges them in — the rows then flow through
+  // productRuns like any other, including into the date list above.
+  const [olderSearchLoading, setOlderSearchLoading] = useState(false)
+  const [olderSearchNote,    setOlderSearchNote]    = useState('')
   useEffect(() => {
-    db.schema('qms').from('sieving_spec_overrides').select('product,specs')
-      .then(({ data }: { data: any[] | null }) => {
+    const q = searchText.trim()
+    setOlderSearchNote('')
+    // Two characters is not a batch number; it is a keystroke on the way to
+    // one, and would drag the whole table back from the server.
+    if (q.length < 3) { setOlderSearchLoading(false); return }
+    let cancelled = false
+    setOlderSearchLoading(true)
+    const t = setTimeout(async () => {
+      const { data, error } = await db.schema('qms').from('sd_runs')
+        .select('*').ilike('lot_number', `%${q}%`).lt('date', threeMonthsAgoISO())
+        .order('date', { ascending: false }).limit(500)
+      if (cancelled) return
+      setOlderSearchLoading(false)
+      if (error) { setOlderSearchNote(`Could not check older history for this batch (${error.message}) — only the last 3 months is shown.`); return }
+      const older = ((data ?? []) as unknown[]).map(mapDbRow)
+      if (!older.length) return
+      // Counted here rather than inside the setRuns updater: an updater must
+      // stay pure (React can call it twice), so it cannot also be where a
+      // message is set.
+      setRuns(prev => {
+        const next = { ...prev }
+        older.forEach(mapped => {
+          const p = mapped.product || 'Fine Leaf'
+          const list = next[p] ? [...next[p]] : []
+          if (list.some(x => String(x.id) === String(mapped.id))) return
+          list.push(mapped); next[p] = list
+        })
+        return next
+      })
+      setOlderSearchNote(`Found ${older.length} run${older.length!==1?'s':''} older than the last 3 months — included above.`)
+    }, 350)
+    return () => { cancelled = true; clearTimeout(t) }
+  }, [db, searchText])
+
+  // Load saved spec overrides from DB so all PCs share the same specs.
+  // A failed load is surfaced rather than swallowed: falling back to the
+  // built-in defaults without saying so shows one spec while the shared
+  // database holds another, which is the same class of silent disagreement the
+  // save path had.
+  useEffect(() => {
+    db.schema('qms').from('sieving_spec_overrides').select('product,specs,updated_by,updated_at')
+      .then(({ data, error }: { data: SpecOverrideRow[] | null; error: { message?: string } | null }) => {
+        if (error) { setSpecLoadError(error.message || 'Could not load the saved specifications.'); return }
+        setSpecLoadError('')
         if (!data || data.length === 0) return
         setCustomSpecs(prev => {
           const updated = { ...prev }
@@ -1274,6 +1632,9 @@ export default function SievingPage() {
           })
           return updated
         })
+        setSpecMeta(Object.fromEntries(data
+          .filter(r => r.product)
+          .map(r => [r.product, { updated_by: r.updated_by ?? null, updated_at: r.updated_at ?? null }])))
       })
   }, [db])
 
@@ -1318,16 +1679,45 @@ export default function SievingPage() {
   const toggleSort = (key: string) =>
     setSdSort(s => s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' })
 
-  const filteredRuns = (filter==='all' ? rangeRuns : rangeRuns.filter((r:any) => r.runType===filter))
-    .filter((r:any) => !searchText.trim() || rowSearchText(r).includes(searchText.trim().toLowerCase()))
+  // ── Searching is not date-filtered ─────────────────────────────────────────
+  // A batch number is a question about a batch, not about a week. Typing one
+  // into the search box used to intersect it with the From/To window, so a lot
+  // that ran across several days showed only the days that happened to be in
+  // the current range — and finding the rest meant widening the dates by hand,
+  // guessing, and re-reading the same list. Whenever there is something in the
+  // search box the range is ignored and every loaded run for this product is
+  // searched, so one batch number answers "every date this ran" in one go.
+  // The range still governs the chart and the un-searched table.
+  const searching  = Boolean(searchText.trim())
+  const searchBase = searching ? productRuns : rangeRuns
+  const filteredRuns = (filter==='all' ? searchBase : searchBase.filter(r => r.runType===filter))
+    .filter(r => !searching || rowSearchText(r).includes(searchText.trim().toLowerCase()))
     .slice().sort((a:any,b:any) => {
       const va = sortKeyVal(a, sdSort.key), vb = sortKeyVal(b, sdSort.key)
       const cmp = typeof va === 'number' && typeof vb === 'number' ? va - vb : String(va).localeCompare(String(vb))
       return sdSort.dir === 'asc' ? cmp : -cmp
     })
+  // Every distinct date the search matched, oldest first — the answer to
+  // "when did this batch run?" without reading the table.
+  const searchDates = searching
+    ? [...new Set(filteredRuns.map(r => r.date).filter(Boolean))].sort()
+    : []
+
   const activeMesh  = sdGetMesh(activeProduct, form.variant)
   const specKey     = `${form.grade}|${form.variant}`
   const activeSpec  = activeSpecs[specKey] || {}
+
+  // The leaf-shade band the selected grade+variant is checked against, and the
+  // live clash message when the shade on screen falls outside it. Both read
+  // from activeSpecs — the Specifications table — so there is exactly one
+  // place a shade range is defined. validate() re-derives the same thing at
+  // save time; this is the version the QC sees while typing.
+  const shadeBand: [number,number] | null = (() => {
+    const b = activeSpec['Leaf Shade']
+    return Array.isArray(b) && !(b[0]===0 && b[1]===0) ? [b[0], b[1]] : null
+  })()
+  const shadeIssue = shadeGradeIssue(activeSpecs, form.grade, form.variant, form.leafShade)
+  const shadeGradeClash = shadeIssue ? shadeGradeMessage(shadeIssue, form.grade) : null
 
   // Auto-fill grade/variant from previous runs for same lot
   const lookupLot = (lotNum: string) => {
@@ -1523,6 +1913,45 @@ export default function SievingPage() {
     // see fieldShown() above for why validating a hidden value silently broke
     // saving an In-Process run on Fine Leaf / Coarse Leaf.
     if (fieldShown(f,'leafShade') && f.leafShade) { const ls=parseInt(f.leafShade,10); if (isNaN(ls)||ls<1||ls>11) errs.leafShade='Leaf shade must be 1–11' }
+    // ── Leaf shade must match the GRADE's spec ────────────────────────────────
+    // Export and Export Blend are 4–11, Domestic 1–3 (IPS-SIEV-001/002) — read
+    // from the Specifications table above, never hard-coded here, so changing
+    // the spec changes the check. Nothing enforced this: a shade of 1 saved
+    // happily against Export, which is not export material. It is a hard error
+    // rather than a warning because the two facts contradict each other — one
+    // of them is wrong, and which one it is has to be settled before the record
+    // is written, not after.
+    //
+    // The message names the grade the measured shade DOES fit, because the
+    // usual cause is the grade being mistyped rather than the shade being
+    // mismeasured: the bag tag carries production's intended grade, the QC
+    // confirms it, and a mis-picked grade button looks like nothing at all.
+    // Confirming it against what production says the material is stays a human
+    // step — the screen can only say the two disagree.
+    if (fieldShown(f,'leafShade')) {
+      const iss = shadeGradeIssue(activeSpecs, f.grade, f.variant, f.leafShade)
+      if (iss) errs.leafShade = shadeGradeMessage(iss, f.grade)
+    }
+    // ── The batch number must be the sampled bag's own batch ──────────────────
+    // A lot number is not product-specific — one farm lot is sieved into both
+    // Fine and Coarse Leaf, and the data shows plenty of lots with runs on both
+    // (GS-0147 has 20 Fine and 26 Coarse). So "is this a Fine Leaf batch?" is
+    // not a question the lot alone can answer, and a rule built on the lot's
+    // shape would be guesswork.
+    //
+    // What IS unambiguous: the bag being sampled carries its own lot, and a
+    // Final QC of that bag must be filed under it. A Coarse Leaf bag on lot
+    // GS-0268 captured with the batch number typed as VS22-188 files a Coarse
+    // Leaf result against a batch that bag was never part of — which is exactly
+    // how a Fine Leaf batch number ends up on a Coarse Leaf entry.
+    if (f.runType === 'final' && f.lotNumber?.trim()) {
+      const bag = pendingBags.find(b => String(b.bagging_id) === String(f.baggingId))
+        || (f.serialNumber?.trim() ? pendingBags.find(b => String(b.bag_serial_no||'').toUpperCase() === f.serialNumber.trim().toUpperCase()) : null)
+      const bagLot = (bag?.lot_number || '').trim()
+      if (bagLot && lotKeyOf(bagLot) !== lotKeyOf(f.lotNumber)) {
+        errs.lotNumber = `Bag ${bag.bag_serial_no || ''} is on batch ${bagLot}, not ${f.lotNumber.trim()}. Pick the right bag, or correct the batch number to the bag's own.`
+      }
+    }
     // No captured value may be negative.
     if (!errs._mesh && Object.keys(gramValues).some(k=>isNegative(gramValues[k]))) errs._mesh='Sieve grams cannot be negative'
     if (fieldShown(f,'bulkDensity') && isNegative(f.bulkDensity)) errs.bulkDensity='Bulk density cannot be negative'
@@ -1677,20 +2106,84 @@ export default function SievingPage() {
     loadPendingBags()
   }
 
-  async function saveSpecs(newSpecs: any) {
-    const updated = { ...customSpecs, [activeProduct]: newSpecs }
-    setCustomSpecs(updated)
-    setShowSpecEditor(false)
+  // ── "No QC result on the system" ──────────────────────────────────────────
+  // A bag reaches this screen and there is simply no sample for it — the run
+  // was never done, or was done on paper and the record is gone, or the serial
+  // predates a correction and the sample went with the rows that were removed.
+  // Until now the only ways out were to leave it in the queue forever or to
+  // type numbers into the form until it saved. The second one is the dangerous
+  // one: a Final QC carries a bulk density, a leaf shade and a QC's name, so
+  // "saving something to clear the screen" means inventing a food-safety
+  // result against a named person. The screenshot of someone typing
+  // "NO QC RESULTS FOUND OR DONE" into the Comment box and being told to fix
+  // four required fields is that dead end exactly.
+  //
+  // This records the truth instead: no Final QC exists for this bag, here is
+  // who says so and why. It writes qms.bag_qc_waivers and appends a scan_event,
+  // so the bag's own history says it — and it never says the bag passed. The
+  // reason is required and free-typed; a canned list would get clicked through.
+  //
+  // Restricted to IT / Quality management (can_delete_sieving_runs) because it
+  // takes a bag out of the sampling queue without a sample. It is undone by
+  // deleting the waiver row, which puts the bag straight back.
+  const [waiving, setWaiving] = useState(false)
+  async function waiveBagQc(bag: BagQcRow) {
+    const serial = String(bag?.bag_serial_no ?? '').trim().toUpperCase()
+    if (!serial) { alert('This row has no serial number, so there is no bag to record a decision against.'); return }
+    const who = myName || ''
+    if (!who) { alert('Your name is not available from your login, and a waiver has to be attributable. Sign in again, or ask IT.'); return }
+    const reason = prompt(
+      `No QC result for ${serial}.\n\n`
+      + 'This records that NO Final QC exists for this bag and takes it out of the queue. '
+      + 'It is not a pass and must never be read as one.\n\n'
+      + 'Why is there no result? (required — it is stored and shown)')
+    if (reason == null) return
+    if (!reason.trim()) { alert('A reason is required.'); return }
+    setWaiving(true)
+    try {
+      const { error } = await getDb().schema('qms').from('bag_qc_waivers')
+        .upsert({ bag_serial_no: serial, reason: reason.trim(), waived_by: who,
+                  note: `${bag.product ?? ''} · lot ${bag.lot_number ?? '—'} · bagged ${String(bag.bagged_at ?? '').slice(0,16).replace('T',' ')}`.trim() },
+                { onConflict: 'bag_serial_no' })
+      if (error) { alert('Could not record it: ' + error.message); return }
+      // The bag's own ledger says it too, so the decision is visible from Bag
+      // Tracking and not only from this screen.
+      await appendBagEvent(serial, 'void', `No QC result on the system — closed without sampling by ${who}. Reason: ${reason.trim()}. This is not a pass.`)
+      await loadPendingBags()
+      setSelectedBagId(''); setLotMsg('')
+    } finally { setWaiving(false) }
+  }
+
+  async function saveSpecs(newSpecs: SpecTable) {
+    const product = activeProduct
+    setSpecSaveState({ state: 'saving' })
     // Persist to Supabase so every PC shares the same specs. A schema
     // mismatch or RLS denial comes back as {error}, not a thrown exception —
     // that's exactly how this silently never persisted for a long stretch —
     // so check it explicitly rather than only try/catching network failures.
+    //
+    // And then READ IT BACK. A write that returns no error is not the same
+    // thing as a spec that is now in force: the editor stays open, showing
+    // what the database actually holds, and says "Saved & verified" only once
+    // it has seen the row. The local state is updated from that read-back
+    // rather than from what was sent, so the screen can never show a spec the
+    // shared database does not have.
     try {
       const { error } = await getDb().schema('qms').from('sieving_spec_overrides')
-        .upsert({ product: activeProduct, specs: newSpecs, updated_by: myName || null }, { onConflict: 'product' })
-      if (error) alert('Specs saved for this session, but could not save to the shared database (other PCs won\'t see this change): ' + error.message)
-    } catch (_) {
-      alert('Specs saved for this session, but could not reach the database — other PCs won\'t see this change until it saves successfully.')
+        .upsert({ product, specs: newSpecs, updated_by: myName || null, updated_at: new Date().toISOString() }, { onConflict: 'product' })
+      if (error) { setSpecSaveState({ state: 'error', message: error.message }); return }
+      const { data, error: readErr } = await getDb().schema('qms').from('sieving_spec_overrides')
+        .select('product,specs,updated_by,updated_at').eq('product', product).maybeSingle()
+      const row = data as SpecOverrideRow | null
+      if (readErr || !row?.specs) {
+        setSpecSaveState({ state: 'error', message: readErr?.message || 'The database accepted the save but the row could not be read back.' })
+        return
+      }
+      setCustomSpecs(prev => ({ ...prev, [product]: row.specs }))
+      setSpecMeta(prev => ({ ...prev, [product]: { updated_by: row.updated_by, updated_at: row.updated_at } }))
+      setSpecSaveState({ state: 'saved' })
+    } catch (e) {
+      setSpecSaveState({ state: 'error', message: e instanceof Error ? e.message : 'Could not reach the database.' })
     }
   }
 
@@ -1820,16 +2313,21 @@ export default function SievingPage() {
     }
   }, [])
   useEffect(() => {
-    const id = setInterval(loadPendingBags, 60000)
+    const id = setInterval(() => { loadPendingBags(); loadPartBags() }, 60000)
     return () => clearInterval(id)
-  }, [loadPendingBags])
+  }, [loadPendingBags, loadPartBags])
   useEffect(() => {
+    // A top-up UPDATEs bag_tags.weight_kg rather than inserting, and that is
+    // exactly the event that moves a bag from "still filling" to "awaiting QC"
+    // — so UPDATE is subscribed alongside the two INSERTs.
+    const refresh = () => { loadPendingBags(); loadPartBags() }
     const channel = db.channel('sieving-bag-ready')
-      .on('postgres_changes', { event: 'INSERT', schema: 'production', table: 'prod_bagging' }, () => loadPendingBags())
-      .on('postgres_changes', { event: 'INSERT', schema: 'production', table: 'bag_tags' },     () => loadPendingBags())
+      .on('postgres_changes', { event: 'INSERT', schema: 'production', table: 'prod_bagging' }, refresh)
+      .on('postgres_changes', { event: 'INSERT', schema: 'production', table: 'bag_tags' },     refresh)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'production', table: 'bag_tags' },     refresh)
       .subscribe()
     return () => { db.removeChannel(channel) }
-  }, [db, loadPendingBags])
+  }, [db, loadPendingBags, loadPartBags])
 
   // Clicking a card: jump to that sieve's tab, re-fetch the pending queue (so
   // we work from the fully-enriched row — PA/leaf-shade lookups, in-process
@@ -1914,15 +2412,63 @@ export default function SievingPage() {
           phone, where it's most of the screen, the page underneath could not
           be scrolled at all. Height is capped too, so it can never own the
           full viewport even when expanded. */}
-      {bagAlerts.length > 0 && (
+      {/* Also renders for the two non-actionable groups — part bags still
+          filling, and bags closed without sampling — so neither is merely
+          absent from the queue with nothing on screen saying why. */}
+      {(bagAlerts.length > 0 || waivedCount > 0 || partBags.length > 0) && (
         <div style={{position:'fixed',top:70,right:16,zIndex:5000,display:'flex',flexDirection:'column',gap:8,maxWidth:340,maxHeight:'min(60vh, calc(100vh - 90px))',pointerEvents:'none'}}>
           <button onClick={()=>setAlertsCollapsed(c=>!c)}
             style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:8,background:'#166534',border:'none',borderRadius:10,padding:'9px 12px',color:'#fff',fontSize:12,fontWeight:700,cursor:'pointer',boxShadow:'0 12px 30px rgba(0,0,0,.15)',pointerEvents:'auto',flexShrink:0}}>
-            <span>📦 {bagAlerts.length} bag{bagAlerts.length>1?'s':''} awaiting QC</span>
+            <span>📦 {bagAlerts.length} bag{bagAlerts.length>1?'s':''} awaiting QC{partBags.length > 0 ? ` · ${partBags.length} still filling` : ''}{waivedCount > 0 ? ` · ${waivedCount} closed unsampled` : ''}</span>
             <span style={{opacity:.85}}>{alertsCollapsed?'▲':'▼'}</span>
           </button>
           {!alertsCollapsed && (
             <div style={{display:'flex',flexDirection:'column',gap:8,overflowY:'auto',pointerEvents:'auto'}}>
+              {partBags.length > 0 && (
+                <div style={{background:'#fff',border:'1px solid #bfdbfe',borderLeft:'4px solid #2563eb',borderRadius:10,boxShadow:'0 12px 30px rgba(0,0,0,.15)',padding:'12px 14px'}}>
+                  <button onClick={()=>setShowPartBags(v=>!v)}
+                    style={{display:'flex',justifyContent:'space-between',alignItems:'center',width:'100%',background:'none',border:'none',padding:0,cursor:'pointer',fontWeight:700,fontSize:12,color:'#1e40af'}}>
+                    <span>⏳ {partBags.length} bag{partBags.length>1?'s':''} still filling</span>
+                    <span style={{opacity:.7}}>{showPartBags?'▲':'▼'}</span>
+                  </button>
+                  <div style={{fontSize:11,color:'#6b7280',marginTop:4}}>
+                    Not full yet, so no QC is asked for. Each one joins the queue by itself once it reaches
+                    its standard weight — there is nothing to do here.
+                  </div>
+                  {showPartBags && (
+                    <div style={{marginTop:8,display:'flex',flexDirection:'column',gap:6}}>
+                      {partBags.map((b,i)=>(
+                        <div key={b.bag_serial_no ?? i} style={{fontSize:11,color:'#374151',borderTop:'1px solid #eff6ff',paddingTop:6}}>
+                          <strong>{b.bag_serial_no}</strong> · {b.product || '—'} · lot {b.lot_number || '—'}
+                          <br/><span style={{color:'#6b7280'}}>
+                            {b.bag_weight_kg ?? '—'} kg{b.full_bag_kg ? ` of ${b.full_bag_kg} kg` : ''}
+                            {b.bagged_at ? ` · bagged ${String(b.bagged_at).slice(0,10)} ${String(b.bagged_at).slice(11,16)}` : ''}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+              {waivedCount > 0 && (
+                <div style={{background:'#fff',border:'1px solid #fed7aa',borderLeft:'4px solid #ea580c',borderRadius:10,boxShadow:'0 12px 30px rgba(0,0,0,.15)',padding:'12px 14px'}}>
+                  <div style={{fontWeight:700,fontSize:12,color:'#9a3412'}}>
+                    ⊘ {waivedCount} bag{waivedCount>1?'s':''} closed without sampling
+                  </div>
+                  <div style={{fontSize:11,color:'#6b7280',marginTop:4}}>
+                    These have no Final QC. They were taken out of the queue by a deliberate
+                    decision, not by passing — that decision is what is recorded against them.
+                  </div>
+                  <div style={{marginTop:8,display:'flex',flexDirection:'column',gap:6}}>
+                    {waivers.map((w,i)=>(
+                      <div key={i} style={{fontSize:11,color:'#374151',borderTop:'1px solid #f5f5f4',paddingTop:6}}>
+                        <strong>{w.n}</strong> · {w.reason}
+                        <br/><span style={{color:'#6b7280'}}>accepted by {w.waived_by}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
               {bagAlerts.map(a=>(
                 <div key={a.bagging_id} style={{background:'#fff',border:'1px solid #86efac',borderLeft:`4px solid ${a.inprocess_out_of_spec?'#991b1b':'#166534'}`,borderRadius:10,boxShadow:'0 12px 30px rgba(0,0,0,.15)',padding:'12px 14px'}}>
                   <div style={{fontWeight:700,fontSize:12,color:a.inprocess_out_of_spec?'#991b1b':'#166534'}}>
@@ -1998,21 +2544,36 @@ export default function SievingPage() {
           setForm((f:any)=>({...blankForm(), runType:'final'}))
           setTimeout(()=>document.getElementById('sieving-new-run-form')?.scrollIntoView({behavior:'smooth',block:'start'}),50)}}
           style={{padding:'6px 14px',borderRadius:6,border:'none',background:'#166534',color:'#fff',fontSize:11,fontWeight:700,cursor:'pointer'}}>+ New Output Bag QC</button>}
-        {canWrite && <button onClick={()=>{setShowSpecEditor(s=>!s);setShowForm(false);setEditRunId(null)}}
+        {canWrite && <button onClick={()=>{setShowSpecEditor(s=>!s);setShowForm(false);setEditRunId(null);setSpecSaveState({state:'idle'})}}
           style={{padding:'5px 12px',borderRadius:6,border:'1px solid #7c3aed',fontSize:11,cursor:'pointer',fontWeight:600,
             background:showSpecEditor?'#7c3aed':'#faf5ff',color:showSpecEditor?'#fff':'#7c3aed'}}>
           {showSpecEditor?'× Close Editor':'Edit Specs'}</button>}
       </div>
 
-      {/* Spec editor */}
-      {showSpecEditor && <SievingSpecEditor product={activeProduct} specDef={specDef} customSpecs={activeSpecs} onSave={saveSpecs} onClose={()=>setShowSpecEditor(false)}/>}
+      {specLoadError && (
+        <div style={{padding:'8px 12px',background:'#fef2f2',border:'1px solid #fca5a5',borderRadius:6,fontSize:11,color:'#991b1b',marginBottom:10}}>
+          ⚠ Could not load the saved specifications — the built-in defaults are being shown, which may not be what this product is actually checked against. ({specLoadError})
+        </div>
+      )}
+      {/* Spec editor. Keyed on the product so switching tabs starts a clean
+          draft instead of carrying one product's edits into another's grid. */}
+      {showSpecEditor && <SievingSpecEditor key={activeProduct} product={activeProduct} specDef={specDef}
+        customSpecs={activeSpecs} savedMeta={specMeta[activeProduct]} saveState={specSaveState}
+        onSave={saveSpecs} onClose={()=>{setShowSpecEditor(false);setSpecSaveState({state:'idle'})}}/>}
 
       {/* Spec panel */}
       <div style={{marginBottom:14,borderRadius:10,border:'1px solid #e5e7eb',background:'#fff',overflow:'hidden'}}>
         <button onClick={()=>setShowSpecPanel(s=>!s)} style={{width:'100%',padding:'11px 16px',background:'none',border:'none',cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'space-between',fontFamily:'inherit'}}>
           <div style={{display:'flex',alignItems:'center',gap:10}}>
             <span style={{fontSize:13,fontWeight:700,color:'#111827'}}>Specifications — {activeProduct}</span>
-            <span style={{fontSize:10,color:'#9ca3af'}}>Organic/RA-Organic/FT-Organic use &gt;10 mesh · Conventional/RA-Conventional/FT-Conventional use &gt;12 mesh · {Object.keys(activeSpecs).length} variants (Export / Export Blend / Domestic)</span>
+            {/* The mesh/variant explainer that used to sit here is gone — the
+                table itself now shows which mesh each variant is measured on,
+                and the editor greys out the rest. What stays is the one thing
+                the table cannot show: whether these numbers are the built-in
+                IPS defaults or an override somebody saved. */}
+            {specMeta[activeProduct]
+              ? <span style={{fontSize:10,color:'#7c3aed',fontWeight:600}}>Custom — saved by {specMeta[activeProduct].updated_by || 'unknown'} {String(specMeta[activeProduct].updated_at || '').slice(0,10)}</span>
+              : <span style={{fontSize:10,color:'#9ca3af'}}>Built-in defaults</span>}
           </div>
           <span style={{fontSize:10,color:'#9ca3af',transform:showSpecPanel?'rotate(180deg)':'',transition:'.2s'}}>▼</span>
         </button>
@@ -2023,7 +2584,7 @@ export default function SievingPage() {
                 <tr style={{background:'#1f4e79',color:'#fff'}}>
                   <th style={{padding:'6px 10px',textAlign:'left'}}>Grade</th>
                   <th style={{padding:'6px 10px',textAlign:'center'}}>Variant</th>
-                  {[...new Set([...specDef.meshForORG,...specDef.meshForCON])].sort().map(m=>(
+                  {allMeshFor(specDef).map(m=>(
                     <th key={m} style={{padding:'6px 8px',textAlign:'center'}}>{m.toUpperCase()}</th>
                   ))}
                   {specDef.hasLeafShade&&<th style={{padding:'6px 8px',textAlign:'center'}}>Leaf Shade</th>}
@@ -2036,11 +2597,23 @@ export default function SievingPage() {
                     <tr key={vk} style={{background:i%2===0?'#f9fafb':'#fff',borderBottom:'1px solid #f3f4f6'}}>
                       <td style={{padding:'6px 10px'}}><span style={{padding:'2px 9px',borderRadius:8,fontSize:10,fontWeight:700,background:gs.bg,color:gs.color}}>{g}</span></td>
                       <td style={{padding:'6px 10px',textAlign:'center'}}><span style={{padding:'2px 8px',borderRadius:8,fontSize:10,fontWeight:700,background:sdIsOrg(v)?'#ede9fe':'#dbeafe',color:sdIsOrg(v)?'#7c3aed':'#1d4ed8'}}>{v}</span></td>
-                      {[...new Set([...specDef.meshForORG,...specDef.meshForCON])].sort().map(m=>(
-                        <td key={m} style={{padding:'6px 8px',textAlign:'center',fontFamily:'monospace',fontSize:11,color:s[m]&&!(s[m][0]===0&&s[m][1]===0)?'#374151':'#d1d5db'}}>
-                          {s[m]&&!(s[m][0]===0&&s[m][1]===0)?`${s[m][0]}–${s[m][1]}%`:'—'}
-                        </td>
-                      ))}
+                      {allMeshFor(specDef).map(m=>{
+                        // 'n/a' (this variant is not measured on this mesh) and
+                        // '—' (it is measured on it, but no spec is set) are
+                        // different facts and used to render identically. The
+                        // second one is worth noticing: it means nothing is
+                        // being checked on a fraction that should be.
+                        if (!meshForSpecKey(specDef, vk).includes(m)) return (
+                          <td key={m} style={{padding:'6px 8px',textAlign:'center',fontSize:10,color:'#d1d5db',background:'#fafafa'}}>n/a</td>
+                        )
+                        const set = s[m] && !(s[m][0]===0 && s[m][1]===0)
+                        return (
+                          <td key={m} title={set?undefined:`No spec set — ${m.replace(' (%)','')} is not checked for ${vk.replace('|',' · ')}`}
+                            style={{padding:'6px 8px',textAlign:'center',fontFamily:'monospace',fontSize:11,color:set?'#374151':'#b45309',fontWeight:set?400:700}}>
+                            {set?`${s[m][0]}–${s[m][1]}%`:'not set'}
+                          </td>
+                        )
+                      })}
                       {specDef.hasLeafShade&&<td style={{padding:'6px 8px',textAlign:'center',fontFamily:'monospace',fontSize:11}}>{s['Leaf Shade']?`${s['Leaf Shade'][0]??'—'}–${s['Leaf Shade'][1]??'—'}`:'—'}</td>}
                     </tr>
                   )
@@ -2151,6 +2724,21 @@ export default function SievingPage() {
               )}
               {errors._bag&&<div style={{fontSize:10,color:'#dc2626',marginTop:4}}>⚠ {errors._bag}</div>}
 
+              {/* The way out when there is no sample to record. See waiveBagQc:
+                  it writes down that no Final QC exists, rather than making one
+                  up to clear the screen. */}
+              {isAdmin && selectedBag && (
+                <div style={{marginTop:10,paddingTop:10,borderTop:'1px dashed #86efac',display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
+                  <button type="button" disabled={waiving} onClick={()=>waiveBagQc(selectedBag)}
+                    style={{padding:'7px 12px',borderRadius:6,border:'1px solid #ea580c',background:waiving?'#fed7aa':'#fff7ed',color:'#9a3412',fontSize:11,fontWeight:700,cursor:waiving?'default':'pointer'}}>
+                    ⊘ {waiving ? 'Recording…' : 'No QC result on the system'}
+                  </button>
+                  <span style={{fontSize:10,color:'#6b7280',flex:1,minWidth:200}}>
+                    Use when no sample exists for this bag and none can be produced. Records who accepted that and why, and takes the bag out of the queue. <strong>It is not a pass</strong> — never enter made-up readings to clear a bag.
+                  </span>
+                </div>
+              )}
+
               {/* The in-process sieve that governed this bag */}
               {selectedBag&&selectedBag.inprocess_run_id&&(
                 <div style={{marginTop:10,padding:'8px 10px',borderRadius:6,
@@ -2236,9 +2824,24 @@ export default function SievingPage() {
                 onKeyDown={e=>{ if (e.key==='Enter') { e.preventDefault(); lookupBagTag(form.serialNumber) } }}
                 placeholder="Type or scan barcode"
                 style={{...inputSt,borderColor:errors.serialNumber?'#fca5a5':tagLookupState==='notfound'?'#fca5a5':tagLookupState==='found'?'#86efac':'#d1d5db',padding:'9px 10px',fontSize:13}}/>
-              {tagLookupState==='loading' && <div style={{fontSize:10,color:'#6b7280',marginTop:2}}>Looking up bag tag…</div>}
-              {tagLookupState==='found'   && <div style={{fontSize:10,color:'#16a34a',marginTop:2}}>✓ Bag tag found — date, lot, grade and variant pre-filled</div>}
-              {tagLookupState==='notfound'&& <div style={{fontSize:10,color:'#dc2626',marginTop:2}}>⚠ No bag tag found for this serial — fill in manually</div>}
+              {/* The tab mismatch is checked as the serial is typed, not only
+                  when Save is pressed. It was already a save-time error, but by
+                  then the form had spent the whole capture reassuring the QC:
+                  "✓ from bag", "✓ Bag tag found — date, lot, grade and variant
+                  pre-filled". A Fine Leaf serial can sit in a Coarse Leaf form
+                  looking entirely correct (STFL-240826-008 did), so the
+                  contradiction has to be visible while it is still cheap to
+                  fix — and it suppresses the reassurance rather than sitting
+                  underneath it. */}
+              {serialTabMismatch(form.serialNumber, activeProduct)
+                ? <div style={{fontSize:10,color:'#991b1b',background:'#fef2f2',border:'1px solid #fca5a5',borderRadius:5,padding:'5px 7px',marginTop:4,fontWeight:600}}>
+                    ⚠ {serialTabMismatch(form.serialNumber, activeProduct)}
+                  </div>
+                : <>
+                    {tagLookupState==='loading' && <div style={{fontSize:10,color:'#6b7280',marginTop:2}}>Looking up bag tag…</div>}
+                    {tagLookupState==='found'   && <div style={{fontSize:10,color:'#16a34a',marginTop:2}}>✓ Bag tag found — date and lot pre-filled</div>}
+                    {tagLookupState==='notfound'&& <div style={{fontSize:10,color:'#dc2626',marginTop:2}}>⚠ No bag tag found for this serial — fill in manually</div>}
+                  </>}
               <ErrMsg field="serialNumber"/>
             </div>}
             <div>
@@ -2324,9 +2927,17 @@ export default function SievingPage() {
             </div>
             {specDef.hasLeafShade&&(!specDef.qcFieldsFinalOnly||form.runType==='final')&&<div>
               <label style={{fontSize:10,fontWeight:700,color:errors.leafShade?'#dc2626':'#374151',display:'block',marginBottom:4,textTransform:'uppercase'}}>
-                Leaf Shade (1–11) {form.leafShade&&<span style={{fontSize:9,color:'#166534',fontWeight:400,marginLeft:4}}>✓ auto</span>}
+                Leaf Shade {shadeBand ? `(${shadeBand[0]}–${shadeBand[1]} for ${form.grade})` : '(1–11)'}
+                {form.leafShade&&<span style={{fontSize:9,color:'#166534',fontWeight:400,marginLeft:4}}>✓ auto</span>}
               </label>
-              <input type="number" min="1" max="11" step="1" value={form.leafShade} onChange={e=>setF('leafShade',e.target.value)} style={{...inputSt,borderColor:errors.leafShade?'#fca5a5':'#d1d5db',padding:'9px 10px',fontSize:13}}/>
+              <input type="number" min="1" max="11" step="1" value={form.leafShade} onChange={e=>setF('leafShade',e.target.value)}
+                style={{...inputSt,borderColor:errors.leafShade||shadeGradeClash?'#fca5a5':'#d1d5db',background:shadeGradeClash?'#fef2f2':'#fff',padding:'9px 10px',fontSize:13}}/>
+              {/* Shown as the shade is typed, against the grade that is
+                  selected — the spec band comes from the Specifications table,
+                  so it follows whatever Quality has set there. */}
+              {shadeGradeClash && !errors.leafShade && (
+                <div style={{fontSize:10,color:'#991b1b',marginTop:3,fontWeight:600}}>⚠ {shadeGradeClash}</div>
+              )}
               <ErrMsg field="leafShade"/>
             </div>}
             {specDef.hasNeedleCount&&form.runType!=='final'&&<div>
@@ -2458,8 +3069,8 @@ export default function SievingPage() {
         ))}
         <span style={{fontSize:11,color:'#9ca3af'}}>{filteredRuns.length} run{filteredRuns.length!==1?'s':''}</span>
         <div style={{marginLeft:'auto',position:'relative',minWidth:220}}>
-          <input value={searchText} onChange={e=>setSearchText(e.target.value)} placeholder="🔍 Search this table…"
-            style={{width:'100%',padding:'6px 30px 6px 10px',fontSize:11,border:'1px solid #d1d5db',borderRadius:6,boxSizing:'border-box'}}/>
+          <input value={searchText} onChange={e=>setSearchText(e.target.value)} placeholder="🔍 Search a batch no. — all dates"
+            style={{width:'100%',padding:'6px 30px 6px 10px',fontSize:11,border:`1px solid ${searching?'#1f4e79':'#d1d5db'}`,borderRadius:6,boxSizing:'border-box'}}/>
           {searchText && (
             <button onClick={()=>setSearchText('')} title="Clear search"
               style={{position:'absolute',right:6,top:'50%',transform:'translateY(-50%)',background:'none',border:'none',color:'#9ca3af',cursor:'pointer',fontSize:13}}>✕</button>
@@ -2469,9 +3080,29 @@ export default function SievingPage() {
         <button onClick={load} style={{padding:'5px 12px',borderRadius:6,border:'1px solid #e5e7eb',fontSize:11,cursor:'pointer'}}>↻ Refresh</button>
       </div>
 
+      {/* A search spans all dates, so say so — and say WHICH dates it found,
+          which is the actual question behind typing a batch number in here. */}
+      {searching && (
+        <div style={{padding:'8px 12px',background:'#eff6ff',border:'1px solid #bfdbfe',borderRadius:8,fontSize:11,color:'#1e3a8a',marginBottom:10}}>
+          <strong>“{searchText.trim()}” — searching all {activeProduct} history, the date range above is ignored.</strong>
+          {searchDates.length>0 && (
+            <div style={{marginTop:4}}>
+              Ran on {searchDates.length} date{searchDates.length!==1?'s':''}:{' '}
+              <span style={{fontFamily:'monospace'}}>{searchDates.join(' · ')}</span>
+            </div>
+          )}
+          {olderSearchLoading && <div style={{marginTop:4,color:'#6b7280'}}>Checking for runs older than the loaded 3 months…</div>}
+          {olderSearchNote && <div style={{marginTop:4,color:'#92400e'}}>{olderSearchNote}</div>}
+        </div>
+      )}
+
       {/* Runs table */}
 
-      {!loading&&filteredRuns.length===0&&<div style={{textAlign:'center',padding:'32px 0',color:'#9ca3af',fontSize:11}}>No {activeProduct} {filter!=='all'?filter+' ':''} runs yet — click "+ New In-Process QC" or "+ New Output Bag QC"</div>}
+      {!loading&&filteredRuns.length===0&&<div style={{textAlign:'center',padding:'32px 0',color:'#9ca3af',fontSize:11}}>
+        {searching
+          ? `Nothing matching “${searchText.trim()}” in any ${activeProduct} run.`
+          : `No ${activeProduct} ${filter!=='all'?filter+' ':''} runs yet — click "+ New In-Process QC" or "+ New Output Bag QC"`}
+      </div>}
       {!loading&&filteredRuns.length>0&&(
         <div style={{borderRadius:10,border:'1px solid #e5e7eb',background:'#fff',overflow:'hidden'}}>
           <button onClick={()=>setTableCollapsed(c=>!c)}

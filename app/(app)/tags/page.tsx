@@ -58,12 +58,31 @@ interface ScanEvent {
   scanned_at:    string
 }
 
+// Only the columns the Quality panel reads, from each of its five sources.
+interface SdFinalRun {
+  id: number | string; date: string | null; product: string | null
+  grade: string | null; variant: string | null; qc_name: string | null
+  pass_status: string | null; bulk_density: string | null; leaf_shade: string | null
+  violations: string[] | null
+}
+interface SdInProcessRun {
+  id: number | string; date: string | null; product: string | null
+  qc_name: string | null; pass_status: string | null
+}
+interface PasteuriserRun  { id: string | number; run_date: string | null; status: string | null }
+interface LabResult       { id: string | number; sample_date: string | null; result_status: string | null }
+interface RawMaterialRow  { id: string | number; received_date: string | null; grade: string | null }
+
 interface QualityRow {
   source: string
   ref:    string
   date:   string
   detail: string
   href:   string
+  // Set on the row that is this exact bag's own QC result rather than
+  // something inherited from its lot — see the Quality loader below.
+  thisBag?: boolean
+  status?:  'Pass' | 'Fail' | null
 }
 
 // ── Barcode — Code 128 via JsBarcode injected once ────────────────────────────
@@ -370,29 +389,77 @@ function TagDetail({ tag, allTags, operatorId, onClose, onChanged }: TagDetailPr
       })
   }, [tag.prod_session_id])
 
-  // Load quality records for this bag. Quality is keyed by lot/batch (not by
-  // serial), so a bag inherits the quality of the lot it belongs to. Mirrors the
-  // batch-reconciliation panel's three sources: pasteuriser runs, lab results,
-  // and raw-material entries, matched by the bag's lot_number.
+  // Load quality records for this bag.
+  //
+  // Two different kinds of record, and they must not be confused with each
+  // other:
+  //
+  //   THIS BAG'S OWN result — the Sieving Tower Final QC (qms.sd_runs with
+  //   run_type 'final'), matched on SERIAL NUMBER. That is the sample taken
+  //   off this physical bag: its bulk density, its leaf shade, its pass/fail.
+  //   It was missing entirely. The panel only ever queried pasteuriser runs,
+  //   lab results and raw material, all keyed on lot — so a Sieving Tower bag
+  //   with a Final QC recorded against it read "No quality records found for
+  //   lot GS-0225" while its own scan-event timeline, two lines further down
+  //   the same modal, showed the QC check that had been done on it. The result
+  //   existed; nothing looked for it.
+  //
+  //   THE LOT's records — pasteuriser runs, lab results, raw material, and the
+  //   Sieving Tower's in-process sieves. These are inherited: they describe the
+  //   material, not this bag. They stay, and are labelled as the lot's.
+  //
+  // Serial is the right key for the first one because that is how the Sieving
+  // Tower stores it (addRun() writes serial_number only for a Final QC — an
+  // in-process reading has no bag) and because it is the bag's permanent
+  // identity, unlike bagging_id which persist() rewrites.
   useEffect(() => {
-    const lot = (tag.lot_number || '').trim()
-    if (!lot || lot === 'NOT TRACKED') { setQuality([]); setLoadingQual(false); return }
+    const lot    = (tag.lot_number || '').trim()
+    const serial = (tag.serial_number || '').trim()
+    const hasLot = Boolean(lot) && lot !== 'NOT TRACKED'
+    if (!hasLot && !serial) { setQuality([]); setLoadingQual(false); return }
     setLoadingQual(true)
     const db = getDb()
+    const none = Promise.resolve({ data: [] })
     Promise.all([
-      db.from('pasteuriser_runs').select('id,run_date,batch_ref,status').ilike('batch_ref', lot).limit(10),
-      db.from('lab_results').select('id,sample_date,batch_number,result_status').ilike('batch_number', lot).limit(10),
-      db.from('raw_material_entries').select('id,received_date,lot_number,grade').ilike('lot_number', lot).limit(10),
-    ]).then(([past, lab, raw]: any[]) => {
+      // Staging reaches these three through the default schema (see the rest
+      // of this effect's history) — kept exactly as they were; only the two
+      // Sieving Tower queries are new.
+      hasLot ? db.from('pasteuriser_runs').select('id,run_date,batch_ref,status').ilike('batch_ref', lot).limit(10) : none,
+      hasLot ? db.from('lab_results').select('id,sample_date,batch_number,result_status').ilike('batch_number', lot).limit(10) : none,
+      hasLot ? db.from('raw_material_entries').select('id,received_date,lot_number,grade').ilike('lot_number', lot).limit(10) : none,
+      // This bag's own Final QC, by serial.
+      serial ? db.schema('qms').from('sd_runs')
+        .select('id,date,time_of_run,product,grade,variant,qc_name,pass_status,bulk_density,leaf_shade,violations')
+        .eq('run_type', 'final').ilike('serial_number', serial).limit(5) : none,
+      // The lot's in-process sieves, as context for the material.
+      hasLot ? db.schema('qms').from('sd_runs')
+        .select('id,date,time_of_run,product,qc_name,pass_status')
+        .eq('run_type', 'in-process').ilike('lot_number', lot).order('date', { ascending: false }).limit(5) : none,
+    ]).then(([past, lab, raw, bagQc, inproc]: { data: unknown[] | null }[]) => {
       const rows: QualityRow[] = []
-      ;(past?.data ?? []).forEach((r: any) => rows.push({ source: 'Pasteuriser run', ref: String(r.id ?? '').slice(0, 8), date: r.run_date ?? '', detail: `Status: ${r.status ?? 'unknown'}`, href: '/quality/pasteuriser' }))
-      ;(lab?.data  ?? []).forEach((r: any) => rows.push({ source: 'Lab result',  ref: String(r.id ?? '').slice(0, 8), date: r.sample_date ?? '', detail: `Result: ${r.result_status ?? 'pending'}`, href: '/quality/lab-results' }))
-      ;(raw?.data  ?? []).forEach((r: any) => rows.push({ source: 'Raw material', ref: String(r.id ?? '').slice(0, 8), date: r.received_date ?? '', detail: `Grade ${r.grade ?? '—'}`, href: '/quality/raw-material' }))
-      rows.sort((a, b) => (b.date || '').localeCompare(a.date || ''))
+      ;((bagQc?.data ?? []) as SdFinalRun[]).forEach(r => {
+        const pass = r.pass_status === 'Fail' ? 'Fail' : 'Pass'
+        const bits = [
+          `${pass} — ${r.product ?? ''} ${r.grade ?? ''} ${r.variant ?? ''}`.replace(/\s+/g, ' ').trim(),
+          r.bulk_density ? `BD ${r.bulk_density}` : '',
+          r.leaf_shade   ? `Shade ${r.leaf_shade}` : '',
+          r.qc_name      ? `QC ${r.qc_name}` : '',
+          Array.isArray(r.violations) && r.violations.length ? r.violations.join('; ') : '',
+        ].filter(Boolean)
+        rows.push({ source: 'Sieving Tower — this bag', ref: String(r.id ?? ''), date: r.date ?? '',
+          detail: bits.join(' · '), href: '/quality/sieving', thisBag: true, status: pass })
+      })
+      ;((inproc?.data ?? []) as SdInProcessRun[]).forEach(r => rows.push({ source: 'Sieving Tower in-process', ref: String(r.id ?? ''), date: r.date ?? '', detail: `${r.pass_status ?? '—'} · ${r.product ?? ''}${r.qc_name ? ` · QC ${r.qc_name}` : ''}`, href: '/quality/sieving' }))
+      ;((past?.data ?? []) as PasteuriserRun[]).forEach(r => rows.push({ source: 'Pasteuriser run', ref: String(r.id ?? '').slice(0, 8), date: r.run_date ?? '', detail: `Status: ${r.status ?? 'unknown'}`, href: '/quality/pasteuriser' }))
+      ;((lab?.data  ?? []) as LabResult[]).forEach(r => rows.push({ source: 'Lab result',  ref: String(r.id ?? '').slice(0, 8), date: r.sample_date ?? '', detail: `Result: ${r.result_status ?? 'pending'}`, href: '/quality/lab-results' }))
+      ;((raw?.data  ?? []) as RawMaterialRow[]).forEach(r => rows.push({ source: 'Raw material', ref: String(r.id ?? '').slice(0, 8), date: r.received_date ?? '', detail: `Grade ${r.grade ?? '—'}`, href: '/quality/raw-material' }))
+      // This bag's own result first, whatever its date — everything below it
+      // belongs to the lot, not the bag.
+      rows.sort((a, b) => (b.thisBag ? 1 : 0) - (a.thisBag ? 1 : 0) || (b.date || '').localeCompare(a.date || ''))
       setQuality(rows)
       setLoadingQual(false)
     }).catch(() => { setQuality([]); setLoadingQual(false) })
-  }, [tag.lot_number])
+  }, [tag.lot_number, tag.serial_number])
 
   const isConsumed = Boolean(tag.consumed_at_section)
   const statusBadge = isOpenBag
@@ -686,22 +753,38 @@ function TagDetail({ tag, allTags, operatorId, onClose, onChanged }: TagDetailPr
               </div>
             ) : quality.length === 0 ? (
               <p className="text-[11px] text-stone-400 italic">
-                {tag.lot_number && tag.lot_number !== 'NOT TRACKED'
-                  ? `No quality records found for lot ${tag.lot_number}.`
-                  : 'No lot / batch on this bag to match quality records against.'}
+                No QC result for bag {tag.serial_number}
+                {tag.lot_number && tag.lot_number !== 'NOT TRACKED' ? `, and no records for lot ${tag.lot_number}` : ''}.
               </p>
             ) : (
               <div className="space-y-2">
-                <p className="text-[10px] text-stone-400 italic">Matched by lot / batch {tag.lot_number}:</p>
+                {/* This bag's own Final QC is not "matched by lot" and must not
+                    read as though it were — it is the sample taken off this
+                    serial. The lot's records follow it under their own label. */}
+                {!quality.some(q => q.thisBag) && (
+                  <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                    No Sieving Tower Final QC recorded against bag {tag.serial_number}. The records below belong to lot {tag.lot_number}, not to this bag.
+                  </p>
+                )}
                 {quality.map((q, i) => (
-                  <Link key={i} href={q.href}
-                    className="flex items-center gap-2 bg-stone-50 rounded-lg px-3 py-2 border border-stone-100 hover:bg-stone-100 transition">
-                    <FlaskConical size={12} className="text-stone-400 shrink-0" />
-                    <span className="text-[11px] font-semibold text-stone-700 shrink-0">{q.source}</span>
-                    <span className="font-mono text-[10px] text-stone-500 truncate">{q.detail}</span>
-                    {q.date && <span className="font-mono text-[10px] text-stone-400 ml-auto shrink-0">{q.date.slice(0, 10)}</span>}
-                    <ExternalLink size={11} className="text-stone-300 shrink-0" />
-                  </Link>
+                  <div key={i}>
+                    {!q.thisBag && (i === 0 || quality[i - 1].thisBag) && (
+                      <p className="text-[10px] text-stone-400 italic mb-2 mt-1">Matched by lot / batch {tag.lot_number}:</p>
+                    )}
+                    <Link href={q.href}
+                      className={`flex items-center gap-2 rounded-lg px-3 py-2 border transition ${
+                        q.thisBag
+                          ? q.status === 'Fail'
+                            ? 'bg-rose-50 border-rose-200 hover:bg-rose-100'
+                            : 'bg-emerald-50 border-emerald-200 hover:bg-emerald-100'
+                          : 'bg-stone-50 border-stone-100 hover:bg-stone-100'}`}>
+                      <FlaskConical size={12} className={`shrink-0 ${q.thisBag ? (q.status === 'Fail' ? 'text-rose-500' : 'text-emerald-600') : 'text-stone-400'}`} />
+                      <span className={`text-[11px] font-semibold shrink-0 ${q.thisBag ? (q.status === 'Fail' ? 'text-rose-700' : 'text-emerald-800') : 'text-stone-700'}`}>{q.source}</span>
+                      <span className="font-mono text-[10px] text-stone-500 truncate">{q.detail}</span>
+                      {q.date && <span className="font-mono text-[10px] text-stone-400 ml-auto shrink-0">{q.date.slice(0, 10)}</span>}
+                      <ExternalLink size={11} className="text-stone-300 shrink-0" />
+                    </Link>
+                  </div>
                 ))}
               </div>
             )}
