@@ -2,6 +2,121 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-15 — Gustav (Sieving Tower QC: part bags, the grade/shade contradiction, and the spec editor that saved nothing)
+
+**Files changed:** `supabase/migrations/20260915_003_sieving_qc_queue_part_bags_and_waivers.sql` (new),
+`app/(app)/quality/sieving/page.tsx`, `app/(app)/tags/page.tsx`, `app/(app)/quality/maintenance-qc/page.tsx`
+
+### A half-filled bag no longer asks for a QC
+
+`qms.v_pending_bag_qc` already excluded bags flagged `is_open` at capture, and that was not enough. The
+flag is set automatically only under 200 kg, and the live data shows what slips past it: Coarse Leaf
+bags sitting at 215 kg and Fine Leaf at 147 kg with `is_open` false. Quality was being asked for a bulk
+density and a leaf shade on a bag that was still being filled.
+
+Fullness is now decided on **weight against the product's own standard** — 300 kg for Fine/Coarse Leaf,
+252 kg for Indent Sticks, mirroring `expectedBagWeightFor()` — at 95%, and read from
+`bag_tags.weight_kg`, the running total a top-up updates. Reading `prod_bagging.kg` instead would have
+been wrong in the other direction: it keeps the *first* capture's weight forever, so STFL-260826-001,
+bagged at 150 kg and topped up to 300 forty minutes later, would have read as a part bag for the rest
+of its life.
+
+Part bags are **shown, not just absent** — `qms.v_part_bags_awaiting_fill` feeds a "still filling" card
+on the alerts panel. A bag silently missing from a queue is indistinguishable from a bag the queue lost,
+and this screen has been burned by exactly that before. Nothing has to be done to them: each one joins
+the real queue by itself once it reaches full.
+
+### "No QC result on the system", instead of inventing one
+
+`qms.bag_qc_waivers` was written in 20260902_003 and **never applied to this database** — the app has
+been reading a table that does not exist, which is why the waiver panel has always been empty. Created
+here.
+
+A QC facing a bag with no sample had two options: leave it in the queue forever, or type numbers into
+the form until it saved. The second one means inventing a food-safety reading against a named person —
+the screenshot of someone typing "NO QC RESULTS FOUND OR DONE" into the Comment box and being told to
+fix four required fields is that dead end. There is now a button (IT / Quality management) that records
+the truth: no Final QC exists, here is who accepted that and why. It writes the waiver and appends a
+`scan_events` row, so the bag's own history says it. **It never says the bag passed.** Undone by
+deleting the waiver row.
+
+### Leaf shade 1 can no longer be Export
+
+Export and Export Blend are shade 4–11, Domestic 1–3, and nothing enforced it — a shade of 1 saved
+happily against Export, which is not export material. The band is read from the Specifications table,
+never hard-coded, so editing the spec edits the check. It is a hard error rather than a warning because
+the two facts contradict each other, and the message names the grade the measured shade *does* fit,
+since the usual cause is the grade being mis-picked. Confirming which one is wrong against what
+production says the batch is stays a human step. One `shadeGradeIssue()` serves the live hint, the
+save-time validation and the row editor's guard — three copies is how two of them end up disagreeing.
+
+### A batch number can no longer belong to another bag
+
+A lot is not product-specific: one farm lot is sieved into both Fine and Coarse Leaf, and GS-0147 has
+20 Fine and 26 Coarse runs against it. So a rule built on the lot's shape would be guesswork. What is
+unambiguous is that the **bag being sampled carries its own lot**, and a Final QC must be filed under
+it. A Coarse Leaf bag on GS-0268 captured with the batch typed as VS22-188 is now refused.
+
+The serial/tab mismatch was already checked — but only on save, after the form had spent the whole
+capture saying "✓ from bag" and "✓ Bag tag found". It is now checked as the serial is typed, and it
+suppresses that reassurance rather than sitting underneath it.
+
+### Searching a batch shows every date it ran
+
+Typing a batch number used to intersect it with the From/To window, so a lot that ran across several
+days showed only the days that happened to be in range. A search now ignores the range, searches all
+loaded history, lists every date the batch ran, and asks the database directly for runs older than the
+loaded three months — "nothing matching" and "nothing in the last three months" are different
+statements.
+
+### Why the specifications did not save — they did
+
+The one saved override on this database, Fine Leaf, is identical to the built-in defaults except on the
+six **Organic** variants, where `'>10 (%)': [0,1]` had become `'>10 (%)': [0,0]` plus a phantom
+`'>12 (%)': [0,1]`.
+
+`[0,0]` is the app's encoding for "no spec" (`sdChk` returns neutral), and an Organic variant is checked
+against `meshForORG`, which contains `>10` and not `>12`. So that edit **saved, and then did nothing
+anyone could see** — it switched the `>10` check off for every Organic Fine Leaf grade and parked the
+value in a mesh nothing reads. Which is indistinguishable from a save that never happened.
+
+Three things let that through, all fixed:
+
+- The editor offered **every row every mesh column**, including ones its variant is never checked
+  against. Each row now shows only its own meshes; the rest read `n/a`.
+- Columns were ordered by a bare `.sort()`, which is lexicographic: `>6` rendered between `>40` and
+  `Dust`, five columns from where anyone reads it, on a grid of unlabelled 36px boxes. Now in sieve
+  order.
+- Every empty box was **pre-filled with 0**, so typing over one number and leaving the other at its
+  shown 0 silently disabled a check instead of narrowing it. Blank now means "no spec", and the
+  read-only panel says `not set` rather than `—`.
+
+And the save now proves itself: it writes, **reads the row back**, and shows "Saved & verified" only
+once it has seen it — the editor stays open, says who saved the override in force and when, warns
+before closing with unsaved changes, and surfaces a failed *load* instead of quietly falling back to
+the defaults. The corrupted row is repaired in the migration, in place rather than deleted.
+
+The fine print beside **Specifications** is gone; it said what the table now shows for itself.
+
+### Bag Tracking shows the bag's own QC
+
+The Quality panel queried pasteuriser runs, lab results and raw material — all keyed on **lot**. It
+never read `qms.sd_runs`. So a Sieving Tower bag with a Final QC recorded against it read "No quality
+records found for lot GS-0225" while its own scan-event timeline, two lines further down the same
+modal, showed the QC check done on it. The result existed; nothing looked for it.
+
+The bag's own Final QC is now matched **on serial** — the key the Sieving Tower actually stores it
+under — and shown first, pass/fail coloured, above the lot's records. When there is no Final QC for the
+bag, the panel says so explicitly rather than letting the lot's records read as the bag's.
+
+### Maintenance QC fits on one page
+
+The QC-check button was the ninth column of a nine-column table inside an `overflow-x-auto`: on a normal
+laptop it sat past the right edge, so the QC had to scroll sideways on every card to reach the thing the
+screen exists for. `table-fixed` with explicit widths keeps it on screen; the technician and QC names
+moved under the description. Nothing was dropped — the table just stopped being wider than the page.
+
+
 ## 2026-09-14 — Gustav (COA: a customer's own bulk-density spec now has a home, and prints alongside CNTP's)
 
 **Files changed:** `components/quality/CoaSpecsTab.tsx`, `app/(app)/quality/coa/page.tsx`, `supabase/migrations/20260914_001_coa_specs_client_bd_spec.sql` (new, applied to staging)
