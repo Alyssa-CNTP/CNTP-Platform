@@ -2,6 +2,48 @@
 
 All changes deployed to staging are logged here automatically.  
 
+## 2026-09-14 — Alyssa (Acumatica posting: what a production record would send, worked out once)
+
+**Files changed:** `lib/core/production/acumatica-posting.ts` (new), `lib/core/production/acumatica-posting.test.ts` (new)
+
+### The scope of a post is not the scope of the document
+
+Posting a production record into Acumatica needs the same answer in three places that must never disagree: the panel showing an operator what *would* post, the route that posts it, and the record of what *did*. A posting that computes its own quantities at send time is a posting nobody reviewed. So it is built once, in core, and the page renders the object the route transmits.
+
+The unit is `(section, production day, variant, grade)` — **not the run**, which is what the summary document groups by.
+
+On 11 September the Sieving tower filed three records: `ST-110926-01` organic/A in the morning, `ST-110926-02` conventional/B in the morning, `ST-110926-03` conventional/B in the afternoon. Three runs, but **two** Acumatica orders — `S10LGE-O`, and `S10LGBL-C` spanning the conventional morning and afternoon. The afternoon opened a fresh run rather than continuing the morning's, and `S10LGBL-C` encodes only grade and variant, so run-scoping raises three orders where two are wanted. Day-scoping is the opposite and worse error: it posts the organic output under a conventional code.
+
+The folded scope is also the only one at which the mass balance means anything. Split by run, that day's conventional morning reads **+835 kg on 3 187 (26%)** and the afternoon **−712 kg on 6 332 (−11%)** — the bucket elevator carrying between shifts. Folded, they nearly cancel: +123 kg on 9 519, 1.3%.
+
+### What it decides
+
+- **Sign, per section.** An Acumatica material line is a consumption by default, so output is entered negative — everywhere except the Blender, where it is positive. A per-section difference of the same kind as the five mass-balance formulas (§4); unifying it would silently invert a section's inventory movement.
+- **`QtyToProduce`** — the total debagged on Sieving, the total produced everywhere else.
+- **`normalizeLotSerial()`** — collapses the whitespace the floor types around the hyphen, so `'RSGG -05826'` and `'RSGG-05826'` become one issue line instead of two rejected ones. Five distinct lots on production carry this. Deliberately does **not** uppercase or reshape: undoing a typing slip is not the same as inventing a lot that may not exist.
+- **Blockers, not best effort** — unresolved order item, no operation number, a bag with no `acumatica_id`, a missing or suspect lot, no inputs, no outputs, line totals disagreeing with the record, balance outside tolerance. `postable` is true only when the list is empty.
+
+Totals are passed in from `productionTotals()` and the line sums are checked *against* them, never substituted for them. Two traps are documented in the file: a naive in-minus-out reads 6.6% short on 11 September and 5.1% over on the 10th purely from carry-over; and `toleranceKg` must be computed, because `production_runs.tolerance_kg` still carries the retired flat 15 on every row — 0.16% of a 9 500 kg order, which would fail almost every post.
+
+Pure, no I/O: the Acumatica item is resolved upstream and handed in, because core may not read a table and an item id must never be built from a template.
+
+### Acumatica owns the BOM, and the Blender is identified by it
+
+`production_runs.production_order` holds two different kinds of thing. On Sieving, Refining 1/2 and the Granule line it is the INVENTORY ITEM — `S10LGBL-C`, `15IGDIS-C`, `20BGCHS-F-C`, `20BGGSG-001-C`, all rows in `inventory_items`. On the Blender it is the **BOM ID**, and `bom_components` maps it to the item:
+
+```
+BOM 25SFCKUN25C    ->  25BLSFC-KUN25-C
+BOM 25SGNAT26C-1   ->  25BLSG-NAT26-1-C
+BOM 25CH50C50WBC   ->  25BLCH-50C-50W-B-C
+```
+
+Which is exactly what Acumatica's own ProductionOrder carries — InventoryID `25BLSFC-KUN25-C` against BOMID `25SFCKUN25C`. All ten codes the Blender has ever filed resolve; none is orphaned. Both are carried on the document, and a BOM-identified section with no BOM is a blocker rather than a post against a guessed item.
+
+**The posting key asks the BOM, not the grade, on those sections.** 8 of 55 Blender runs carry a `grade` that disagrees with their own `production_order` — `grade=25SFCKUN25C` against `production_order=25SGNAT233C`, and similar. Keying on the grade folded two days' separate blends into one order. Keyed on the BOM, 44 of 46 Blender orders carry exactly one, and the two that did not were the mis-folds.
+
+
+Nothing is wired yet — no route calls this and no page renders it. 40 tests, against the real 11 September figures.
+
 ## 2026-09-14 — Alyssa (Pasteuriser: the job card screens were reading the wrong schema)
 
 **Files changed:** `lib/supabase/db.ts`, `lib/production/mass-balance-flag.ts` (new), `app/(app)/job-cards/pasteuriser/page.tsx`, `app/(app)/job-cards/granule/page.tsx`, `components/sales/ProductionBatchesTab.tsx`, `app/(app)/production/capture/assign/page.tsx`, `components/production/capture/PasteuriserCapture.tsx`, `features/pasteuriser-labels/db.ts`, `app/api/pasteuriser/assignments/route.ts`, `app/(app)/pasteuriser/labels/[id]/page.tsx`, `app/(app)/production/history/page.tsx`, `app/(app)/production/page.tsx`, `app/(app)/dashboard/operator/page.tsx`, `app/(app)/dashboard/supervisor/page.tsx`
