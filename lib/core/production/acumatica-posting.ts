@@ -15,6 +15,26 @@
  * table, and an item id must never be constructed from a template, which is
  * how a renamed product silently ships with a blank code.
  *
+ * ── `production_runs.production_order` holds two different things ──────────
+ *
+ * On Sieving, Refining 1/2 and the Granule line it holds the INVENTORY ITEM —
+ * `S10LGBL-C`, `15IGDIS-C`, `20BGCHS-F-C`, `20BGGSG-001-C`. All of those are
+ * rows in `inventory_items` and go straight onto the order header.
+ *
+ * On the Blender it holds the BOM ID. `25SFCKUN25C` is not an item and never
+ * was; it is the bill of materials, and `bom_components` maps it to the item:
+ *
+ *     BOM 25SFCKUN25C    →  25BLSFC-KUN25-C
+ *     BOM 25SGNAT26C-1   →  25BLSG-NAT26-1-C
+ *     BOM 25CH50C50WBC   →  25BLCH-50C-50W-B-C
+ *
+ * which is exactly what Acumatica's own ProductionOrder carries — InventoryID
+ * `25BLSFC-KUN25-C` against BOMID `25SFCKUN25C`. Acumatica is the source of
+ * truth for the BOM, so the id is resolved through it rather than derived.
+ *
+ * Both are therefore handed in separately, and a BOM-identified section whose
+ * BOM did not resolve is a blocker rather than a post against a guessed item.
+ *
  * ── The posting scope is not the run, and not the day ──────────────────────
  *
  * Two records that share a variant and a grade are ONE Acumatica order even
@@ -117,6 +137,7 @@ export interface PostingLine {
 
 export type PostingBlockerCode =
   | 'no-order-item'
+  | 'no-bom-id'
   | 'no-operation-number'
   | 'missing-item-code'
   | 'lot-missing'
@@ -137,6 +158,8 @@ export interface PostingDocument {
   scope: PostingScope
   /** Acumatica `InventoryID` for the order header. Null when unresolved. */
   orderItem: string | null
+  /** Acumatica `BOMID`. The identity itself on a BOM-identified section. */
+  bomId: string | null
   operationNbr: string | null
   qtyToProduce: number
   issueLines: PostingLine[]
@@ -186,6 +209,23 @@ const QTY_SOURCE: Readonly<Record<string, 'input' | 'output'>> = {
 
 export function outputSignFor(sectionId: string): 1 | -1 | null {
   return OUTPUT_SIGN[sectionId] ?? null
+}
+
+/**
+ * Sections whose order is identified by its BOM rather than by its item.
+ *
+ * The Blender's run records a BOM id (`25SFCKUN25C`); the item that comes off
+ * it (`25BLSFC-KUN25-C`) is whatever `bom_components` says the BOM outputs.
+ * The Pasteuriser is the same shape — its BOMs are already synced (39 of them)
+ * even though the line has not yet bagged anything.
+ *
+ * Everywhere else the run records the item directly and the BOM is Acumatica's
+ * own default for it.
+ */
+const BOM_IDENTIFIED: ReadonlySet<string> = new Set(['blender', 'smallblender', 'pasteuriser'])
+
+export function isBomIdentified(sectionId: string): boolean {
+  return BOM_IDENTIFIED.has(sectionId)
 }
 
 // ---------------------------------------------------------------------------
@@ -241,12 +281,19 @@ export interface BuildPostingArgs {
    * variant) has no item — a blocker, never a guess.
    */
   orderItem: string | null
+  /**
+   * Acumatica `BOMID`, resolved from `production.bom_components`. Required on
+   * a BOM-identified section (see `isBomIdentified`), where it IS the identity;
+   * elsewhere it is optional and Acumatica defaults the BOM from the item.
+   */
+  bomId?: string | null
   /** Per-section operation number. Null blocks: it is not ours to invent. */
   operationNbr: string | null
 }
 
 export function buildPostingDocument(args: BuildPostingArgs): PostingDocument {
   const { scope, inputs, outputs, totals, orderItem, operationNbr } = args
+  const bomId = args.bomId ?? null
   const blockers: PostingBlocker[] = []
   const add = (code: PostingBlockerCode, message: string) => blockers.push({ code, message })
 
@@ -258,6 +305,10 @@ export function buildPostingDocument(args: BuildPostingArgs): PostingDocument {
   if (!orderItem) {
     add('no-order-item',
       `No Acumatica item for ${scope.sectionId} · ${scope.variant ?? 'no variant'} · grade ${scope.grade ?? '—'}.`)
+  }
+  if (isBomIdentified(scope.sectionId) && !bomId) {
+    add('no-bom-id',
+      `${scope.sectionId} orders are identified by their BOM, and this record has none.`)
   }
   if (!operationNbr) {
     add('no-operation-number', `No operation number configured for ${scope.sectionId}.`)
@@ -357,6 +408,7 @@ export function buildPostingDocument(args: BuildPostingArgs): PostingDocument {
   return {
     scope,
     orderItem,
+    bomId,
     operationNbr,
     qtyToProduce,
     issueLines,
@@ -380,12 +432,22 @@ function norm(v: string | null | undefined): string {
  *
  * `(section, production day, variant, grade)` — see the header. Not the run id:
  * two runs on the same day with the same variant and grade are one order.
+ *
+ * On a BOM-identified section the BOM replaces the grade, because there the two
+ * do not reliably agree: 8 of 55 blender runs on production carry a `grade` that
+ * differs from their own `production_order` (`grade=25SFCKUN25C` against
+ * `production_order=25SGNAT233C`, and similar). Keying on the grade folded two
+ * days' worth of separate blends into one order. The BOM is the order's
+ * identity on those lines, so it is what the key asks.
  */
 export function postingScopeKey(s: {
   sectionId: string
   productionDay: string
   variant: string | null
   grade: string | null
+  /** The BOM id. Used in place of the grade where the section is BOM-identified. */
+  bomId?: string | null
 }): string {
-  return `${s.sectionId}|${s.productionDay}|${norm(s.variant)}|${norm(s.grade)}`
+  const identity = isBomIdentified(s.sectionId) ? norm(s.bomId) : norm(s.grade)
+  return `${s.sectionId}|${s.productionDay}|${norm(s.variant)}|${identity}`
 }

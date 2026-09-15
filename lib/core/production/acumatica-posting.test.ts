@@ -4,6 +4,7 @@ import {
   normalizeLotSerial,
   isSuspectLotSerial,
   outputSignFor,
+  isBomIdentified,
   postingScopeKey,
   type BuildPostingArgs,
   type PostingBlockerCode,
@@ -116,6 +117,62 @@ describe('outputSignFor', () => {
   })
 })
 
+describe('isBomIdentified', () => {
+  it('is true where the run records a BOM rather than an item', () => {
+    expect(isBomIdentified('blender')).toBe(true)
+    expect(isBomIdentified('smallblender')).toBe(true)
+    expect(isBomIdentified('pasteuriser')).toBe(true)
+  })
+
+  it('is false where the run records the item itself', () => {
+    for (const s of ['sieving', 'refining1', 'refining2', 'granule']) {
+      expect(isBomIdentified(s)).toBe(false)
+    }
+  })
+})
+
+describe('buildPostingDocument — BOM-identified sections', () => {
+  // Every one of these pairs is real: the code the blender files on its run,
+  // and the item bom_components says that BOM outputs.
+  const REAL_BOMS: ReadonlyArray<readonly [string, string]> = [
+    ['25SFCKUN25C',   '25BLSFC-KUN25-C'],
+    ['25SGNAT26C-1',  '25BLSG-NAT26-1-C'],
+    ['25SFC30KUN25C', '25BLSFC30-KUN25-C'],
+    ['25CH50C50WBC',  '25BLCH-50C-50W-B-C'],
+    ['25SGNAT233C',   '25BLSG-NAT23-3-C'],
+  ]
+
+  it('carries both the BOM and the item it resolves to', () => {
+    for (const [bom, item] of REAL_BOMS) {
+      const d = buildPostingDocument(args({
+        scope: { ...scope, sectionId: 'blender', grade: bom },
+        orderItem: item,
+        bomId: bom,
+      }))
+      expect(d.bomId).toBe(bom)
+      expect(d.orderItem).toBe(item)
+      expect(d.blockers).toEqual([])
+    }
+  })
+
+  it('refuses a blender order with no BOM rather than guessing the item', () => {
+    const d = buildPostingDocument(args({
+      scope: { ...scope, sectionId: 'blender' },
+      orderItem: '25BLSFC-KUN25-C',
+      bomId: null,
+    }))
+    expect(codes(d)).toContain('no-bom-id')
+    expect(d.postable).toBe(false)
+  })
+
+  it('does not require a BOM where the run records the item directly', () => {
+    // Sieving files S10LGBL-C, which IS the item. Acumatica defaults its BOM.
+    const d = buildPostingDocument(args({ bomId: null }))
+    expect(codes(d)).not.toContain('no-bom-id')
+    expect(d.postable).toBe(true)
+  })
+})
+
 describe('postingScopeKey', () => {
   const base = { sectionId: 'sieving', productionDay: '2026-09-11', variant: 'Conventional', grade: 'B' }
 
@@ -139,6 +196,26 @@ describe('postingScopeKey', () => {
 
   it('is insensitive to case and stray whitespace', () => {
     expect(postingScopeKey({ ...base, variant: ' conventional ' })).toBe(postingScopeKey(base))
+  })
+
+  it('keys the blender on its BOM, not its grade', () => {
+    // Real: 8 of 55 blender runs carry a grade that disagrees with their own
+    // production_order. Two blends that ran on one day were folded into a
+    // single order because the grade happened to match.
+    const day = { sectionId: 'blender', productionDay: '2026-09-04', variant: 'Conventional' }
+    const a = postingScopeKey({ ...day, grade: '25SFCKUN25C', bomId: '25SFCKUN25C' })
+    const b = postingScopeKey({ ...day, grade: '25SFCKUN25C', bomId: '25SGNAT26C-1' })
+    expect(a).not.toBe(b)
+  })
+
+  it('folds two blender records that really are the same BOM', () => {
+    const day = { sectionId: 'blender', productionDay: '2026-09-09', variant: 'Conventional' }
+    expect(postingScopeKey({ ...day, grade: '25SGNAT233C', bomId: '25SGNAT233C' }))
+      .toBe(postingScopeKey({ ...day, grade: 'something else', bomId: '25SGNAT233C' }))
+  })
+
+  it('still keys sieving on the grade, where no BOM is recorded', () => {
+    expect(postingScopeKey({ ...base, bomId: '25SFCKUN25C' })).toBe(postingScopeKey(base))
   })
 })
 

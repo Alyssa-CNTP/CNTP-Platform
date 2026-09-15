@@ -27,6 +27,21 @@ Totals are passed in from `productionTotals()` and the line sums are checked *ag
 
 Pure, no I/O: the Acumatica item is resolved upstream and handed in, because core may not read a table and an item id must never be built from a template.
 
+### Acumatica owns the BOM, and the Blender is identified by it
+
+`production_runs.production_order` holds two different kinds of thing. On Sieving, Refining 1/2 and the Granule line it is the INVENTORY ITEM — `S10LGBL-C`, `15IGDIS-C`, `20BGCHS-F-C`, `20BGGSG-001-C`, all rows in `inventory_items`. On the Blender it is the **BOM ID**, and `bom_components` maps it to the item:
+
+```
+BOM 25SFCKUN25C    ->  25BLSFC-KUN25-C
+BOM 25SGNAT26C-1   ->  25BLSG-NAT26-1-C
+BOM 25CH50C50WBC   ->  25BLCH-50C-50W-B-C
+```
+
+Which is exactly what Acumatica's own ProductionOrder carries — InventoryID `25BLSFC-KUN25-C` against BOMID `25SFCKUN25C`. All ten codes the Blender has ever filed resolve; none is orphaned. Both are carried on the document, and a BOM-identified section with no BOM is a blocker rather than a post against a guessed item.
+
+**The posting key asks the BOM, not the grade, on those sections.** 8 of 55 Blender runs carry a `grade` that disagrees with their own `production_order` — `grade=25SFCKUN25C` against `production_order=25SGNAT233C`, and similar. Keying on the grade folded two days' separate blends into one order. Keyed on the BOM, 44 of 46 Blender orders carry exactly one, and the two that did not were the mis-folds.
+
+
 Nothing is wired yet — no route calls this and no page renders it. 40 tests, against the real 11 September figures.
 
 ## 2026-09-14 — Alyssa (Pasteuriser: the job card screens were reading the wrong schema)
